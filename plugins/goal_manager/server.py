@@ -73,6 +73,39 @@ class NodeComplete(BaseModel):
     session_id: str | None = None
 
 
+class EvidenceVerificationApply(BaseModel):
+    verification_id: str
+    expected_version: int
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class ReviewSubmission(BaseModel):
+    expected_version: int
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class ReviewApproval(BaseModel):
+    expected_version: int
+    reason: str
+    actor_type: str = "user"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class ReviewRejection(BaseModel):
+    expected_version: int
+    reason: str
+    actor_type: str = "user"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
 class EdgeCreate(BaseModel):
     model_config = ConfigDict(extra="allow")
     source_id: str
@@ -132,6 +165,51 @@ class EvidenceCreate(BaseModel):
     session_id: str | None = None
 
 
+class ExecutionResultCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    status: str
+    summary: str
+    outputs: list[Any] | dict[str, Any] = Field(default_factory=list)
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class ObservationCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    execution_result_id: str | None = None
+    summary: str
+    signals: list[Any] | dict[str, Any] = Field(default_factory=list)
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class EvidenceVerificationCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    evidence_id: str | None = None
+    accepted: bool
+    summary: str
+    criterion_index: int | None = Field(default=None, ge=0)
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class ResultAcceptanceCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    accepted: bool
+    summary: str
+    accepted_by: str | None = None
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
 class IntentContractRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
     outcome: str
@@ -141,6 +219,14 @@ class IntentContractRequest(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
     reason: str = "set intent contract"
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
+class PlanVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    reason: str = "create plan version"
     actor_type: str = "agent"
     actor_id: str | None = None
     session_id: str | None = None
@@ -301,6 +387,21 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         return store.protocol_next_action(project_id, limit)
 
+    @app.get("/api/goals/projects/{project_id}/plan-versions")
+    def plan_versions(
+        project_id: str,
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        return {"plan_versions": store.list_plan_versions(project_id, limit)}
+
+    @app.post("/api/goals/projects/{project_id}/plan-versions", status_code=201)
+    def create_plan_version(project_id: str, payload: PlanVersionRequest) -> dict[str, Any]:
+        return store.create_plan_version(project_id, **payload.model_dump())
+
+    @app.post("/api/goals/projects/{project_id}/replan", status_code=201)
+    def replan(project_id: str, payload: PlanVersionRequest) -> dict[str, Any]:
+        return store.replan(project_id, **payload.model_dump())
+
     @app.get("/api/goals/projects/{project_id}/focus")
     def focus(project_id: str, node: str | None = None) -> dict[str, Any]:
         return store.get_focus(project_id, node)
@@ -345,6 +446,22 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     @app.post("/api/goals/nodes/{node_id}/complete")
     def complete_node(node_id: str, payload: NodeComplete) -> dict[str, Any]:
         return store.complete_node(node_id, **payload.model_dump())
+
+    @app.post("/api/goals/nodes/{node_id}/apply-evidence-verification")
+    def apply_evidence_verification(node_id: str, payload: EvidenceVerificationApply) -> dict[str, Any]:
+        return store.apply_evidence_verification(node_id, **payload.model_dump())
+
+    @app.post("/api/goals/nodes/{node_id}/submit-for-review")
+    def submit_for_review(node_id: str, payload: ReviewSubmission) -> dict[str, Any]:
+        return store.submit_for_review(node_id, **payload.model_dump())
+
+    @app.post("/api/goals/nodes/{node_id}/approve-review")
+    def approve_review(node_id: str, payload: ReviewApproval) -> dict[str, Any]:
+        return store.approve_review(node_id, **payload.model_dump())
+
+    @app.post("/api/goals/nodes/{node_id}/reject-review")
+    def reject_review(node_id: str, payload: ReviewRejection) -> dict[str, Any]:
+        return store.reject_review(node_id, **payload.model_dump())
 
     @app.delete("/api/goals/nodes/{node_id}")
     def delete_node(
@@ -400,6 +517,46 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         return store.attach_evidence(
             node_id, payload.model_dump(exclude={"created_by", "reason", "actor_type", "actor_id", "session_id"}),
             created_by=payload.created_by, reason=payload.reason, actor_type=payload.actor_type,
+            actor_id=payload.actor_id, session_id=payload.session_id,
+        )
+
+    @app.get("/api/goals/nodes/{node_id}/lifecycle")
+    def lifecycle(node_id: str) -> dict[str, Any]:
+        return store.get_lifecycle(node_id)
+
+    @app.post("/api/goals/nodes/{node_id}/execution-results", status_code=201)
+    def record_execution_result(node_id: str, payload: ExecutionResultCreate) -> dict[str, Any]:
+        return store.record_execution_result(
+            node_id,
+            payload.model_dump(exclude={"reason", "actor_type", "actor_id", "session_id"}),
+            reason=payload.reason, actor_type=payload.actor_type,
+            actor_id=payload.actor_id, session_id=payload.session_id,
+        )
+
+    @app.post("/api/goals/nodes/{node_id}/observations", status_code=201)
+    def record_observation(node_id: str, payload: ObservationCreate) -> dict[str, Any]:
+        return store.record_observation(
+            node_id,
+            payload.model_dump(exclude={"reason", "actor_type", "actor_id", "session_id"}),
+            reason=payload.reason, actor_type=payload.actor_type,
+            actor_id=payload.actor_id, session_id=payload.session_id,
+        )
+
+    @app.post("/api/goals/nodes/{node_id}/evidence-verifications", status_code=201)
+    def verify_evidence(node_id: str, payload: EvidenceVerificationCreate) -> dict[str, Any]:
+        return store.verify_evidence(
+            node_id,
+            payload.model_dump(exclude={"reason", "actor_type", "actor_id", "session_id"}),
+            reason=payload.reason, actor_type=payload.actor_type,
+            actor_id=payload.actor_id, session_id=payload.session_id,
+        )
+
+    @app.post("/api/goals/nodes/{node_id}/result-acceptance", status_code=201)
+    def accept_result(node_id: str, payload: ResultAcceptanceCreate) -> dict[str, Any]:
+        return store.accept_result(
+            node_id,
+            payload.model_dump(exclude={"reason", "actor_type", "actor_id", "session_id"}),
+            reason=payload.reason, actor_type=payload.actor_type,
             actor_id=payload.actor_id, session_id=payload.session_id,
         )
 

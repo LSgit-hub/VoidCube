@@ -121,6 +121,62 @@ def test_generic_project_create_derives_session_idempotency_key(monkeypatch):
     assert calls[0]["root_status"] == "in_progress"
 
 
+def test_protocol_tools_route_to_goal_service_contracts(monkeypatch):
+    client = GoalClient(base_url="http://goal.test")
+    calls = []
+
+    def request(method, path, payload=None, **kwargs):
+        calls.append({"method": method, "path": path, "payload": payload, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "request", request)
+    client.call_tool("goal_intent_contract_set", {
+        "projectId": "proj_1", "outcome": "ship", "successCriteria": ["green tests"],
+        "openQuestions": ["release window?"], "reason": "capture intent", "session_id": "s1",
+    })
+    client.call_tool("goal_protocol_next_action", {"projectId": "proj_1", "limit": 3})
+    client.call_tool("goal_plan_review", {"projectId": "proj_1"})
+    client.call_tool("goal_replan", {"projectId": "proj_1", "reason": "revise plan"})
+    client.call_tool("goal_lifecycle_get", {"nodeId": "goal_1"})
+    client.call_tool("goal_record_execution_result", {
+        "nodeId": "goal_1", "status": "succeeded", "summary": "ran", "outputs": {"exit_code": 0},
+        "reason": "record execution",
+    })
+    client.call_tool("goal_record_observation", {
+        "nodeId": "goal_1", "executionResultId": "exec_1", "summary": "observed",
+        "signals": ["ok"], "reason": "record observation",
+    })
+    client.call_tool("goal_verify_evidence", {
+        "nodeId": "goal_1", "evidenceId": "ev_1", "accepted": True, "summary": "verified",
+        "criterionIndex": 0, "reason": "verify",
+    })
+    client.call_tool("goal_apply_evidence_verification", {
+        "nodeId": "goal_1", "verificationId": "ver_1", "expectedVersion": 2,
+        "reason": "apply",
+    })
+    client.call_tool("goal_submit_for_review", {
+        "nodeId": "goal_1", "expectedVersion": 3, "reason": "submit",
+    })
+
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["path"] == "/api/goals/projects/proj_1/intent-contract"
+    assert calls[0]["payload"]["success_criteria"] == ["green tests"]
+    assert calls[0]["payload"]["open_questions"] == ["release window?"]
+    assert calls[0]["payload"]["session_id"] == "s1"
+    assert calls[1]["path"] == "/api/goals/projects/proj_1/protocol-next-action"
+    assert calls[1]["query"] == {"limit": 3}
+    assert calls[2]["path"] == "/api/goals/projects/proj_1/plan-review"
+    assert calls[3]["path"] == "/api/goals/projects/proj_1/replan"
+    assert calls[4]["path"] == "/api/goals/nodes/goal_1/lifecycle"
+    assert calls[5]["path"] == "/api/goals/nodes/goal_1/execution-results"
+    assert calls[5]["payload"]["outputs"] == {"exit_code": 0}
+    assert calls[6]["payload"]["execution_result_id"] == "exec_1"
+    assert calls[7]["payload"]["criterion_index"] == 0
+    assert calls[8]["payload"]["verification_id"] == "ver_1"
+    assert calls[8]["payload"]["expected_version"] == 2
+    assert calls[9]["path"] == "/api/goals/nodes/goal_1/submit-for-review"
+
+
 def test_session_project_client_retries_server_failure_with_same_key(monkeypatch):
     payloads = []
     client = GoalClient(base_url="http://goal.test")
@@ -360,6 +416,153 @@ def test_intent_contract_rollback_and_redo(store):
     assert store.get_intent_contract(pid)["intent_contract"]["outcome"] == "first"
 
 
+def test_plan_versions_capture_snapshots_and_replan_diff(store):
+    project = store.create_project("Versioned", reason="init")
+    pid = project["project"]["id"]
+    first = store.create_plan_version(pid, reason="baseline")
+    assert first["plan_version"]["version"] == 1
+    assert first["plan_version"]["diff"] is None
+
+    task = store.create_node(pid, {"node_type": "task", "title": "Implement"}, reason="add task")["node"]
+    second = store.replan(pid, reason="expand execution layer")
+    version = second["plan_version"]
+    assert version["version"] == 2
+    assert [item["id"] for item in version["diff"]["added_nodes"]] == [task["id"]]
+    listed = store.list_plan_versions(pid)
+    assert [item["after"]["version"] for item in listed] == [2, 1]
+
+    store.rollback(second["batch_id"])
+    assert [item["after"]["version"] for item in store.list_plan_versions(pid)] == [1]
+    store.redo(project_id=pid)
+    assert [item["after"]["version"] for item in store.list_plan_versions(pid)] == [2, 1]
+
+
+def test_lifecycle_records_are_auditable_and_do_not_complete_nodes(store):
+    project = store.create_project("Lifecycle", reason="init")
+    pid = project["project"]["id"]
+    task = store.create_node(
+        pid,
+        {"node_type": "task", "title": "Deploy", "acceptance_criteria": [{"title": "health check", "met": False}]},
+        reason="add task",
+    )["node"]
+
+    execution = store.record_execution_result(
+        task["id"], {"status": "succeeded", "summary": "deployment command completed", "outputs": {"release": "r1"}},
+        reason="record command",
+    )
+    observation = store.record_observation(
+        task["id"], {"execution_result_id": execution["execution_result"]["id"], "summary": "health endpoint returned 200", "signals": ["200"]},
+        reason="observe service",
+    )
+    verification = store.verify_evidence(
+        task["id"], {"accepted": True, "summary": "health evidence reviewed", "criterion_index": 0},
+        reason="verify evidence",
+    )
+    acceptance = store.accept_result(
+        task["id"], {"accepted": True, "summary": "release accepted", "accepted_by": "reviewer-1"},
+        reason="accept result",
+    )
+
+    lifecycle = store.get_lifecycle(task["id"])
+    assert lifecycle["execution_results"][0]["after"]["id"] == execution["execution_result"]["id"]
+    assert lifecycle["observations"][0]["after"]["id"] == observation["observation"]["id"]
+    assert lifecycle["evidence_verifications"][0]["after"]["id"] == verification["evidence_verification"]["id"]
+    assert lifecycle["result_acceptances"][0]["after"]["id"] == acceptance["result_acceptance"]["id"]
+    assert store.get_context(task["id"])["lifecycle"] == lifecycle
+
+    with pytest.raises(GoalConflict, match="goal completion blocked"):
+        store.complete_node(task["id"], reason="lifecycle alone is not completion")
+
+
+def test_lifecycle_records_rollback_and_redo_without_duplicates(store):
+    project = store.create_project("Lifecycle", reason="init")
+    task = store.create_node(project["project"]["id"], {"node_type": "task", "title": "Run"}, reason="add")["node"]
+    recorded = store.record_execution_result(
+        task["id"], {"status": "succeeded", "summary": "ran"}, reason="record",
+    )
+
+    store.rollback(recorded["batch_id"])
+    assert store.get_lifecycle(task["id"])["execution_results"] == []
+    store.redo(project_id=project["project"]["id"])
+    results = store.get_lifecycle(task["id"])["execution_results"]
+    assert len(results) == 1
+    assert results[0]["after"]["id"] == recorded["execution_result"]["id"]
+
+
+def test_verified_evidence_can_be_applied_then_human_review_approves(store):
+    project = store.create_project("Reviewed", reason="init")
+    task = store.create_node(
+        project["project"]["id"],
+        {
+            "node_type": "task",
+            "title": "Release",
+            "progress": 1,
+            "acceptance_criteria": [{"title": "production verified", "met": False}],
+        },
+        reason="add task",
+    )["node"]
+    rejected = store.verify_evidence(
+        task["id"], {"accepted": False, "summary": "health check failed", "criterion_index": 0}, reason="reject",
+    )
+    with pytest.raises(GoalConflict, match="was not accepted"):
+        store.apply_evidence_verification(
+            task["id"], rejected["evidence_verification"]["id"], 1, reason="apply rejected",
+        )
+
+    verified = store.verify_evidence(
+        task["id"], {"accepted": True, "summary": "health check passed", "criterion_index": 0}, reason="verify",
+    )
+    applied = store.apply_evidence_verification(
+        task["id"], verified["evidence_verification"]["id"], 1, reason="apply verified",
+    )
+    assert applied["node"]["acceptance_criteria"][0]["met"] is True
+    assert applied["node"]["acceptance_criteria"][0]["verification_id"] == verified["evidence_verification"]["id"]
+
+    review = store.submit_for_review(task["id"], 2, reason="request approval")
+    assert review["node"]["status"] == "waiting_review"
+    with pytest.raises(ValueError, match="requires actor_type"):
+        store.approve_review(task["id"], 3, reason="agent cannot approve", actor_type="agent")
+    completed = store.approve_review(task["id"], 3, reason="review approved", actor_type="user", actor_id="reviewer-1")
+    assert completed["node"]["status"] == "completed"
+    assert completed["node"]["completed_at"] is not None
+
+
+def test_review_can_be_rejected_by_human_reviewer(store):
+    project = store.create_project("Reviewed", reason="init")
+    task = store.create_node(
+        project["project"]["id"],
+        {
+            "node_type": "task", "title": "Release", "progress": 1,
+            "acceptance_criteria": [{"title": "verified", "met": True}],
+        },
+        reason="add task",
+    )["node"]
+    review = store.submit_for_review(task["id"], 1, reason="submit")
+    with pytest.raises(ValueError, match="requires actor_type"):
+        store.reject_review(task["id"], 2, reason="agent cannot reject", actor_type="agent")
+    rejected = store.reject_review(task["id"], 2, reason="needs correction", actor_type="supervisor")
+    assert rejected["node"]["status"] == "in_progress"
+    assert rejected["node"]["version"] == review["node"]["version"] + 1
+    assert rejected["node"]["acceptance_criteria"][0]["met"] is True
+
+
+def test_review_workflow_requires_current_version_and_ready_node(store):
+    project = store.create_project("Reviewed", reason="init")
+    task = store.create_node(
+        project["project"]["id"],
+        {"node_type": "task", "title": "Release", "acceptance_criteria": [{"title": "verified", "met": False}]},
+        reason="add task",
+    )["node"]
+    with pytest.raises(GoalConflict, match="submission blocked") as blocked:
+        store.submit_for_review(task["id"], 1, reason="too early")
+    assert {item["code"] for item in blocked.value.payload["blockers"]} == {
+        "acceptance_criteria_unmet", "progress_incomplete"
+    }
+    store.update_node(task["id"], 1, {"progress": 1, "acceptance_criteria": [{"title": "verified", "met": True}]}, reason="ready")
+    with pytest.raises(GoalConflict, match="version conflict"):
+        store.submit_for_review(task["id"], 1, reason="stale")
+
+
 def test_api_and_tool_schemas(tmp_path):
     db_path = tmp_path / "test_goal_service_api.db"
     app = create_app({"db_path": str(db_path)})
@@ -407,13 +610,110 @@ def test_api_and_tool_schemas(tmp_path):
             protocol = client.get(f"/api/goals/projects/{project_id}/protocol-next-action")
             assert protocol.status_code == 200
             assert protocol.json()["action_type"] == "complete"
+            created_version = client.post(
+                f"/api/goals/projects/{project_id}/plan-versions",
+                json={"reason": "API baseline"},
+            )
+            assert created_version.status_code == 201
+            assert created_version.json()["plan_version"]["version"] == 1
+            replanned = client.post(
+                f"/api/goals/projects/{project_id}/replan",
+                json={"reason": "API replan"},
+            )
+            assert replanned.status_code == 201
+            assert replanned.json()["plan_version"]["version"] == 2
+            assert client.get(f"/api/goals/projects/{project_id}/plan-versions").status_code == 200
+            task = client.post(
+                "/api/goals/nodes",
+                json={"project_id": project_id, "node_type": "task", "title": "API lifecycle", "reason": "add task"},
+            )
+            assert task.status_code == 201
+            task_id = task.json()["node"]["id"]
+            execution = client.post(
+                f"/api/goals/nodes/{task_id}/execution-results",
+                json={"status": "succeeded", "summary": "ran", "outputs": ["result"], "reason": "record"},
+            )
+            assert execution.status_code == 201
+            observation = client.post(
+                f"/api/goals/nodes/{task_id}/observations",
+                json={"execution_result_id": execution.json()["execution_result"]["id"], "summary": "seen", "reason": "observe"},
+            )
+            assert observation.status_code == 201
+            assert client.post(
+                f"/api/goals/nodes/{task_id}/evidence-verifications",
+                json={"accepted": True, "summary": "verified", "reason": "verify"},
+            ).status_code == 201
+            assert client.post(
+                f"/api/goals/nodes/{task_id}/result-acceptance",
+                json={"accepted": True, "summary": "accepted", "reason": "accept"},
+            ).status_code == 201
+            lifecycle = client.get(f"/api/goals/nodes/{task_id}/lifecycle")
+            assert lifecycle.status_code == 200
+            assert len(lifecycle.json()["execution_results"]) == 1
+            assert len(lifecycle.json()["observations"]) == 1
+            assert len(lifecycle.json()["evidence_verifications"]) == 1
+            assert len(lifecycle.json()["result_acceptances"]) == 1
+            review_task = client.post(
+                "/api/goals/nodes",
+                json={
+                    "project_id": project_id, "node_type": "task", "title": "API review", "progress": 1,
+                    "acceptance_criteria": [{"title": "verified", "met": False}], "reason": "add review task",
+                },
+            )
+            assert review_task.status_code == 201
+            review_task_id = review_task.json()["node"]["id"]
+            verification = client.post(
+                f"/api/goals/nodes/{review_task_id}/evidence-verifications",
+                json={"accepted": True, "summary": "verified", "criterion_index": 0, "reason": "verify"},
+            )
+            assert verification.status_code == 201
+            applied = client.post(
+                f"/api/goals/nodes/{review_task_id}/apply-evidence-verification",
+                json={"verification_id": verification.json()["evidence_verification"]["id"], "expected_version": 1, "reason": "apply"},
+            )
+            assert applied.status_code == 200
+            submitted = client.post(
+                f"/api/goals/nodes/{review_task_id}/submit-for-review",
+                json={"expected_version": 2, "reason": "submit"},
+            )
+            assert submitted.status_code == 200
+            assert submitted.json()["node"]["status"] == "waiting_review"
+            approved = client.post(
+                f"/api/goals/nodes/{review_task_id}/approve-review",
+                json={"expected_version": 3, "reason": "approve", "actor_type": "user", "actor_id": "reviewer"},
+            )
+            assert approved.status_code == 200
+            assert approved.json()["node"]["status"] == "completed"
+            reject_task = client.post(
+                "/api/goals/nodes",
+                json={
+                    "project_id": project_id, "node_type": "task", "title": "API reject", "progress": 1,
+                    "acceptance_criteria": [{"title": "verified", "met": True}], "reason": "add reject task",
+                },
+            ).json()["node"]
+            assert client.post(
+                f"/api/goals/nodes/{reject_task['id']}/submit-for-review",
+                json={"expected_version": 1, "reason": "submit"},
+            ).status_code == 200
+            rejected = client.post(
+                f"/api/goals/nodes/{reject_task['id']}/reject-review",
+                json={"expected_version": 2, "reason": "reject", "actor_type": "user"},
+            )
+            assert rejected.status_code == 200
+            assert rejected.json()["node"]["status"] == "in_progress"
     finally:
         app.state.goal_store.db_path.unlink(missing_ok=True)
         app.state.goal_store.db_path.with_name("test_goal_service_api.db.owner").unlink(missing_ok=True)
 
-    assert len(SCHEMAS) == 14
+    assert len(SCHEMAS) == 24
     from plugins.goal_manager.tools.agent_tools import NON_IDEMPOTENT_WRITE_TOOLS, READ_TOOLS
     assert READ_TOOLS.isdisjoint(NON_IDEMPOTENT_WRITE_TOOLS)
+    assert {"goal_protocol_next_action", "goal_plan_review", "goal_lifecycle_get"} <= READ_TOOLS
+    assert {
+        "goal_intent_contract_set", "goal_replan", "goal_record_execution_result",
+        "goal_record_observation", "goal_verify_evidence", "goal_apply_evidence_verification",
+        "goal_submit_for_review",
+    } <= NON_IDEMPOTENT_WRITE_TOOLS
     for schema in SCHEMAS.values():
         assert schema["parameters"]["type"] == "object"
         assert "properties" in schema["parameters"]

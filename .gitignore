@@ -76,6 +76,10 @@ build/
 *.whl
 .deps_installed
 
+# Goal Manager serves a checked-in static bundle declared by plugin.json.
+!plugins/goal_manager/web/dist/
+!plugins/goal_manager/web/dist/**
+
 # ==========================================
 # 📝 日志文件
 # ==========================================

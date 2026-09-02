@@ -35,11 +35,20 @@ def test_goal_manager_static_bundle_is_self_contained_and_interactive():
     assert "new Worker" in javascript
     assert "create-child-form" in javascript
     assert '"/api/goals/batch"' in javascript
+    assert "loadReviewQueue" in javascript
+    assert "待审核队列" in javascript
+    assert "lifecycle-apply" in javascript
+    assert '"/apply-evidence-verification"' in javascript
+    assert '"/submit-for-review"' in javascript
+    assert '"/approve-review"' in javascript
+    assert '"/reject-review"' in javascript
     assert "data-menu-action=\"create-child\"" in html
     assert "https://cdn." not in javascript.lower()
     assert '<script src="./app.js"></script>' in html
     assert "@media (max-width: 560px)" in css
     assert ".status-blocked" in css
+    assert ".review-queue" in css
+    assert ".lifecycle-item" in css
 
 
 def test_goal_manager_ui_is_mounted_by_supervisor():

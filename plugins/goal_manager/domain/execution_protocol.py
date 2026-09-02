@@ -47,6 +47,70 @@ def normalize_intent_contract(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_PLAN_NODE_FIELDS = (
+    "id", "node_type", "title", "description", "progress_mode",
+    "priority", "start_at", "due_at", "acceptance_criteria", "owner", "assigned_to",
+)
+_PLAN_EDGE_FIELDS = (
+    "id", "source_id", "target_id", "edge_type", "progress_weight", "required",
+)
+
+
+def plan_snapshot(
+    project: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a deterministic, JSON-safe snapshot of the current plan graph."""
+    snapshot_nodes = [
+        {field: node.get(field) for field in _PLAN_NODE_FIELDS}
+        for node in nodes
+    ]
+    snapshot_edges = [
+        {field: edge.get(field) for field in _PLAN_EDGE_FIELDS}
+        for edge in edges
+    ]
+    snapshot_nodes.sort(key=lambda item: str(item["id"]))
+    snapshot_edges.sort(key=lambda item: str(item["id"]))
+    return {
+        "project_id": project.get("id"),
+        "root_node_id": project.get("root_node_id"),
+        "nodes": snapshot_nodes,
+        "edges": snapshot_edges,
+    }
+
+
+def diff_plan_snapshots(
+    previous: dict[str, Any] | None,
+    current: dict[str, Any],
+) -> dict[str, Any]:
+    """Return structural changes between two plan snapshots."""
+    previous = previous or {"nodes": [], "edges": []}
+    old_nodes = {item["id"]: item for item in previous.get("nodes", [])}
+    new_nodes = {item["id"]: item for item in current.get("nodes", [])}
+    old_edges = {item["id"]: item for item in previous.get("edges", [])}
+    new_edges = {item["id"]: item for item in current.get("edges", [])}
+    changed_nodes = [
+        {"id": node_id, "before": old_nodes[node_id], "after": new_nodes[node_id]}
+        for node_id in sorted(old_nodes.keys() & new_nodes.keys())
+        if old_nodes[node_id] != new_nodes[node_id]
+    ]
+    changed_edges = [
+        {"id": edge_id, "before": old_edges[edge_id], "after": new_edges[edge_id]}
+        for edge_id in sorted(old_edges.keys() & new_edges.keys())
+        if old_edges[edge_id] != new_edges[edge_id]
+    ]
+    return {
+        "added_nodes": [new_nodes[node_id] for node_id in sorted(new_nodes.keys() - old_nodes.keys())],
+        "removed_nodes": [old_nodes[node_id] for node_id in sorted(old_nodes.keys() - new_nodes.keys())],
+        "changed_nodes": changed_nodes,
+        "added_edges": [new_edges[edge_id] for edge_id in sorted(new_edges.keys() - old_edges.keys())],
+        "removed_edges": [old_edges[edge_id] for edge_id in sorted(old_edges.keys() - new_edges.keys())],
+        "changed_edges": changed_edges,
+        "root_changed": previous.get("root_node_id") != current.get("root_node_id"),
+    }
+
+
 def review_plan(
     project: dict[str, Any],
     nodes: list[dict[str, Any]],

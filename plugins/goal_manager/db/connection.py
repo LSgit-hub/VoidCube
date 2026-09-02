@@ -19,7 +19,9 @@ from voidcube.infrastructure.persistence.sqlite_owner import SQLiteOwnerLease
 
 from ..domain.events import dump_json, load_json, new_id
 from ..domain.execution_protocol import (
+    diff_plan_snapshots,
     normalize_intent_contract,
+    plan_snapshot,
     review_plan as review_execution_plan,
     select_protocol_action,
 )
@@ -34,6 +36,12 @@ PROGRESS_MODES = {"manual", "weighted_children", "evidence_based"}
 EDGE_TYPES = {"decomposes_to", "depends_on", "blocks"}
 ACTORS = {"user", "agent", "supervisor", "system"}
 EVIDENCE_TYPES = {"test_result", "ci_build", "git_commit", "pr", "issue", "note", "file", "manual"}
+LIFECYCLE_EVENT_TYPES = {
+    "record_execution_result": "execution_result",
+    "record_observation": "observation",
+    "verify_evidence": "evidence_verification",
+    "accept_result": "result_acceptance",
+}
 
 
 def utc_now() -> str:
@@ -533,6 +541,94 @@ class GoalStore:
             action = select_protocol_action(project, nodes, contract, review, ready_nodes)
             return {"project_id": project_id, "intent_contract": contract, "review": review, **action}
 
+    def _latest_plan_version_event(self, conn: sqlite3.Connection, project_id: str) -> sqlite3.Row | None:
+        rows = conn.execute(
+            "SELECT * FROM goal_events WHERE project_id=? "
+            "AND event_type IN ('create_plan_version', 'replan') "
+            "AND entity_type='plan_version' ORDER BY rowid DESC",
+            (project_id,),
+        ).fetchall()
+        for row in rows:
+            if row["batch_id"] and self._batch_marker(conn, row["batch_id"]) == "rollback":
+                continue
+            return row
+        return None
+
+    def list_plan_versions(self, project_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(200, int(limit)))
+        with self._connect() as conn:
+            self._ensure_project(conn, project_id)
+            rows = conn.execute(
+                "SELECT * FROM goal_events WHERE project_id=? "
+                "AND event_type IN ('create_plan_version', 'replan') "
+                "AND entity_type='plan_version' ORDER BY rowid DESC LIMIT ?",
+                (project_id, limit * 3),
+            ).fetchall()
+            result = []
+            seen_versions: set[int] = set()
+            for row in rows:
+                if row["batch_id"] and self._batch_marker(conn, row["batch_id"]) == "rollback":
+                    continue
+                payload = _event_payload(dict(row))
+                version = load_json(row["after_json"], {}).get("version")
+                if isinstance(version, int) and version in seen_versions:
+                    continue
+                if isinstance(version, int):
+                    seen_versions.add(version)
+                result.append(payload)
+                if len(result) >= limit:
+                    break
+            return result
+
+    def create_plan_version(
+        self,
+        project_id: str,
+        *,
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+        replan: bool = False,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        event_type = "replan" if replan else "create_plan_version"
+        with self._transaction() as conn:
+            project, nodes, edges = self._project_snapshot(conn, project_id)
+            snapshot = plan_snapshot(project, nodes, edges)
+            previous_event = self._latest_plan_version_event(conn, project_id)
+            previous = load_json(previous_event["after_json"], None) if previous_event else None
+            version = int((previous or {}).get("version") or 0) + 1
+            payload = {
+                "version": version,
+                "snapshot": snapshot,
+                "diff": diff_plan_snapshots((previous or {}).get("snapshot"), snapshot) if previous else None,
+                "created_at": utc_now(),
+                "reason": reason,
+            }
+            self._event(
+                conn, project_id=project_id, event_type=event_type,
+                entity_type="plan_version", entity_id=f"{project_id}:v{version}",
+                before=previous, after=payload, reason=reason, batch_id=batch_id,
+                actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            return {"plan_version": payload, "batch_id": batch_id}
+
+    def replan(
+        self,
+        project_id: str,
+        *,
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self.create_plan_version(
+            project_id, reason=reason, actor_type=actor_type, actor_id=actor_id,
+            session_id=session_id, replan=True,
+        )
+
     def _project_progress(self, conn: sqlite3.Connection, project_id: str) -> float:
         rows = conn.execute(
             "SELECT id, progress FROM goal_nodes WHERE project_id = ? AND deleted_at IS NULL "
@@ -978,6 +1074,201 @@ class GoalStore:
         with self._connect() as conn:
             return self._completion_check(conn, self._get_node(conn, node_id))
 
+    @staticmethod
+    def _require_expected_version(node: dict[str, Any], expected_version: int) -> None:
+        if int(node["version"]) != int(expected_version):
+            raise GoalConflict(
+                "node version conflict",
+                latest=node,
+                expected_version=expected_version,
+            )
+
+    def _verified_evidence_record(
+        self,
+        conn: sqlite3.Connection,
+        node_id: str,
+        verification_id: str,
+    ) -> dict[str, Any]:
+        rows = conn.execute(
+            "SELECT * FROM goal_events WHERE entity_id=? AND event_type='verify_evidence' "
+            "AND entity_type='evidence_verification' ORDER BY rowid DESC",
+            (verification_id,),
+        ).fetchall()
+        for row in rows:
+            if row["batch_id"] and self._batch_marker(conn, row["batch_id"]) == "rollback":
+                continue
+            verification = load_json(row["after_json"], {})
+            if isinstance(verification, dict) and verification.get("node_id") == node_id:
+                return verification
+        raise KeyError(f"evidence verification not found: {verification_id}")
+
+    def apply_evidence_verification(
+        self,
+        node_id: str,
+        verification_id: str,
+        expected_version: int,
+        *,
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        verification_id = _text(verification_id, "verification_id", required=True)
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            before = self._get_node(conn, node_id)
+            self._require_expected_version(before, expected_version)
+            verification = self._verified_evidence_record(conn, node_id, verification_id)
+            if verification.get("accepted") is not True:
+                raise GoalConflict("evidence verification was not accepted", verification=verification)
+            criterion_index = verification.get("criterion_index")
+            if isinstance(criterion_index, bool) or not isinstance(criterion_index, int):
+                raise ValueError("evidence verification must specify criterion_index")
+            criteria = list(before.get("acceptance_criteria") or [])
+            if criterion_index < 0 or criterion_index >= len(criteria):
+                raise ValueError("criterion_index is outside the node acceptance criteria")
+            criterion = criteria[criterion_index]
+            if not isinstance(criterion, dict):
+                raise ValueError("acceptance criterion must be an object")
+            criteria[criterion_index] = {**criterion, "met": True, "verification_id": verification_id}
+            fields = self._validate_node_fields({**before, "acceptance_criteria": criteria}, creating=False)
+            now = utc_now()
+            cursor = conn.execute(
+                "UPDATE goal_nodes SET acceptance_criteria_json=?, version=version+1, updated_at=? "
+                "WHERE id=? AND version=? AND deleted_at IS NULL",
+                (fields["acceptance_criteria_json"], now, node_id, expected_version),
+            )
+            if cursor.rowcount != 1:
+                latest = self._get_node(conn, node_id)
+                raise GoalConflict("node version conflict", latest=latest, expected_version=expected_version)
+            after = self._get_node(conn, node_id)
+            self._event(
+                conn, project_id=after["project_id"], event_type="apply_evidence_verification",
+                entity_type="node", entity_id=node_id, before=before, after=after, reason=reason,
+                batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            self._recompute_project_progress(conn, after["project_id"])
+            return {"node": self._get_node(conn, node_id), "verification": verification, "batch_id": batch_id}
+
+    def _review_ready_check(self, conn: sqlite3.Connection, node: dict[str, Any]) -> dict[str, Any]:
+        check = self._completion_check(conn, node)
+        blockers = list(check["blockers"])
+        if float(node["progress"]) < 1:
+            blockers.append({"code": "progress_incomplete", "progress": node["progress"]})
+        return {**check, "valid": not blockers, "blockers": blockers}
+
+    def submit_for_review(
+        self,
+        node_id: str,
+        expected_version: int,
+        *,
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            before = self._get_node(conn, node_id)
+            self._require_expected_version(before, expected_version)
+            if before["status"] == "waiting_review":
+                return {"node": before, "already_waiting_review": True}
+            if before["status"] in {"completed", "cancelled"}:
+                raise GoalConflict("only active nodes can be submitted for review", latest=before)
+            check = self._review_ready_check(conn, before)
+            if not check["valid"]:
+                raise GoalConflict("goal review submission blocked", blockers=check["blockers"], latest=before)
+            now = utc_now()
+            conn.execute(
+                "UPDATE goal_nodes SET status='waiting_review', version=version+1, updated_at=? "
+                "WHERE id=? AND version=? AND deleted_at IS NULL",
+                (now, node_id, expected_version),
+            )
+            after = self._get_node(conn, node_id)
+            self._event(
+                conn, project_id=after["project_id"], event_type="submit_for_review",
+                entity_type="node", entity_id=node_id, before=before, after=after, reason=reason,
+                batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            return {"node": after, "batch_id": batch_id}
+
+    def approve_review(
+        self,
+        node_id: str,
+        expected_version: int,
+        *,
+        reason: str,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        if actor_type not in {"user", "supervisor"}:
+            raise ValueError("review approval requires actor_type user or supervisor")
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            before = self._get_node(conn, node_id)
+            self._require_expected_version(before, expected_version)
+            if before["status"] != "waiting_review":
+                raise GoalConflict("node must be waiting_review before approval", latest=before)
+            check = self._review_ready_check(conn, before)
+            if not check["valid"]:
+                raise GoalConflict("goal review approval blocked", blockers=check["blockers"], latest=before)
+            now = utc_now()
+            conn.execute(
+                "UPDATE goal_nodes SET status='completed', progress=1, completed_at=?, version=version+1, updated_at=? "
+                "WHERE id=? AND version=? AND deleted_at IS NULL",
+                (now, now, node_id, expected_version),
+            )
+            after = self._get_node(conn, node_id)
+            self._event(
+                conn, project_id=after["project_id"], event_type="approve_review",
+                entity_type="node", entity_id=node_id, before=before, after=after, reason=reason,
+                batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            self._recompute_project_progress(conn, after["project_id"])
+            return {"node": after, "batch_id": batch_id}
+
+    def reject_review(
+        self,
+        node_id: str,
+        expected_version: int,
+        *,
+        reason: str,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        if actor_type not in {"user", "supervisor"}:
+            raise ValueError("review rejection requires actor_type user or supervisor")
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            before = self._get_node(conn, node_id)
+            self._require_expected_version(before, expected_version)
+            if before["status"] != "waiting_review":
+                raise GoalConflict("node must be waiting_review before rejection", latest=before)
+            now = utc_now()
+            conn.execute(
+                "UPDATE goal_nodes SET status='in_progress', completed_at=NULL, version=version+1, updated_at=? "
+                "WHERE id=? AND version=? AND deleted_at IS NULL",
+                (now, node_id, expected_version),
+            )
+            after = self._get_node(conn, node_id)
+            self._event(
+                conn, project_id=after["project_id"], event_type="reject_review",
+                entity_type="node", entity_id=node_id, before=before, after=after, reason=reason,
+                batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            self._recompute_project_progress(conn, after["project_id"])
+            return {"node": after, "batch_id": batch_id}
+
     def complete_node(
         self, node_id: str, *, reason: str, actor_type: str = "agent",
         actor_id: str | None = None, session_id: str | None = None,
@@ -1090,7 +1381,149 @@ class GoalStore:
                     "SELECT * FROM goal_events WHERE entity_id=? ORDER BY created_at DESC LIMIT 20",
                     (node_id,),
                 ).fetchall()],
+                "lifecycle": self._lifecycle(conn, node_id),
             }
+
+    def _lifecycle(self, conn: sqlite3.Connection, node_id: str) -> dict[str, Any]:
+        records: dict[str, list[dict[str, Any]]] = {
+            "execution_results": [],
+            "observations": [],
+            "evidence_verifications": [],
+            "result_acceptances": [],
+        }
+        rows = conn.execute(
+            "SELECT * FROM goal_events WHERE project_id=(SELECT project_id FROM goal_nodes WHERE id=?) "
+            "AND entity_type IN ('execution_result', 'observation', 'evidence_verification', 'result_acceptance') "
+            "ORDER BY rowid",
+            (node_id,),
+        ).fetchall()
+        seen_ids: set[str] = set()
+        event_lists = {
+            "execution_result": "execution_results",
+            "observation": "observations",
+            "evidence_verification": "evidence_verifications",
+            "result_acceptance": "result_acceptances",
+        }
+        for row in rows:
+            if row["event_type"] not in LIFECYCLE_EVENT_TYPES:
+                continue
+            if row["batch_id"] and self._batch_marker(conn, row["batch_id"]) == "rollback":
+                continue
+            record = load_json(row["after_json"], {})
+            if not isinstance(record, dict) or record.get("node_id") != node_id:
+                continue
+            record_id = _text(record.get("id"), "id")
+            if not record_id or record_id in seen_ids:
+                continue
+            seen_ids.add(record_id)
+            records[event_lists[row["entity_type"]]].append(_event_payload(dict(row)))
+        return {"node_id": node_id, **records}
+
+    def get_lifecycle(self, node_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            self._get_node(conn, node_id)
+            return self._lifecycle(conn, node_id)
+
+    @staticmethod
+    def _lifecycle_value(value: Any, field: str, *, default: Any) -> list[Any] | dict[str, Any]:
+        if value is None:
+            return default
+        if not isinstance(value, (list, dict)):
+            raise ValueError(f"{field} must be a list or object")
+        return value
+
+    @staticmethod
+    def _lifecycle_bool(value: Any, field: str) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError(f"{field} must be a boolean")
+        return value
+
+    def _record_lifecycle(
+        self,
+        node_id: str,
+        *,
+        event_type: str,
+        entity_type: str,
+        entity_prefix: str,
+        record: dict[str, Any],
+        reason: str,
+        actor_type: str,
+        actor_id: str | None,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            node = self._get_node(conn, node_id)
+            record_id = new_id(entity_prefix)
+            payload = {"id": record_id, "node_id": node_id, **record, "created_at": utc_now()}
+            self._event(
+                conn, project_id=node["project_id"], event_type=event_type,
+                entity_type=entity_type, entity_id=record_id, after=payload, reason=reason,
+                batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            return {entity_type: payload, "batch_id": batch_id}
+
+    def record_execution_result(self, node_id: str, data: dict[str, Any], *, reason: str,
+                                actor_type: str = "agent", actor_id: str | None = None,
+                                session_id: str | None = None) -> dict[str, Any]:
+        status = _text(data.get("status"), "status", required=True)
+        if status not in {"succeeded", "failed", "partial"}:
+            raise ValueError("status must be one of ['failed', 'partial', 'succeeded']")
+        return self._record_lifecycle(
+            node_id, event_type="record_execution_result", entity_type="execution_result",
+            entity_prefix="exec_", reason=reason, actor_type=actor_type, actor_id=actor_id,
+            session_id=session_id, record={
+                "status": status,
+                "summary": _text(data.get("summary"), "summary", required=True),
+                "outputs": self._lifecycle_value(data.get("outputs"), "outputs", default=[]),
+            },
+        )
+
+    def record_observation(self, node_id: str, data: dict[str, Any], *, reason: str,
+                           actor_type: str = "agent", actor_id: str | None = None,
+                           session_id: str | None = None) -> dict[str, Any]:
+        execution_result_id = _text(data.get("execution_result_id"), "execution_result_id") or None
+        return self._record_lifecycle(
+            node_id, event_type="record_observation", entity_type="observation",
+            entity_prefix="obs_", reason=reason, actor_type=actor_type, actor_id=actor_id,
+            session_id=session_id, record={
+                "execution_result_id": execution_result_id,
+                "summary": _text(data.get("summary"), "summary", required=True),
+                "signals": self._lifecycle_value(data.get("signals"), "signals", default=[]),
+            },
+        )
+
+    def verify_evidence(self, node_id: str, data: dict[str, Any], *, reason: str,
+                        actor_type: str = "agent", actor_id: str | None = None,
+                        session_id: str | None = None) -> dict[str, Any]:
+        criterion_index = data.get("criterion_index")
+        if criterion_index is not None and (isinstance(criterion_index, bool) or not isinstance(criterion_index, int) or criterion_index < 0):
+            raise ValueError("criterion_index must be a non-negative integer")
+        return self._record_lifecycle(
+            node_id, event_type="verify_evidence", entity_type="evidence_verification",
+            entity_prefix="ver_", reason=reason, actor_type=actor_type, actor_id=actor_id,
+            session_id=session_id, record={
+                "evidence_id": _text(data.get("evidence_id"), "evidence_id") or None,
+                "accepted": self._lifecycle_bool(data.get("accepted"), "accepted"),
+                "summary": _text(data.get("summary"), "summary", required=True),
+                "criterion_index": criterion_index,
+            },
+        )
+
+    def accept_result(self, node_id: str, data: dict[str, Any], *, reason: str,
+                      actor_type: str = "agent", actor_id: str | None = None,
+                      session_id: str | None = None) -> dict[str, Any]:
+        return self._record_lifecycle(
+            node_id, event_type="accept_result", entity_type="result_acceptance",
+            entity_prefix="acc_", reason=reason, actor_type=actor_type, actor_id=actor_id,
+            session_id=session_id, record={
+                "accepted": self._lifecycle_bool(data.get("accepted"), "accepted"),
+                "summary": _text(data.get("summary"), "summary", required=True),
+                "accepted_by": _text(data.get("accepted_by"), "accepted_by") or None,
+            },
+        )
 
     def attach_evidence(self, node_id: str, data: dict[str, Any], *,
                         created_by: str = "agent", reason: str,
@@ -1267,6 +1700,41 @@ class GoalStore:
                 before=load_json(event["before_json"]),
                 after=after,
                 reason="redo intent contract",
+                batch_id=event["batch_id"],
+                actor_type=event["actor_type"],
+                actor_id=event["actor_id"],
+                session_id=event["session_id"],
+            )
+        elif event["entity_type"] == "plan_version" and event["event_type"] in {"create_plan_version", "replan"}:
+            self._event(
+                conn,
+                project_id=event["project_id"],
+                event_type=event["event_type"],
+                entity_type="plan_version",
+                entity_id=entity_id,
+                before=load_json(event["before_json"]),
+                after=after,
+                reason="redo plan version",
+                batch_id=event["batch_id"],
+                actor_type=event["actor_type"],
+                actor_id=event["actor_id"],
+                session_id=event["session_id"],
+            )
+        elif (
+            event["event_type"] in LIFECYCLE_EVENT_TYPES
+            and LIFECYCLE_EVENT_TYPES[event["event_type"]] == event["entity_type"]
+        ):
+            # Lifecycle records are event-backed. Redo republishes the same
+            # record ID; lifecycle reads de-duplicate it for a stable view.
+            self._event(
+                conn,
+                project_id=event["project_id"],
+                event_type=event["event_type"],
+                entity_type=event["entity_type"],
+                entity_id=entity_id,
+                before=load_json(event["before_json"]),
+                after=after,
+                reason=f"redo {event['event_type']}",
                 batch_id=event["batch_id"],
                 actor_type=event["actor_type"],
                 actor_id=event["actor_id"],

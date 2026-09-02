@@ -213,6 +213,55 @@ class GoalClient:
                 "limit": args.get("limit", 10),
                 "filters": json.dumps(args.get("filters") or {}, ensure_ascii=False),
             })
+        if tool_name == "goal_intent_contract_set":
+            return self.request("PUT", f"/api/goals/projects/{args['projectId']}/intent-contract", {
+                "outcome": args["outcome"],
+                "success_criteria": args.get("successCriteria", []),
+                "scope": args.get("scope", []),
+                "constraints": args.get("constraints", []),
+                "assumptions": args.get("assumptions", []),
+                "open_questions": args.get("openQuestions", []),
+                "reason": args.get("reason", "set intent contract"),
+                **actor,
+            })
+        if tool_name == "goal_protocol_next_action":
+            return self.request("GET", f"/api/goals/projects/{args['projectId']}/protocol-next-action", query={
+                "limit": args.get("limit", 10),
+            })
+        if tool_name == "goal_plan_review":
+            return self.request("GET", f"/api/goals/projects/{args['projectId']}/plan-review")
+        if tool_name == "goal_replan":
+            return self.request("POST", f"/api/goals/projects/{args['projectId']}/replan", {
+                "reason": args["reason"], **actor,
+            })
+        if tool_name == "goal_lifecycle_get":
+            return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/lifecycle")
+        if tool_name == "goal_record_execution_result":
+            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/execution-results", {
+                "status": args["status"], "summary": args["summary"],
+                "outputs": args.get("outputs", []), "reason": args["reason"], **actor,
+            })
+        if tool_name == "goal_record_observation":
+            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/observations", {
+                "execution_result_id": args.get("executionResultId"),
+                "summary": args["summary"], "signals": args.get("signals", []),
+                "reason": args["reason"], **actor,
+            })
+        if tool_name == "goal_verify_evidence":
+            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/evidence-verifications", {
+                "evidence_id": args.get("evidenceId"), "accepted": args["accepted"],
+                "summary": args["summary"], "criterion_index": args.get("criterionIndex"),
+                "reason": args["reason"], **actor,
+            })
+        if tool_name == "goal_apply_evidence_verification":
+            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/apply-evidence-verification", {
+                "verification_id": args["verificationId"], "expected_version": args["expectedVersion"],
+                "reason": args["reason"], **actor,
+            })
+        if tool_name == "goal_submit_for_review":
+            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/submit-for-review", {
+                "expected_version": args["expectedVersion"], "reason": args["reason"], **actor,
+            })
         if tool_name == "goal_attach_evidence":
             return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/evidence", {
                 "evidence_type": args["evidenceType"], "title": args.get("title"),

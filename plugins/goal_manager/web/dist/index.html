@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101827">
+  <title>目标管理</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">G</span>
+        <div>
+          <p class="eyebrow">VOIDCUBE / GOAL SERVICE</p>
+          <h1>目标管理</h1>
+        </div>
+      </div>
+      <div class="toolbar">
+        <label class="project-picker">
+          <span>项目</span>
+          <select id="project-select" aria-label="选择项目"></select>
+        </label>
+        <button id="new-project-button" class="button button-primary" type="button">新建项目</button>
+        <button id="undo-button" class="icon-button" type="button" title="撤销最近批次" aria-label="撤销最近批次">↶</button>
+        <button id="redo-button" class="icon-button" type="button" title="重做最近批次" aria-label="重做最近批次">↷</button>
+        <button id="refresh-button" class="button button-quiet" type="button" title="刷新数据">刷新</button>
+      </div>
+    </header>
+
+    <section id="project-form" class="inline-form" hidden>
+      <div>
+        <label for="project-name">项目名称</label>
+        <input id="project-name" type="text" maxlength="120" placeholder="例如：VoidCube 2.0">
+      </div>
+      <div>
+        <label for="project-description">描述</label>
+        <input id="project-description" type="text" maxlength="240" placeholder="项目目的和边界">
+      </div>
+      <div>
+        <label for="project-reason">原因</label>
+        <input id="project-reason" type="text" maxlength="240" value="通过目标管理界面创建项目">
+      </div>
+      <div class="form-actions">
+        <button id="cancel-project-button" class="button button-quiet" type="button">取消</button>
+        <button id="create-project-button" class="button button-primary" type="button">创建</button>
+      </div>
+    </section>
+
+    <main class="workspace">
+      <section class="main-panel" aria-label="目标径向视图">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">FOCUS GRAPH</p>
+            <h2 id="focus-heading">正在加载目标图</h2>
+          </div>
+          <div class="view-actions">
+            <button id="add-child-button" class="button button-primary" type="button" title="为当前目标创建子目标">+ 子目标</button>
+            <button id="back-button" class="icon-button" type="button" title="后退" aria-label="后退">←</button>
+            <button id="forward-button" class="icon-button" type="button" title="前进" aria-label="前进">→</button>
+            <span id="zoom-label" class="zoom-label">100%</span>
+          </div>
+        </div>
+        <div id="breadcrumb" class="breadcrumb"></div>
+        <div id="radial-wrap" class="radial-wrap">
+          <div id="loading-state" class="state-message">正在连接 Goal Service...</div>
+          <svg id="radial-svg" class="radial-svg" viewBox="0 0 900 650" role="img" aria-label="目标径向图">
+            <defs>
+              <radialGradient id="node-gradient" cx="34%" cy="28%" r="75%">
+                <stop offset="0%" stop-color="#f8fbff"></stop>
+                <stop offset="20%" stop-color="#7dd3fc"></stop>
+                <stop offset="100%" stop-color="#1d4ed8"></stop>
+              </radialGradient>
+              <filter id="node-shadow" x="-40%" y="-40%" width="180%" height="180%">
+                <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#06101f" flood-opacity=".32"></feDropShadow>
+              </filter>
+            </defs>
+            <g id="radial-content"></g>
+          </svg>
+          <div id="empty-state" class="empty-state" hidden>
+            <strong>还没有可展示的目标</strong>
+            <span>创建项目后，从根节点开始拆解。</span>
+            <button id="empty-create-button" class="button button-primary" type="button">创建第一个项目</button>
+          </div>
+        </div>
+        <div class="legend" aria-label="目标图图例">
+          <span><i class="legend-dot progress-dot"></i>完成度</span>
+          <span><i class="legend-ring active-ring"></i>进行中</span>
+          <span><i class="legend-ring blocked-ring"></i>阻塞</span>
+          <span><i class="legend-arc"></i>进度弧</span>
+        </div>
+        <section class="overview-section" aria-label="目标总览">
+          <div class="overview-heading">
+            <div>
+              <p class="eyebrow">OVERVIEW</p>
+              <h3>全局目标图</h3>
+            </div>
+            <div class="segmented-control" role="group" aria-label="总览模式">
+              <button id="parents-mode-button" class="segment-button active" type="button">父子关系</button>
+              <button id="dependencies-mode-button" class="segment-button" type="button">依赖关系</button>
+            </div>
+          </div>
+          <div class="overview-wrap">
+            <svg id="overview-svg" class="overview-svg" viewBox="0 0 900 260" role="img" aria-label="全局目标总览">
+              <g id="overview-content"></g>
+            </svg>
+            <div id="overview-empty" class="overview-empty" hidden>当前项目还没有可用的总览节点。</div>
+          </div>
+        </section>
+      </section>
+
+      <aside id="detail-panel" class="detail-panel" aria-label="目标详情">
+        <div class="panel-heading detail-heading">
+          <div>
+            <p class="eyebrow">NODE DETAIL</p>
+            <h2 id="detail-title">选择一个目标</h2>
+          </div>
+          <div class="detail-actions">
+            <button id="edit-detail-button" class="button button-quiet" type="button" title="编辑目标" hidden>编辑</button>
+            <button id="close-detail-button" class="icon-button" type="button" title="关闭详情" aria-label="关闭详情">×</button>
+          </div>
+        </div>
+        <div id="detail-content" class="detail-content">
+          <div class="detail-placeholder">点击中心节点查看详情。点击子节点可进入下一层目标。</div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="statusbar">
+      <div class="status-live"><span id="status-pulse" class="status-pulse"></span><span id="status-text">准备就绪</span></div>
+      <div id="project-progress" class="project-progress">项目进度 --</div>
+    </footer>
+  </div>
+  <div id="node-menu" class="node-menu" role="menu" hidden>
+    <button type="button" data-menu-action="create-child">新建子目标</button>
+    <button type="button" data-menu-action="view">查看详情</button>
+    <button type="button" data-menu-action="edit">编辑目标</button>
+    <button type="button" data-menu-action="block">标记阻塞</button>
+    <button type="button" data-menu-action="evidence">添加证据</button>
+    <button type="button" data-menu-action="rollback">回滚最近批次</button>
+    <button type="button" data-menu-action="delete" class="danger-action">删除节点</button>
+  </div>
+  <div id="goal-dialog" class="dialog-backdrop" role="presentation" hidden>
+    <section class="goal-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-heading">
+        <h2 id="dialog-title">确认操作</h2>
+        <button id="dialog-close-button" class="icon-button" type="button" title="关闭" aria-label="关闭">×</button>
+      </div>
+      <div id="dialog-content" class="dialog-content"></div>
+      <div class="dialog-actions">
+        <button id="dialog-cancel-button" class="button button-quiet" type="button">取消</button>
+        <button id="dialog-confirm-button" class="button button-primary" type="button">确认</button>
+      </div>
+    </section>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>
