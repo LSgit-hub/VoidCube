@@ -1228,10 +1228,11 @@ class PlanningRuntimeMixin:
             try:
                 timeout = aiohttp.ClientTimeout(total=10)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(
-                        url,
-                        headers=self._gateway_registration_headers(),
-                    ) as response:
+                    request_kwargs: Dict[str, Any] = {}
+                    headers = self._gateway_registration_headers()
+                    if headers:
+                        request_kwargs["headers"] = headers
+                    async with session.get(url, **request_kwargs) as response:
                         if response.status != 200:
                             raise HTTPException(
                                 status_code=503,

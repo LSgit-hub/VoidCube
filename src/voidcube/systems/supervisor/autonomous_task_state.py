@@ -64,7 +64,6 @@ class AutonomousTaskStateService:
                 transition_kind="metadata",
             ),
         )
-        self._notify_status(task, "metadata_update")
         return task
 
     def update_priority(

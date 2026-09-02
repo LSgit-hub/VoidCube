@@ -295,7 +295,7 @@ security:
   tirith_enabled: true
   tirith_path: tirith
   tirith_timeout: 5
-  tirith_fail_open: false
+  tirith_fail_open: true
   website_blocklist:
     enabled: false
     domains: []

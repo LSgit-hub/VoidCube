@@ -55,10 +55,15 @@ async def fetch_tier1_stats(
         from ...infrastructure.gateway.presence import gateway_auth_headers
 
         async with aiohttp.ClientSession() as session:
+            gateway_request_kwargs: Dict[str, Any] = {
+                "timeout": aiohttp.ClientTimeout(total=3),
+            }
+            gateway_headers = gateway_auth_headers()
+            if gateway_headers:
+                gateway_request_kwargs["headers"] = gateway_headers
             async with session.get(
                 f"{context.gateway_url}/admin/services",
-                headers=gateway_auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=3),
+                **gateway_request_kwargs,
             ) as response:
                 if response.status != 200:
                     return {
@@ -76,7 +81,10 @@ async def fetch_tier1_stats(
                     "memory_active": False,
                 }
 
+            memory_error: str | None = None
+
             async def load_json(path: str) -> Dict[str, Any]:
+                nonlocal memory_error
                 try:
                     async with session.get(
                         f"{memory_url}{path}",
@@ -85,7 +93,9 @@ async def fetch_tier1_stats(
                         if response.status == 200:
                             payload = await response.json()
                             return dict(payload) if isinstance(payload, dict) else {}
-                except Exception:
+                except Exception as exc:
+                    if memory_error is None:
+                        memory_error = type(exc).__name__
                     return {}
                 return {}
 
@@ -94,6 +104,14 @@ async def fetch_tier1_stats(
                 load_json("/compressed/rules-status"),
                 load_json("/health"),
             )
+
+            if not stats_data and not rules_data and not health_data:
+                return {
+                    "memory_unavailable": True,
+                    "memory_unavailable_reason": memory_error
+                    or "memory_service_unavailable",
+                    "memory_active": False,
+                }
 
             result = dict(stats_data)
             result["rules"] = rules_data.get("rules", {})

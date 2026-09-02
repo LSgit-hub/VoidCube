@@ -138,3 +138,39 @@ async def test_memory_status_owner_reports_registry_and_transport_failures(monke
         "memory_unavailable_reason": "memory_service_not_registered",
         "memory_active": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_memory_status_owner_reports_service_disconnect(monkeypatch):
+    class _Session:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, *, headers=None, timeout=None):
+            if url.endswith("/admin/services"):
+                return _Response(
+                    {"services": [{"service_type": "memory", "address": "http://memory"}]}
+                )
+            raise ConnectionError("memory service stopped")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(ClientTimeout=lambda **kwargs: kwargs, ClientSession=_Session),
+    )
+
+    unavailable = await fetch_tier1_stats(
+        context=SupervisorUIMemoryStatusContext(gateway_url="http://gateway")
+    )
+
+    assert unavailable == {
+        "memory_unavailable": True,
+        "memory_unavailable_reason": "ConnectionError",
+        "memory_active": False,
+    }

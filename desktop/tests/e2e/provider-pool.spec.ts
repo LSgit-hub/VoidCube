@@ -33,7 +33,10 @@ test('provider pool and worker assignment panels stay usable across viewports', 
   await page.route(/\/provider-pool(?:\?.*)?$/, async (route) => {
     const response = await route.fetch()
     const body = await response.json()
-    if (!Array.isArray(body.providers) || body.providers.length < 2) {
+    const providerKeys = Array.isArray(body.providers)
+      ? body.providers.map((provider: { key?: unknown }) => String(provider.key || ''))
+      : []
+    if (!providerKeys.includes('backup') || !providerKeys.includes('openrouter')) {
       body.managed = false
       body.active_provider = 'openrouter'
       body.providers = [

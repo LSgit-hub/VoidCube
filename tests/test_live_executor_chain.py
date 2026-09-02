@@ -122,12 +122,16 @@ async def _wait_for_gateway_service_types(
     expected: set[str],
     *,
     timeout: float = 15.0,
+    headers: dict[str, str] | None = None,
 ) -> dict:
     deadline = asyncio.get_running_loop().time() + timeout
     async with httpx.AsyncClient(timeout=2.0) as client:
         while asyncio.get_running_loop().time() < deadline:
             try:
-                response = await client.get(f"{gateway_url}/admin/services")
+                response = await client.get(
+                    f"{gateway_url}/admin/services",
+                    headers=headers,
+                )
                 if response.status_code == 200:
                     payload = response.json()
                     service_types = {
@@ -224,6 +228,7 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
     memory_port = _free_port()
     supervisor_port = _free_port()
     gateway_url = f"http://127.0.0.1:{gateway_port}"
+    gateway_headers = {"Authorization": "Bearer live-gateway-root-secret"}
 
     gateway = InternalGateway(
         GatewayConfig(
@@ -264,6 +269,7 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
         services = await _wait_for_gateway_service_types(
             gateway_url,
             {"memory", "supervisor", "executor"},
+            headers=gateway_headers,
         )
         memory_registration = next(
             item for item in services["services"] if item["service_type"] == "memory"
@@ -295,9 +301,15 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
                     "source_service": "memory",
                     "metadata": {"trace_id": trace_id},
                 },
+                headers=gateway_headers,
             )
             assert touched.status_code == 200
-            trace = (await client.get(f"{gateway_url}/admin/traces/{trace_id}")).json()
+            trace = (
+                await client.get(
+                    f"{gateway_url}/admin/traces/{trace_id}",
+                    headers=gateway_headers,
+                )
+            ).json()
             assert trace["trace_id"] == trace_id
             assert trace["count"] == 1
             assert trace["events"][0]["metadata"]["trace_id"] == trace_id
@@ -336,11 +348,16 @@ async def test_live_three_service_lifespan_registration_recovery_and_shutdown(
             ]
 
             removed = await client.delete(
-                f"{gateway_url}/admin/services/{memory_registration['service_id']}"
+                f"{gateway_url}/admin/services/{memory_registration['service_id']}",
+                headers=gateway_headers,
             )
             assert removed.status_code == 200
 
-        restored = await _wait_for_gateway_service_types(gateway_url, {"memory"})
+        restored = await _wait_for_gateway_service_types(
+            gateway_url,
+            {"memory"},
+            headers=gateway_headers,
+        )
         restored_memory = next(
             item for item in restored["services"] if item["service_type"] == "memory"
         )
