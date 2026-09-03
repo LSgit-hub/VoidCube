@@ -9,7 +9,7 @@
 - 数据边界在 owner、workspace、memory_domain、global scope、source type 之间无越权入口。
 - 召回结果遵守 active、visible、identity、evaluation、record filter、as-of 和时间意图约束。
 - Tier 1、Tier 2、Profile、Archive、Promotion 和 Entity Graph 的事实来源、派生索引与生命周期状态一致。
-- 生命周期升级、撤销、隐藏、恢复、归档、purge 和重建具备事务一致性、来源可追踪性和幂等性。
+- 生命周期状态、撤销、隐藏、恢复、归档、purge 和重建具备事务一致性、来源可追踪性和幂等性。
 - 迁移、旧数据修复、备份恢复和重建路径可重复执行，不制造重复记录或幽灵索引。
 - 失败路径有明确回滚、重试、隔离或审计记录；后台维护不会静默吞掉数据范围错误。
 - 关键不变量有回归测试，完整测试、静态检查、编译检查和适用的退役入口扫描均有可复现证据。

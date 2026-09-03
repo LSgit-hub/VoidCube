@@ -218,6 +218,33 @@ async def test_compression_candidate_batch_is_single_domain(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_compression_candidate_batch_is_single_session(tmp_path):
+    service = _service(tmp_path)
+    for session_id, text in (
+        ("older-session", "older session candidate"),
+        ("newer-session", "newer session candidate"),
+    ):
+        await service.create_session(
+            SessionCreate(session_id=session_id, memory_actor="api_a")
+        )
+        await service.add_turn(
+            session_id,
+            TurnCreate(speaker="user", text=text, memory_actor="api_a"),
+        )
+
+    bridge = Tier1ToTier2Bridge(
+        service._db_path,
+        retention_days=-1,
+        min_relevance=0,
+        batch_size=25,
+    )
+    batch = bridge.select_candidate_turns(force_oldest=True)
+
+    assert batch.session_id == batch.turns[0]["session_id"]
+    assert {turn["session_id"] for turn in batch.turns} == {batch.session_id}
+
+
+@pytest.mark.asyncio
 async def test_automatic_compression_schedules_every_scope_and_domain(tmp_path):
     service = MemoryService(
         MemoryServiceConfig(

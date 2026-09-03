@@ -129,9 +129,14 @@ final_rank =
 响应中：
 
 - `dormant_candidates` 只包含可考虑休眠的 `Arc`；
-- `purge_candidates` 只包含可考虑遗忘的低价值 `Event` / `Scene`；
+- `purge_candidates` 包含可考虑遗忘的低价值 `Event` / `Scene` / `Arc` / `Epoch`；
 - `protected` 说明未入选 purge 的保护原因；
 - `dry_run` 必须为 `true`，表示该审查接口不会改变数据库。
+
+自动遗忘按层级使用不同的年龄与重要性阈值：`Event` 和 `Scene` 可直接进入候选，
+`Arc` 必须先处于 `activity_state = "dormant"`，`Scene` / `Arc` / `Epoch` 在仍有活动
+子级时会受到保护。所有层级仍会跳过置顶、隐藏、身份层、被引用、有关联 promotion、
+高重要性、高置信度或未完成归档的记录。
 
 ### 范围摘要响应
 

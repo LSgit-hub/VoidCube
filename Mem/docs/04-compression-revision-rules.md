@@ -159,16 +159,16 @@ closure_update
 服务端接口 `POST /compressed/retention-review` 是只读审查接口，不改写数据库，返回：
 
 - `dormant_candidates`：可考虑休眠的 Arc；
-- `purge_candidates`：可考虑逻辑遗忘的低价值 Event/Scene；
+- `purge_candidates`：可考虑逻辑遗忘的低价值 Event/Scene/Arc/Epoch；
 - `protected`：未入选 purge 的记录及保护原因；
 - `overview`：当前作用域内 compressed memory 类型和状态分布。
 
-自动 purge 候选只覆盖 `compressed_memories` 中的 `event` 和 `scene`，不覆盖：
+自动 purge 候选覆盖 `compressed_memories` 中的 `event`、`scene`、`arc` 和 `epoch`，
+但只处理低价值、无 active 子节点的记录；不覆盖：
 
 - `turns` / `turns_archive`；
 - `profile_memories`；
 - `time_summaries` / `time_summary_links` / `session_summary_sources`；
-- `arc` / `epoch`；
 - identity/founding 记忆；
 - pinned 或 hidden 记忆。
 
@@ -178,7 +178,6 @@ Event 候选必须同时满足：
 - `importance < 0.35`；
 - `confidence < 0.5`；
 - `event_kind` 不是 `decision/correction/shift/blocker/completion/conflict`；
-- 存在 active Scene 父摘要；
 - 直接 source turns 已归档；
 - 没有 citation、relevant feedback、promotion 引用或待处理 promotion candidate。
 
@@ -187,8 +186,11 @@ Scene 候选必须同时满足：
 - 活动锚点超过默认 365 天；
 - `importance < 0.45`；
 - `confidence < 0.5`；
-- 存在 active Arc 父摘要；
 - 没有 citation、relevant feedback、promotion 引用或待处理 promotion candidate。
+
+`Scene`、`Arc`、`Epoch` 只有在没有 active 子节点时才允许进入候选；缺少父摘要不再
+永久阻塞低价值 Event/Scene 的遗忘。`Arc` 必须先进入 `activity_state = 'dormant'`，
+然后才能按配置的长期窗口进入 purge candidate。
 
 ### 14.3 自动遗忘状态机
 
@@ -204,7 +206,7 @@ purge_reason
 purged_at
 ```
 
-维护规则每轮重新评估候选：满足 purge 条件的 Event/Scene 会先标记为
+维护规则每轮重新评估候选：满足 purge 条件的 Event/Scene/Arc/Epoch 会先标记为
 `retention_state = 'purge_candidate'` 并记录原因；候选持续满足条件超过默认 30 天后，
 进入逻辑 `purged`，同时 `status = 'purged'`、`activity_state = 'resolved'`、`weight = 0`。
 

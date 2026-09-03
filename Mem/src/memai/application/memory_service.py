@@ -375,8 +375,12 @@ class RetentionReviewRequest(BaseModel):
     dormant_after_days: int = Field(default=30, ge=1, le=3650)
     purge_event_after_days: int = Field(default=180, ge=1, le=3650)
     purge_scene_after_days: int = Field(default=365, ge=1, le=3650)
+    purge_arc_after_days: int = Field(default=730, ge=1, le=3650)
+    purge_epoch_after_days: int = Field(default=1095, ge=1, le=3650)
     purge_event_max_importance: float = Field(default=0.35, ge=0.0, le=1.0)
     purge_scene_max_importance: float = Field(default=0.45, ge=0.0, le=1.0)
+    purge_arc_max_importance: float = Field(default=0.55, ge=0.0, le=1.0)
+    purge_epoch_max_importance: float = Field(default=0.65, ge=0.0, le=1.0)
     purge_max_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
@@ -737,6 +741,174 @@ def _collect_dependent_memory_ids(
     return compressed_ids, profile_ids
 
 
+def _partition_shared_dependent_memory_ids(
+    conn: sqlite3.Connection,
+    *,
+    scope: MemoryScope,
+    memory_domain: str,
+    compressed_ids: set[str],
+    profile_ids: set[str],
+    forgotten_turn_ids: set[str],
+) -> tuple[set[str], set[str]]:
+    """Find derived rows also supported by turns outside a forgotten session.
+
+    A session forget must not destroy a memory still needed by another
+    session.  Shared rows are retained and their direct forgotten-turn
+    provenance is detached by the caller; descendants of a shared row are
+    retained as well so the remaining graph stays coherent.
+    """
+    if not forgotten_turn_ids or not (compressed_ids or profile_ids):
+        return set(), set()
+
+    turn_rows = conn.execute(
+        "SELECT turn_id FROM turns WHERE owner_id = ? AND workspace_id = ? "
+        "AND memory_domain = ? UNION SELECT turn_id FROM turns_archive "
+        "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+        (
+            scope.owner_id,
+            scope.workspace_id,
+            memory_domain,
+            scope.owner_id,
+            scope.workspace_id,
+            memory_domain,
+        ),
+    ).fetchall()
+    surviving_turn_ids = {
+        str(row[0]) for row in turn_rows if str(row[0]) not in forgotten_turn_ids
+    }
+
+    compressed_rows = conn.execute(
+        "SELECT memory_id, source_turns, evidence_refs, timeline_parent_id, "
+        "derived_from_id, origin_id FROM compressed_memories WHERE owner_id = ? "
+        "AND workspace_id = ? AND memory_domain = ?",
+        (scope.owner_id, scope.workspace_id, memory_domain),
+    ).fetchall()
+    profile_rows = conn.execute(
+        "SELECT memory_id, source_turns, evidence_refs FROM profile_memories "
+        "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+        (scope.owner_id, scope.workspace_id, memory_domain),
+    ).fetchall()
+
+    def row_refs(*values: Any) -> set[str]:
+        refs: set[str] = set()
+        for value in values:
+            refs.update(_json_string_set(value))
+            if isinstance(value, str):
+                scalar = value.strip()
+                if scalar and not scalar.startswith(("[", "{")):
+                    refs.add(scalar)
+        return refs
+
+    shared_compressed: set[str] = set()
+    shared_profile: set[str] = set()
+    # Directly shared rows are those with both a forgotten and a surviving
+    # turn reference.  Support the canonical ``turn:<id>`` form too.
+    for memory_id, source_turns, evidence_refs, *_ in compressed_rows:
+        memory_id = str(memory_id)
+        if memory_id not in compressed_ids:
+            continue
+        refs = row_refs(source_turns, evidence_refs)
+        direct_turn_refs = {
+            ref[5:] if ref.startswith("turn:") else ref
+            for ref in refs
+            if ref.startswith("turn:") or ref in forgotten_turn_ids or ref in surviving_turn_ids
+        }
+        if direct_turn_refs & forgotten_turn_ids and direct_turn_refs & surviving_turn_ids:
+            shared_compressed.add(memory_id)
+
+    for memory_id, source_turns, evidence_refs in profile_rows:
+        memory_id = str(memory_id)
+        if memory_id not in profile_ids:
+            continue
+        refs = row_refs(source_turns, evidence_refs)
+        direct_turn_refs = {
+            ref[5:] if ref.startswith("turn:") else ref
+            for ref in refs
+            if ref.startswith("turn:") or ref in forgotten_turn_ids or ref in surviving_turn_ids
+        }
+        if direct_turn_refs & forgotten_turn_ids and direct_turn_refs & surviving_turn_ids:
+            shared_profile.add(memory_id)
+
+    references = set(shared_compressed) | set(shared_profile)
+    changed = True
+    while changed:
+        changed = False
+        for memory_id, source_turns, evidence_refs, timeline_parent_id, derived_from_id, origin_id in compressed_rows:
+            memory_id = str(memory_id)
+            if memory_id not in compressed_ids or memory_id in shared_compressed:
+                continue
+            refs = row_refs(
+                source_turns,
+                evidence_refs,
+                timeline_parent_id,
+                derived_from_id,
+                origin_id,
+            )
+            if refs & references:
+                shared_compressed.add(memory_id)
+                references.add(memory_id)
+                changed = True
+        for memory_id, source_turns, evidence_refs in profile_rows:
+            memory_id = str(memory_id)
+            if memory_id not in profile_ids or memory_id in shared_profile:
+                continue
+            if row_refs(source_turns, evidence_refs) & references:
+                shared_profile.add(memory_id)
+                references.add(memory_id)
+                changed = True
+    return shared_compressed, shared_profile
+
+
+def _detach_forgotten_turn_references(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    memory_ids: set[str],
+    forgotten_turn_ids: set[str],
+    owner_id: str,
+    workspace_id: str,
+    memory_domain: str,
+) -> int:
+    """Remove only forgotten-turn provenance from retained shared rows."""
+    if not memory_ids or not forgotten_turn_ids:
+        return 0
+    if table == "compressed_memories":
+        columns = "memory_id, source_turns, evidence_refs"
+    elif table == "profile_memories":
+        columns = "memory_id, source_turns, evidence_refs"
+    else:
+        raise ValueError(f"Unsupported shared-memory table: {table}")
+    placeholders = ",".join("?" for _ in memory_ids)
+    rows = conn.execute(
+        f"SELECT {columns} FROM {table} WHERE owner_id = ? AND workspace_id = ? "
+        f"AND memory_domain = ? AND memory_id IN ({placeholders})",
+        (owner_id, workspace_id, memory_domain, *sorted(memory_ids)),
+    ).fetchall()
+    tokens = set(forgotten_turn_ids) | {
+        f"turn:{turn_id}" for turn_id in forgotten_turn_ids
+    }
+    changed = 0
+    for memory_id, source_turns, evidence_refs in rows:
+        source = [item for item in _json_string_list(source_turns) if item not in tokens]
+        evidence = [item for item in _json_string_list(evidence_refs) if item not in tokens]
+        if source == _json_string_list(source_turns) and evidence == _json_string_list(evidence_refs):
+            continue
+        conn.execute(
+            f"UPDATE {table} SET source_turns = ?, evidence_refs = ? "
+            "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+            (
+                json.dumps(source, ensure_ascii=False),
+                json.dumps(evidence, ensure_ascii=False),
+                str(memory_id),
+                owner_id,
+                workspace_id,
+                memory_domain,
+            ),
+        )
+        changed += 1
+    return changed
+
+
 class MemoryApplicationService:
     # Event/Scene/Arc/Epoch are Tier 2 semantic structure.  Their former
     # age-based successor chain is paused until a separate forgetting policy
@@ -921,14 +1093,14 @@ class MemoryApplicationService:
 
     # ── Compression Lifecycle ─────────────────────────────────────
 
-    # Weight by lifecycle level. Age thresholds are configured separately:
-    # Event -> Scene (14d), Scene -> Arc (60d), Arc -> Epoch (180d),
-    # Epoch -> Final review (365d), then final review (90d).
+    # Weight by Tier 2 level.  Event/Scene/Arc/Epoch are generated together by
+    # the Tier1->Tier2 bridge; the former age-driven successor chain remains
+    # behind an explicit, disabled legacy path.
     #   Level 0 (Event): weight = 1.00
     #   Level 1 (Scene): weight = 0.70
     #   Level 2 (Arc):   weight = 0.40
     #   Level 3 (Epoch): weight = 0.20
-    #   Level 4 (Final): weight = 0.05 -> purge review
+    #   Level 4 (Final): weight = 0.05 (legacy only)
     _LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2, 4: 0.05}
 
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
@@ -1400,6 +1572,142 @@ class MemoryApplicationService:
             pass
         return False
 
+    @staticmethod
+    def _remove_purged_memory_references(
+        conn: sqlite3.Connection,
+        *,
+        memory_ids: Sequence[str],
+        owner_id: str,
+        workspace_id: str,
+        memory_domain: str,
+    ) -> int:
+        """Detach purged IDs from surviving rows and archive back-links."""
+        purged = {str(memory_id) for memory_id in memory_ids if str(memory_id)}
+        if not purged:
+            return 0
+        changed = 0
+
+        def clean_json(value: Any) -> tuple[str, bool]:
+            values = _json_string_list(value)
+            cleaned = [item for item in values if item not in purged]
+            return json.dumps(cleaned, ensure_ascii=False), cleaned != values
+
+        archive_rows = conn.execute(
+            "SELECT turn_id, event_ids, scene_ids FROM turns_archive "
+            "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+            (owner_id, workspace_id, memory_domain),
+        ).fetchall()
+        for turn_id, event_ids, scene_ids in archive_rows:
+            cleaned_events, events_changed = clean_json(event_ids)
+            cleaned_scenes, scenes_changed = clean_json(scene_ids)
+            if not (events_changed or scenes_changed):
+                continue
+            conn.execute(
+                "UPDATE turns_archive SET event_ids = ?, scene_ids = ? "
+                "WHERE turn_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                (
+                    cleaned_events,
+                    cleaned_scenes,
+                    str(turn_id),
+                    owner_id,
+                    workspace_id,
+                    memory_domain,
+                ),
+            )
+            changed += 1
+
+        placeholders = ",".join("?" for _ in purged)
+        rows = conn.execute(
+            "SELECT memory_id, source_turns, evidence_refs, timeline_parent_id, "
+            "derived_from_id, origin_id, superseded_by "
+            "FROM compressed_memories WHERE owner_id = ? AND workspace_id = ? "
+            f"AND memory_domain = ? AND memory_id NOT IN ({placeholders})",
+            (owner_id, workspace_id, memory_domain, *sorted(purged)),
+        ).fetchall()
+        for (
+            memory_id,
+            source_turns,
+            evidence_refs,
+            timeline_parent_id,
+            derived_from_id,
+            origin_id,
+            superseded_by,
+        ) in rows:
+            cleaned_source, source_changed = clean_json(source_turns)
+            cleaned_evidence, evidence_changed = clean_json(evidence_refs)
+            parent = None if str(timeline_parent_id or "") in purged else timeline_parent_id
+            derived = None if str(derived_from_id or "") in purged else derived_from_id
+            origin = None if str(origin_id or "") in purged else origin_id
+            superseded = None if str(superseded_by or "") in purged else superseded_by
+            parent_changed = parent != timeline_parent_id
+            derived_changed = derived != derived_from_id
+            origin_changed = origin != origin_id
+            superseded_changed = superseded != superseded_by
+            if not (
+                source_changed
+                or evidence_changed
+                or parent_changed
+                or derived_changed
+                or origin_changed
+                or superseded_changed
+            ):
+                continue
+            conn.execute(
+                "UPDATE compressed_memories SET source_turns = ?, evidence_refs = ?, "
+                "timeline_parent_id = ?, derived_from_id = ?, origin_id = ?, "
+                "superseded_by = ? WHERE memory_id = ? AND owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ?",
+                (
+                    cleaned_source,
+                    cleaned_evidence,
+                    parent,
+                    derived,
+                    origin,
+                    superseded,
+                    str(memory_id),
+                    owner_id,
+                    workspace_id,
+                    memory_domain,
+                ),
+            )
+            changed += 1
+
+        profile_rows = conn.execute(
+            "SELECT memory_id, source_turns, evidence_refs, supersedes, conflict_refs "
+            "FROM profile_memories "
+            "WHERE owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+            (owner_id, workspace_id, memory_domain),
+        ).fetchall()
+        for memory_id, source_turns, evidence_refs, supersedes, conflict_refs in profile_rows:
+            cleaned_source, source_changed = clean_json(source_turns)
+            cleaned_evidence, evidence_changed = clean_json(evidence_refs)
+            cleaned_supersedes, supersedes_changed = clean_json(supersedes)
+            cleaned_conflicts, conflicts_changed = clean_json(conflict_refs)
+            if not (
+                source_changed
+                or evidence_changed
+                or supersedes_changed
+                or conflicts_changed
+            ):
+                continue
+            cursor = conn.execute(
+                "UPDATE profile_memories SET source_turns = ?, evidence_refs = ?, "
+                "supersedes = ?, conflict_refs = ? "
+                "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
+                (
+                    cleaned_source,
+                    cleaned_evidence,
+                    cleaned_supersedes,
+                    cleaned_conflicts,
+                    str(memory_id),
+                    owner_id,
+                    workspace_id,
+                    memory_domain,
+                ),
+            )
+            changed += max(0, int(cursor.rowcount or 0))
+        return changed
+
     async def _purge_expired_memories(self) -> int:
         """Advance dormant memories through purge candidacy, purge, and cleanup."""
         reference = datetime.now(timezone.utc)
@@ -1410,7 +1718,7 @@ class MemoryApplicationService:
 
             rows = conn.execute(
                 f"SELECT {_CMEM_COLUMNS} FROM compressed_memories WHERE "
-                "memory_type IN ('event', 'scene') AND status = 'active' AND hidden = 0 "
+                "memory_type IN ('event', 'scene', 'arc', 'epoch') AND status = 'active' AND hidden = 0 "
                 "AND pinned = 0 AND COALESCE(identity_layer, '') = '' "
                 "ORDER BY timespan_end ASC, memory_id ASC LIMIT ?",
                 (5000,),
@@ -1434,8 +1742,12 @@ class MemoryApplicationService:
                     dormant_after_days=self.config.dormant_arc_after_days,
                     purge_event_after_days=self.config.purge_event_after_days,
                     purge_scene_after_days=self.config.purge_scene_after_days,
+                    purge_arc_after_days=self.config.purge_arc_after_days,
+                    purge_epoch_after_days=self.config.purge_epoch_after_days,
                     purge_event_max_importance=self.config.purge_event_max_importance,
                     purge_scene_max_importance=self.config.purge_scene_max_importance,
+                    purge_arc_max_importance=self.config.purge_arc_max_importance,
+                    purge_epoch_max_importance=self.config.purge_epoch_max_importance,
                     purge_max_confidence=self.config.purge_max_confidence,
                 )
                 current_state = str(memory.get("retention_state") or "retained")
@@ -1479,6 +1791,13 @@ class MemoryApplicationService:
             for scope, memory_ids in purge_targets.items():
                 owner_id, workspace_id, memory_domain = scope
                 placeholders = ",".join("?" for _ in memory_ids)
+                touched += self._remove_purged_memory_references(
+                    conn,
+                    memory_ids=memory_ids,
+                    owner_id=owner_id,
+                    workspace_id=workspace_id,
+                    memory_domain=memory_domain,
+                )
                 if _vec0_available(conn):
                     rowids = [
                         int(row[0])
@@ -1612,10 +1931,14 @@ class MemoryApplicationService:
                         str(memory.get("workspace_id") or DEFAULT_WORKSPACE_ID),
                     ),
                     dormant_after_days=self.config.dormant_arc_after_days,
-                    purge_event_after_days=180,
-                    purge_scene_after_days=365,
-                    purge_event_max_importance=0.35,
-                    purge_scene_max_importance=0.45,
+                    purge_event_after_days=self.config.purge_event_after_days,
+                    purge_scene_after_days=self.config.purge_scene_after_days,
+                    purge_arc_after_days=self.config.purge_arc_after_days,
+                    purge_epoch_after_days=self.config.purge_epoch_after_days,
+                    purge_event_max_importance=self.config.purge_event_max_importance,
+                    purge_scene_max_importance=self.config.purge_scene_max_importance,
+                    purge_arc_max_importance=self.config.purge_arc_max_importance,
+                    purge_epoch_max_importance=self.config.purge_epoch_max_importance,
                     purge_max_confidence=0.5,
                 )
                 if assessment["dormant_candidate"]:
@@ -2885,6 +3208,12 @@ class MemoryApplicationService:
             "dormant_arc_after_days": self.config.dormant_arc_after_days,
             "purge_event_after_days": self.config.purge_event_after_days,
             "purge_scene_after_days": self.config.purge_scene_after_days,
+            "purge_arc_after_days": self.config.purge_arc_after_days,
+            "purge_epoch_after_days": self.config.purge_epoch_after_days,
+            "purge_event_max_importance": self.config.purge_event_max_importance,
+            "purge_scene_max_importance": self.config.purge_scene_max_importance,
+            "purge_arc_max_importance": self.config.purge_arc_max_importance,
+            "purge_epoch_max_importance": self.config.purge_epoch_max_importance,
             "purge_candidate_grace_days": self.config.purge_candidate_grace_days,
             "purge_audit_retention_days": self.config.purge_audit_retention_days,
             "lifecycle_cadence_days": self.config.lifecycle_cadence_days,
@@ -4906,8 +5235,12 @@ class MemoryApplicationService:
                     dormant_after_days=request.dormant_after_days,
                     purge_event_after_days=request.purge_event_after_days,
                     purge_scene_after_days=request.purge_scene_after_days,
+                    purge_arc_after_days=request.purge_arc_after_days,
+                    purge_epoch_after_days=request.purge_epoch_after_days,
                     purge_event_max_importance=request.purge_event_max_importance,
                     purge_scene_max_importance=request.purge_scene_max_importance,
+                    purge_arc_max_importance=request.purge_arc_max_importance,
+                    purge_epoch_max_importance=request.purge_epoch_max_importance,
                     purge_max_confidence=request.purge_max_confidence,
                 )
                 if assessment["dormant_candidate"]:
@@ -4941,8 +5274,12 @@ class MemoryApplicationService:
                     "dormant_after_days": request.dormant_after_days,
                     "purge_event_after_days": request.purge_event_after_days,
                     "purge_scene_after_days": request.purge_scene_after_days,
+                    "purge_arc_after_days": request.purge_arc_after_days,
+                    "purge_epoch_after_days": request.purge_epoch_after_days,
                     "purge_event_max_importance": request.purge_event_max_importance,
                     "purge_scene_max_importance": request.purge_scene_max_importance,
+                    "purge_arc_max_importance": request.purge_arc_max_importance,
+                    "purge_epoch_max_importance": request.purge_epoch_max_importance,
                     "purge_max_confidence": request.purge_max_confidence,
                     "protected_event_kinds": sorted(
                         _RETENTION_PURGE_EVENT_KINDS_PROTECTED
@@ -4979,8 +5316,12 @@ class MemoryApplicationService:
         dormant_after_days: int,
         purge_event_after_days: int,
         purge_scene_after_days: int,
+        purge_arc_after_days: int,
+        purge_epoch_after_days: int,
         purge_event_max_importance: float,
         purge_scene_max_importance: float,
+        purge_arc_max_importance: float,
+        purge_epoch_max_importance: float,
         purge_max_confidence: float,
     ) -> dict[str, Any]:
         memory_id = str(memory.get("memory_id") or "")
@@ -5029,10 +5370,19 @@ class MemoryApplicationService:
             workspace_id=str(memory.get("workspace_id") or scope.workspace_id),
             memory_domain=str(memory.get("memory_domain") or DEFAULT_MEMORY_DOMAIN.value),
         )
-        parent_active = self._retention_parent_active(
-            conn,
-            memory=memory,
-            expected_parent_type="scene" if memory_type == "event" else "arc",
+        expected_parent_type = {
+            "event": "scene",
+            "scene": "arc",
+            "arc": "epoch",
+        }.get(memory_type)
+        parent_active = (
+            self._retention_parent_active(
+                conn,
+                memory=memory,
+                expected_parent_type=expected_parent_type,
+            )
+            if expected_parent_type
+            else False
         )
         source_turns = [
             item
@@ -5078,21 +5428,25 @@ class MemoryApplicationService:
 
         purge_reasons: list[str] = []
         purge_candidate = False
-        if memory_type not in {"event", "scene"}:
+        if memory_type not in {"event", "scene", "arc", "epoch"}:
             protected_reasons.append("not_automatic_purge_target")
-        elif not parent_active:
-            protected_reasons.append("missing_active_parent_summary")
+        elif memory_type == "arc" and str(memory.get("activity_state") or "active") != "dormant":
+            protected_reasons.append("arc_not_dormant")
         elif memory_type == "event" and str(memory.get("event_kind") or "") in _RETENTION_PURGE_EVENT_KINDS_PROTECTED:
             protected_reasons.append("protected_event_kind")
         else:
-            max_age = (
-                purge_event_after_days if memory_type == "event" else purge_scene_after_days
-            )
-            max_importance = (
-                purge_event_max_importance
-                if memory_type == "event"
-                else purge_scene_max_importance
-            )
+            max_age = {
+                "event": purge_event_after_days,
+                "scene": purge_scene_after_days,
+                "arc": purge_arc_after_days,
+                "epoch": purge_epoch_after_days,
+            }[memory_type]
+            max_importance = {
+                "event": purge_event_max_importance,
+                "scene": purge_scene_max_importance,
+                "arc": purge_arc_max_importance,
+                "epoch": purge_epoch_max_importance,
+            }[memory_type]
             if anchor_age_days is None or anchor_age_days < max_age:
                 protected_reasons.append("recent_activity")
             if importance >= max_importance:
@@ -5103,16 +5457,21 @@ class MemoryApplicationService:
                 protected_reasons.append("missing_source_turns")
             if source_turns and archived_sources < len(set(source_turns)):
                 protected_reasons.append("source_turns_not_archived")
+            if memory_type in {"scene", "arc", "epoch"} and child_count:
+                protected_reasons.append("active_children")
             if not protected_reasons:
                 purge_candidate = True
                 purge_reasons.extend(
                     [
                         "old_low_importance",
                         "low_confidence",
-                        "represented_by_active_parent",
                         "no_feedback_or_external_reference",
                     ]
                 )
+                if parent_active:
+                    purge_reasons.append("represented_by_active_parent")
+                else:
+                    purge_reasons.append("no_active_parent_summary")
                 if source_turns:
                     purge_reasons.append("source_turns_archived")
 
@@ -5903,6 +6262,9 @@ class MemoryApplicationService:
                 "memory_embeddings": 0,
                 "memory_promotions_revoked": 0,
                 "memory_promotion_candidates_rejected": 0,
+                "shared_memories_retained": 0,
+                "shared_memory_provenance_detached": 0,
+                "memory_references_detached": 0,
                 "time_summaries": 0,
                 "time_summary_links": 0,
                 "session_summary_sources": 0,
@@ -5943,6 +6305,42 @@ class MemoryApplicationService:
                 seed_references=seed_references,
                 direct_memory_ids={memory_id} if memory_id else set(),
             )
+            if session_id and turn_ids:
+                shared_compressed_ids, shared_profile_ids = (
+                    _partition_shared_dependent_memory_ids(
+                        conn,
+                        scope=scope,
+                        memory_domain=memory_domain,
+                        compressed_ids=compressed_ids,
+                        profile_ids=profile_ids,
+                        forgotten_turn_ids=turn_ids,
+                    )
+                )
+                compressed_ids -= shared_compressed_ids
+                profile_ids -= shared_profile_ids
+                counts["shared_memories_retained"] = len(
+                    shared_compressed_ids | shared_profile_ids
+                )
+                counts["shared_memory_provenance_detached"] = (
+                    _detach_forgotten_turn_references(
+                        conn,
+                        table="compressed_memories",
+                        memory_ids=shared_compressed_ids,
+                        forgotten_turn_ids=turn_ids,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                    )
+                    + _detach_forgotten_turn_references(
+                        conn,
+                        table="profile_memories",
+                        memory_ids=shared_profile_ids,
+                        forgotten_turn_ids=turn_ids,
+                        owner_id=scope.owner_id,
+                        workspace_id=scope.workspace_id,
+                        memory_domain=memory_domain,
+                    )
+                )
             summary_seed_rows = []
             if session_id:
                 summary_seed_rows = conn.execute(
@@ -6006,6 +6404,14 @@ class MemoryApplicationService:
                 *summary_ids,
                 *({memory_id} if memory_id else set()),
             }
+
+            counts["memory_references_detached"] = self._remove_purged_memory_references(
+                conn,
+                memory_ids=compressed_ids | profile_ids,
+                owner_id=scope.owner_id,
+                workspace_id=scope.workspace_id,
+                memory_domain=memory_domain,
+            )
 
             counts["memory_promotions_revoked"] = revoke_promotions_for_source(
                 conn,

@@ -161,6 +161,102 @@ async def test_retention_review_selects_only_low_value_represented_events(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_retention_review_allows_old_event_without_parent_when_source_is_archived(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    old = "2025-01-01T00:00:00+00:00"
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id, memory_domain) "
+            "VALUES ('orphan-source', 'orphan-session', 'user', 'old', 'old', ?, ?, "
+            "'[]', '[]', 'local-user', 'default', 'agent_interaction')",
+            (old, old),
+        )
+        _insert_compressed(
+            conn,
+            memory_id="orphan-event",
+            memory_type="event",
+            title="Orphan low-value detail",
+            timestamp=old,
+            source_turns=["orphan-source"],
+            event_kind="progress",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    report = await service.review_retention(
+        RetentionReviewRequest(reference_time="2026-01-01T00:00:00+00:00")
+    )
+
+    assert [item["memory_id"] for item in report["purge_candidates"]] == [
+        "orphan-event"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_purge_cycle_advances_dormant_arc_and_orphan_epoch(tmp_path):
+    config = MemoryServiceConfig(
+        db_path=str(tmp_path / "memory.db"),
+        purge_arc_after_days=30,
+        purge_epoch_after_days=30,
+        purge_candidate_grace_days=1,
+    )
+    service = MemoryService(config)
+    old = "2025-01-01T00:00:00+00:00"
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        _insert_compressed(
+            conn,
+            memory_id="orphan-arc",
+            memory_type="arc",
+            title="Old orphan arc",
+            timestamp=old,
+            importance=0.1,
+        )
+        _insert_compressed(
+            conn,
+            memory_id="orphan-epoch",
+            memory_type="epoch",
+            title="Old orphan epoch",
+            timestamp=old,
+            importance=0.1,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await service._refresh_dormant_arcs() == 1
+    assert await service._purge_expired_memories() == 2
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE compressed_memories SET purge_candidate_at = '2025-01-01T00:00:00+00:00' "
+            "WHERE memory_id IN ('orphan-arc', 'orphan-epoch')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert await service._purge_expired_memories() >= 2
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        states = conn.execute(
+            "SELECT memory_id, status, retention_state FROM compressed_memories "
+            "WHERE memory_id IN ('orphan-arc', 'orphan-epoch') ORDER BY memory_id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert states == [
+        ("orphan-arc", "purged", "purged"),
+        ("orphan-epoch", "purged", "purged"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_purge_cycle_purges_and_cleans_indexes(tmp_path):
     service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
     old = "2025-01-01T00:00:00+00:00"
@@ -194,6 +290,49 @@ async def test_purge_cycle_purges_and_cleans_indexes(tmp_path):
             event_kind="progress",
             timeline_parent_id="scene-purge-parent",
             source_turns=["turn-purge-source"],
+        )
+        _insert_compressed(
+            conn,
+            memory_id="event-reference-survivor",
+            memory_type="event",
+            title="Surviving row with stale references",
+            timestamp=old,
+            importance=0.8,
+            confidence=0.8,
+            event_kind="progress",
+            source_turns=["event-purge-target"],
+        )
+        conn.execute(
+            "UPDATE compressed_memories SET evidence_refs = ?, derived_from_id = ?, "
+            "origin_id = ?, superseded_by = ? WHERE memory_id = ?",
+            (
+                json.dumps(["event-purge-target"]),
+                "event-purge-target",
+                "event-purge-target",
+                "event-purge-target",
+                "event-reference-survivor",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO profile_memories "
+            "(memory_id, memory_domain, memory_kind, subject, predicate, slot_key, "
+            "value, summary, confidence, certainty_state, status, valid_from, "
+            "valid_to, evidence_refs, source_turns, supersedes, conflict_refs, "
+            "created_at, updated_at, owner_id, workspace_id, capture_source) "
+            "VALUES (?, 'agent_interaction', 'preference', 'user', 'editor', "
+            "'user:editor', 'vim', 'User prefers Vim.', 0.9, 'confirmed', "
+            "'active', ?, NULL, ?, ?, ?, ?, ?, ?, 'local-user', 'default', "
+            "'explicit_user')",
+            (
+                "profile-reference-survivor",
+                old,
+                json.dumps(["event-purge-target"]),
+                json.dumps(["event-purge-target"]),
+                json.dumps(["event-purge-target"]),
+                json.dumps(["event-purge-target"]),
+                old,
+                old,
+            ),
         )
         conn.execute(
             "UPDATE compressed_memories SET retention_state = 'purge_candidate', "
@@ -239,6 +378,14 @@ async def test_purge_cycle_purges_and_cleans_indexes(tmp_path):
         fts_count = conn.execute(
             "SELECT COUNT(*) FROM memory_fts WHERE memory_id = 'event-purge-target'"
         ).fetchone()[0]
+        survivor_row = conn.execute(
+            "SELECT source_turns, evidence_refs, derived_from_id, origin_id, superseded_by "
+            "FROM compressed_memories WHERE memory_id = 'event-reference-survivor'"
+        ).fetchone()
+        profile_row = conn.execute(
+            "SELECT source_turns, evidence_refs, supersedes, conflict_refs "
+            "FROM profile_memories WHERE memory_id = 'profile-reference-survivor'"
+        ).fetchone()
     finally:
         conn.close()
 
@@ -247,6 +394,13 @@ async def test_purge_cycle_purges_and_cleans_indexes(tmp_path):
     assert row[2]
     assert embedding_count == 0
     assert fts_count == 0
+    assert json.loads(survivor_row[0]) == []
+    assert json.loads(survivor_row[1]) == []
+    assert survivor_row[2:] == (None, None, None)
+    assert json.loads(profile_row[0]) == []
+    assert json.loads(profile_row[1]) == []
+    assert json.loads(profile_row[2]) == []
+    assert json.loads(profile_row[3]) == []
 
     with pytest.raises(HTTPException, match="Compressed memory not found"):
         await service.get_compressed("event-purge-target")

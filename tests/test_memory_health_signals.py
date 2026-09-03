@@ -1905,6 +1905,81 @@ async def test_compression_quality_gate_passes_with_complete_reciprocal_backlink
 
 @pytest.mark.asyncio
 @pytest.mark.operational
+async def test_compression_quality_gate_rejects_cross_session_event(tmp_path):
+    svc = _make_service(tmp_path)
+    svc._llm_healthy = True
+    for session_id, text in (
+        ("session-a", "Project Alpha decision."),
+        ("session-b", "Project Beta decision."),
+    ):
+        await svc.create_session(SessionCreate(session_id=session_id, metadata={}))
+        await svc.add_turn(
+            session_id,
+            TurnCreate(speaker="user", text=text, metadata={}),
+        )
+
+    turns = []
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        turns = [
+            {
+                "turn_id": row[0],
+                "session_id": row[1],
+                "speaker": row[2],
+                "text": row[3],
+                "timestamp": row[4],
+                "relevance_score": row[5],
+                "owner_id": row[6],
+                "workspace_id": row[7],
+                "memory_domain": row[8],
+            }
+            for row in conn.execute(
+                "SELECT turn_id, session_id, speaker, text, timestamp, "
+                "relevance_score, owner_id, workspace_id, memory_domain "
+                "FROM turns ORDER BY session_id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    event = SimpleNamespace(
+        id="event-cross-session",
+        title="Combined projects",
+        summary="Project Alpha and Project Beta decisions.",
+        event_kind="decision",
+        timespan_start=datetime.now(timezone.utc),
+        timespan_end=datetime.now(timezone.utc),
+        importance=0.8,
+        confidence=0.9,
+        topics=["projects"],
+        entities=["Alpha", "Beta"],
+        source_turns=[turn["turn_id"] for turn in turns],
+    )
+    event.to_dict = lambda: {"id": event.id, "source_turns": event.source_turns}
+
+    class _CrossSessionPipeline:
+        def ingest(self, _turns):
+            return SimpleNamespace(
+                events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    bridge = Tier1ToTier2Bridge(
+        svc._db_path,
+        retention_days=-1,
+        batch_size=25,
+        min_relevance=0.0,
+        pipeline_factory=_CrossSessionPipeline,
+    )
+    output = bridge._build_tier2_output(turns)
+    evidence = bridge._evaluate_quality(turns, output)
+
+    assert evidence["passed"] is False
+    assert "session_boundary" in evidence["failed_checks"]
+    assert evidence["session_boundary_violations"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.operational
 async def test_compression_quality_gate_rejects_semantically_unsupported_summary(tmp_path):
     svc = MemoryService(
         MemoryServiceConfig(

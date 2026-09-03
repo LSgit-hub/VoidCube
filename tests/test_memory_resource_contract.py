@@ -597,6 +597,72 @@ async def test_day_summary_orders_and_links_multiple_session_summaries(
 
 
 @pytest.mark.asyncio
+async def test_session_summary_keeps_archived_turn_timestamp_order(
+    tmp_path,
+    monkeypatch,
+):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    await service.create_session(SessionCreate(session_id="archive-time-session"))
+    await service.add_turn(
+        "archive-time-session",
+        TurnCreate(speaker="user", text="new active turn"),
+    )
+
+    archived_at = "2026-08-20T09:00:00+00:00"
+    active_at = "2026-09-03T09:00:00+00:00"
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET timestamp = ? WHERE session_id = 'archive-time-session'",
+            (active_at,),
+        )
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id, memory_domain) "
+            "VALUES ('archived-time-turn', 'archive-time-session', 'user', 'archived', "
+            "'archived original', ?, ?, '[]', '[]', 'local-user', 'default', 'agent_interaction')",
+            (archived_at, archived_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    class _FakeClient:
+        def complete_json(self, **_kwargs):
+            return {
+                "title": "Archived time order",
+                "summary": "The summary includes both historical and active turns.",
+                "outcomes": [],
+                "open_questions": [],
+            }
+
+    monkeypatch.setattr(
+        service,
+        "_resolve_mem_llm_client",
+        lambda role="default": (_FakeClient(), "test-archive-time-model"),
+    )
+    summary = await service.close_session(
+        "archive-time-session", SessionCloseRequest()
+    )
+
+    assert summary["source_count"] == 2
+    assert summary["period_start"] == archived_at
+    assert summary["period_end"] == active_at
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        sources = conn.execute(
+            "SELECT turn_id, ordinal, turn_timestamp FROM session_summary_sources "
+            "WHERE summary_id = ? ORDER BY ordinal",
+            (summary["summary_id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert sources[0] == ("archived-time-turn", 0, archived_at)
+    assert sources[1][1:] == (1, active_at)
+
+
+@pytest.mark.asyncio
 async def test_week_and_month_summaries_use_direct_children_and_are_idempotent(
     tmp_path,
     monkeypatch,

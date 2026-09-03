@@ -1660,6 +1660,170 @@ async def test_forget_session_hard_deletes_only_requested_scope(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_forget_session_retains_shared_compressed_memory_for_other_session(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="shared-turn-a",
+        session_id="shared-session-a",
+        text="shared evidence from session A",
+        timestamp=now,
+    )
+    _insert_turn(
+        service,
+        turn_id="shared-turn-b",
+        session_id="shared-session-b",
+        text="shared evidence from session B",
+        timestamp=now,
+    )
+    _insert_compressed(
+        service,
+        memory_id="shared-event",
+        title="Shared event",
+        summary="A durable event supported by both sessions.",
+        timestamp=now,
+        importance=0.8,
+    )
+    _insert_compressed(
+        service,
+        memory_id="shared-derived-scene",
+        title="Derived shared scene",
+        summary="A higher-level row derived from the shared event.",
+        timestamp=now,
+        importance=0.8,
+        memory_type="scene",
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "UPDATE compressed_memories SET source_turns = ?, evidence_refs = ? "
+            "WHERE memory_id = 'shared-event'",
+            (
+                json.dumps(["shared-turn-a", "shared-turn-b"]),
+                json.dumps(["shared-turn-a", "shared-turn-b"]),
+            ),
+        )
+        conn.execute(
+            "UPDATE compressed_memories SET source_turns = ?, evidence_refs = ?, "
+            "derived_from_id = ? WHERE memory_id = 'shared-derived-scene'",
+            (json.dumps(["shared-turn-a"]), "[]", "shared-event"),
+        )
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id, memory_domain) "
+            "VALUES (?, ?, 'user', 'shared', 'shared', ?, ?, ?, '[]', ?, ?, ?)"
+            ,
+            (
+                "shared-turn-b",
+                "shared-session-b",
+                now.isoformat(),
+                now.isoformat(),
+                json.dumps(["shared-event"]),
+                "local-user",
+                "default",
+                "agent_interaction",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    forgotten = await service.forget_memory(
+        ForgetRequest(
+            session_id="shared-session-a",
+            reason="remove only session A",
+            confirmation="FORGET",
+        )
+    )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        memory_row = conn.execute(
+            "SELECT source_turns, evidence_refs FROM compressed_memories "
+            "WHERE memory_id = 'shared-event'"
+        ).fetchone()
+        archive_row = conn.execute(
+            "SELECT event_ids FROM turns_archive WHERE turn_id = 'shared-turn-b'"
+        ).fetchone()
+        derived_row = conn.execute(
+            "SELECT source_turns, evidence_refs, derived_from_id FROM compressed_memories "
+            "WHERE memory_id = 'shared-derived-scene'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert forgotten["deleted_counts"]["compressed_memories"] == 0
+    assert forgotten["deleted_counts"]["shared_memories_retained"] == 2
+    assert json.loads(memory_row[0]) == ["shared-turn-b"]
+    assert json.loads(memory_row[1]) == ["shared-turn-b"]
+    assert json.loads(archive_row[0]) == ["shared-event"]
+    assert json.loads(derived_row[0]) == []
+    assert json.loads(derived_row[1]) == []
+    assert derived_row[2] == "shared-event"
+
+
+@pytest.mark.asyncio
+async def test_forget_memory_detaches_archive_backlinks(tmp_path):
+    service = _service(tmp_path)
+    now = datetime.now(timezone.utc)
+    _insert_turn(
+        service,
+        turn_id="unrelated-turn",
+        session_id="unrelated-session",
+        text="unrelated archived source",
+        timestamp=now,
+    )
+    _insert_compressed(
+        service,
+        memory_id="direct-forget-event",
+        title="Direct forget event",
+        summary="Memory explicitly selected for deletion.",
+        timestamp=now,
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO turns_archive "
+            "(turn_id, session_id, speaker, text_summary, original_text, timestamp, "
+            "compressed_at, event_ids, scene_ids, owner_id, workspace_id, memory_domain) "
+            "VALUES ('unrelated-turn', 'unrelated-session', 'user', 'old', 'old', ?, ?, ?, '[]', "
+            "'local-user', 'default', 'agent_interaction')",
+            (
+                now.isoformat(),
+                now.isoformat(),
+                json.dumps(["direct-forget-event"]),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    await service.forget_memory(
+        ForgetRequest(
+            memory_id="direct-forget-event",
+            reason="remove selected memory",
+            confirmation="FORGET",
+        )
+    )
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        archive_row = conn.execute(
+            "SELECT event_ids FROM turns_archive WHERE turn_id = 'unrelated-turn'"
+        ).fetchone()
+        memory_row = conn.execute(
+            "SELECT memory_id FROM compressed_memories WHERE memory_id = 'direct-forget-event'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert json.loads(archive_row[0]) == []
+    assert memory_row is None
+
+
+@pytest.mark.asyncio
 async def test_forget_session_deletes_transitive_memory_and_graph_derivatives(tmp_path):
     service = _service(tmp_path)
     now = datetime.now(timezone.utc)

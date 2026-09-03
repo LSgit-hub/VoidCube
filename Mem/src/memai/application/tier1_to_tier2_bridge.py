@@ -357,6 +357,7 @@ class BridgeResult:
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
     memory_domain: str = "agent_interaction"
+    session_id: str | None = None
     sample_turn_ids: List[str] = None
     errors: List[str] = None
     quality_evidence: Dict[str, Any] | None = None
@@ -384,6 +385,7 @@ class BridgeResult:
             "owner_id": self.owner_id,
             "workspace_id": self.workspace_id,
             "memory_domain": self.memory_domain,
+            "session_id": self.session_id,
             "sample_turn_ids": self.sample_turn_ids,
             "errors": self.errors,
             "quality_evidence": self.quality_evidence,
@@ -399,6 +401,7 @@ class CandidateBatch:
     owner_id: str
     workspace_id: str
     memory_domain: str
+    session_id: str | None = None
 
 
 class Tier1ToTier2Bridge:
@@ -508,31 +511,43 @@ class Tier1ToTier2Bridge:
             time_params: list[Any] = [] if force_oldest else [cutoff]
             eligible_conditions = [*time_clause, *base_conditions, "relevance_score >= ?"]
             eligible_params = [*time_params, *base_params, self.min_relevance]
-            rows = conn.execute(
-                "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-                "owner_id, workspace_id "
-                ", memory_domain FROM turns WHERE "
-                + " AND ".join(eligible_conditions)
-                + " ORDER BY julianday(timestamp) ASC LIMIT ?",
-                [*eligible_params, self.batch_size],
-            ).fetchall()
+
+            def fetch_one_session(conditions, params):
+                """Keep a bridge transaction bounded to one conversation session."""
+                where = " AND ".join(conditions)
+                anchor = conn.execute(
+                    "SELECT session_id FROM turns WHERE "
+                    + where
+                    + " ORDER BY julianday(timestamp) ASC, turn_id ASC LIMIT 1",
+                    params,
+                ).fetchone()
+                if not anchor:
+                    return []
+                session_id = str(anchor[0])
+                return conn.execute(
+                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
+                    "owner_id, workspace_id, memory_domain FROM turns WHERE "
+                    + where
+                    + " AND session_id = ?"
+                    + " ORDER BY julianday(timestamp) ASC, turn_id ASC LIMIT ?",
+                    [*params, session_id, self.batch_size],
+                ).fetchall()
+
+            rows = fetch_one_session(eligible_conditions, eligible_params)
             low_relevance_fallback = False
             if not rows:
-                rows = conn.execute(
-                    "SELECT turn_id, session_id, speaker, text, timestamp, relevance_score, "
-                    "owner_id, workspace_id "
-                    ", memory_domain FROM turns WHERE "
-                    + " AND ".join([*time_clause, *base_conditions])
-                    + " ORDER BY julianday(timestamp) ASC LIMIT ?",
-                    [*time_params, *base_params, self.batch_size],
-                ).fetchall()
+                rows = fetch_one_session(
+                    [*time_clause, *base_conditions],
+                    [*time_params, *base_params],
+                )
                 low_relevance_fallback = bool(rows)
             owner_id = str(rows[0][6]) if rows else DEFAULT_OWNER_ID
             workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
             memory_domain = str(rows[0][8]) if rows else self.memory_domain
-            return rows, low_relevance_fallback, owner_id, workspace_id, memory_domain
+            session_id = str(rows[0][1]) if rows else None
+            return rows, low_relevance_fallback, owner_id, workspace_id, memory_domain, session_id
 
-        rows, low_relevance_fallback, owner_id, workspace_id, memory_domain = self._execute_read(read)
+        rows, low_relevance_fallback, owner_id, workspace_id, memory_domain, session_id = self._execute_read(read)
         turns = [
             {
                 "turn_id": r[0],
@@ -555,6 +570,7 @@ class Tier1ToTier2Bridge:
             owner_id=owner_id,
             workspace_id=workspace_id,
             memory_domain=memory_domain,
+            session_id=session_id,
         )
 
     def find_candidate_turns(self) -> List[Dict[str, Any]]:
@@ -737,6 +753,34 @@ class Tier1ToTier2Bridge:
         rejected_event_reasons: dict[str, list[str]] = {}
         unsupported_identifiers: set[str] = set()
         turn_index = {str(turn["turn_id"]): turn for turn in turns}
+        turn_session_by_id = {
+            str(turn["turn_id"]): str(turn.get("session_id") or "")
+            for turn in turns
+        }
+        event_session_sets: dict[str, set[str]] = {}
+        session_boundary_violations: list[dict[str, Any]] = []
+
+        def record_boundary(memory_type: str, item: Any, sessions: set[str]) -> None:
+            sessions = {session for session in sessions if session}
+            memory_id = str(getattr(item, "id", "") or "")
+            if len(sessions) > 1:
+                session_boundary_violations.append(
+                    {
+                        "memory_type": memory_type,
+                        "memory_id": memory_id,
+                        "sessions": sorted(sessions),
+                    }
+                )
+
+        for event in events:
+            event_id = str(getattr(event, "id", "") or "")
+            sessions = {
+                turn_session_by_id[str(raw_turn_id)]
+                for raw_turn_id in (getattr(event, "source_turns", []) or [])
+                if str(raw_turn_id) in turn_session_by_id
+            }
+            event_session_sets[event_id] = sessions
+            record_boundary("event", event, sessions)
 
         for event in events:
             source_turns = {
@@ -796,6 +840,8 @@ class Tier1ToTier2Bridge:
             if polarity_consistency_scores[-1] < self.quality_thresholds["min_polarity_consistency"]:
                 event_reasons.append("polarity_consistency")
             event_id = str(getattr(event, "id", ""))
+            if len(event_session_sets.get(event_id, set())) > 1:
+                event_reasons.append("session_boundary")
             if not event_reasons and event_id:
                 accepted_event_ids.append(event_id)
             elif event_id:
@@ -829,11 +875,54 @@ class Tier1ToTier2Bridge:
             for score in source_support_scores
         )
 
+        # A result may be structurally valid while still joining unrelated
+        # conversations. Resolve provenance through the hierarchy so a future
+        # pipeline change cannot bypass the bridge's session boundary.
+        def child_session_sets(
+            items: Sequence[Any],
+            child_sets: dict[str, set[str]],
+            memory_type: str,
+        ) -> dict[str, set[str]]:
+            resolved: dict[str, set[str]] = {}
+            for item in items:
+                sessions: set[str] = set()
+                refs = [
+                    *(getattr(item, "child_ids", []) or []),
+                    *(getattr(item, "evidence_refs", []) or []),
+                ]
+                for ref in refs:
+                    ref_id = str(ref)
+                    sessions.update(child_sets.get(ref_id, set()))
+                    if ref_id in turn_session_by_id:
+                        sessions.add(turn_session_by_id[ref_id])
+                item_id = str(getattr(item, "id", "") or "")
+                resolved[item_id] = sessions
+                record_boundary(memory_type, item, sessions)
+            return resolved
+
+        scene_session_sets = child_session_sets(
+            list(getattr(result, "scenes", []) or []),
+            event_session_sets,
+            "scene",
+        )
+        arc_session_sets = child_session_sets(
+            list(getattr(result, "arcs", []) or []),
+            scene_session_sets,
+            "arc",
+        )
+        child_session_sets(
+            list(getattr(result, "epochs", []) or []),
+            arc_session_sets,
+            "epoch",
+        )
+
         failed_checks: list[str] = []
         if compression_ratio > self.quality_thresholds["max_compression_ratio"]:
             failed_checks.append("compression_ratio")
         if degraded_fraction > self.quality_thresholds["max_degraded_fraction"]:
             failed_checks.append("degraded_fraction")
+        if session_boundary_violations:
+            failed_checks.append("session_boundary")
         if not accepted_event_ids:
             failed_checks.append("no_valid_events")
 
@@ -860,6 +949,7 @@ class Tier1ToTier2Bridge:
             "identifier_fidelity": round(identifier_fidelity, 6),
             "polarity_consistency": round(polarity_consistency, 6),
             "unsupported_identifiers": sorted(unsupported_identifiers),
+            "session_boundary_violations": session_boundary_violations,
             "thresholds": dict(self.quality_thresholds),
             "failed_checks": failed_checks,
             "sample_turn_ids": [turn["turn_id"] for turn in turns[:5]],
@@ -1122,6 +1212,7 @@ class Tier1ToTier2Bridge:
             "owner_id": batch.owner_id,
             "workspace_id": batch.workspace_id,
             "memory_domain": batch.memory_domain,
+            "session_id": batch.session_id,
         }
         if not candidates:
             return BridgeResult(
