@@ -51,12 +51,15 @@ def handle_context_command(
 ) -> None:
     """Show or override the active model context window."""
     agent = ports.agent()
-    if agent is None:
-        ports.emit("  (._.) No active agent -- send a message first.")
+    argument = request.arguments.strip()
+    if agent is None and not argument:
+        ports.emit("  (._.) No active agent -- set a value first, for example: /context 512K.")
         return
 
-    argument = request.arguments.strip()
-    state = ports.context_state(agent)
+    state = ports.context_state(agent) if agent is not None else {
+        "minimum_context_length": _MANUAL_CONTEXT_MINIMUM,
+        "target_ratio": 0.20,
+    }
     if not argument:
         ports.emit(
             "  Context: "
@@ -88,10 +91,18 @@ def handle_context_command(
         )
         return
 
-    updated = ports.set_context_length(agent, context_length)
     saved = ports.save_context_length(
         ports.current_provider(), ports.current_model(), context_length
     )
+    if agent is None:
+        source = "saved to config" if saved else "unable to save config"
+        ports.emit(
+            f"  ✓ Context set to {_format_tokens(context_length)} tokens ({source}); "
+            "it will apply when the Agent starts."
+        )
+        return
+
+    updated = ports.set_context_length(agent, context_length)
     source = "saved to config" if saved else "session only"
     ports.emit(
         f"  ✓ Context set to {_format_tokens(updated.get('context_length'))} tokens "

@@ -3,6 +3,7 @@ from voidcube.runtime.agent.context_policy import (
     configured_context_length,
 )
 from voidcube.runtime.agent.context_compressor import ContextCompressor
+from voidcube.runtime.agent.display import format_context_pressure
 
 
 def test_policy_keeps_default_budgets_and_exposes_source(monkeypatch):
@@ -160,3 +161,17 @@ def test_compressor_runtime_context_override_refreshes_derived_budgets():
     assert compressor.threshold_tokens == 700_000
     assert compressor.tail_token_budget == 84_000
     assert compressor.max_summary_tokens == 12_000
+    line = format_context_pressure(
+        0.87,
+        compressor.threshold_tokens,
+        compressor.threshold_tokens / compressor.context_length,
+    )
+    assert "700k threshold (70%)" in line
+
+    compressor.set_context_length(512_000)
+    line = format_context_pressure(
+        0.87,
+        compressor.threshold_tokens,
+        compressor.threshold_tokens / compressor.context_length,
+    )
+    assert "332k threshold (65%)" in line

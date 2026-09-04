@@ -1271,6 +1271,9 @@ def _context_command_ports(
                 }
             )
         setattr(agent, "_config_context_length", context_length)
+        invalidate = getattr(host, "_invalidate", None)
+        if callable(invalidate):
+            invalidate(min_interval=0.0)
         return updated
 
     def save_context_length(provider: str, model: str, context_length: int) -> bool:
@@ -1308,6 +1311,9 @@ def _context_command_ports(
             active_agent = getattr(host, "agent", None)
             if active_agent is not None and isinstance(getattr(active_agent, "config", None), dict):
                 active_agent.config = config
+            invalidate = getattr(host, "_invalidate", None)
+            if callable(invalidate):
+                invalidate(min_interval=0.0)
             return True
         except Exception:
             return False

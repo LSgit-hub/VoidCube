@@ -66,3 +66,21 @@ def test_context_command_rejects_retired_64k_preset():
 
     handle_context_command(parse_cli_command("/context 64K"), ports=Ports())
     assert "128,000" in events[-1]
+
+
+def test_context_command_persists_before_agent_is_created():
+    events = []
+    saved = []
+
+    class Ports:
+        agent = lambda self: None
+        current_model = lambda self: "demo"
+        current_provider = lambda self: "custom"
+        save_context_length = lambda self, provider, model, length: saved.append(
+            (provider, model, length)
+        ) or True
+        emit = lambda self, text: events.append(text)
+
+    handle_context_command(parse_cli_command("/context 512K"), ports=Ports())
+    assert saved == [("custom", "demo", 512_000)]
+    assert "when the Agent starts" in events[-1]
