@@ -48,6 +48,10 @@
       "compress": {
         "description": "Manually compress conversation context"
       },
+      "context": {
+        "description": "Show or set the context window length",
+        "usage": "Usage: /context [128K|256K|512K|1M]"
+      },
       "rollback": {
         "description": "List or restore filesystem checkpoints"
       },

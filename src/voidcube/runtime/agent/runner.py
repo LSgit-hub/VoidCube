@@ -733,6 +733,28 @@ class AIAgent:
         compression_adaptive = str(_compression_cfg.get("adaptive_by_model", False)).lower() in ("true", "1", "yes")
         compression_startup_probe = str(_compression_cfg.get("startup_probe", True)).lower() in ("true", "1", "yes")
 
+        # A manual /context override stores its derived strategy per
+        # provider/model. This keeps model switches from inheriting another
+        # model's compression ratio.
+        _context_cfg = _agent_cfg.get("context", {})
+        if not isinstance(_context_cfg, dict):
+            _context_cfg = {}
+        _profiles = _context_cfg.get("compression_profiles", {})
+        if isinstance(_profiles, dict):
+            _provider_profiles = _profiles.get(self.provider, {})
+            if isinstance(_provider_profiles, dict):
+                _profile = _provider_profiles.get(self.model)
+                if isinstance(_profile, dict):
+                    compression_threshold = float(
+                        _profile.get("threshold_percent", compression_threshold)
+                    )
+                    compression_target_ratio = float(
+                        _profile.get("target_ratio", compression_target_ratio)
+                    )
+                    compression_protect_last = int(
+                        _profile.get("protect_last_n", compression_protect_last)
+                    )
+
         # Read explicit context_length override from model config
         _model_cfg = _agent_cfg.get("model", {})
         if isinstance(_model_cfg, dict):
@@ -1150,6 +1172,32 @@ class AIAgent:
             if isinstance(self.context_compressor, ContextCompressor):
                 update_kwargs["source"] = context_source
             self.context_compressor.update_model(**update_kwargs)
+            _profiles = (
+                (self.config.get("context") or {}).get("compression_profiles", {})
+                if isinstance(getattr(self, "config", None), dict)
+                else {}
+            )
+            _profile = (
+                (_profiles.get(self.provider) or {}).get(self.model)
+                if isinstance(_profiles, dict)
+                and isinstance(_profiles.get(self.provider), dict)
+                else None
+            )
+            if isinstance(_profile, dict) and isinstance(self.context_compressor, ContextCompressor):
+                self.context_compressor.policy = self.context_compressor.policy.with_context_length(
+                    new_context_length,
+                    model=self.model,
+                    source=context_source,
+                    threshold_percent=_profile.get("threshold_percent"),
+                    target_ratio=_profile.get("target_ratio"),
+                    protect_last_n=_profile.get("protect_last_n"),
+                )
+                self.context_compressor.threshold_percent = self.context_compressor.policy.threshold_percent
+                self.context_compressor.summary_target_ratio = self.context_compressor.policy.target_ratio
+                self.context_compressor.protect_last_n = self.context_compressor.policy.protect_last_n
+                self.context_compressor.context_length = self.context_compressor.policy.context_length
+                self.context_compressor.threshold_tokens = self.context_compressor.policy.threshold_tokens
+                self.context_compressor._refresh_derived_budgets()
 
         # ── Invalidate cached system prompt so it rebuilds next turn ──
         self._cached_system_prompt = None

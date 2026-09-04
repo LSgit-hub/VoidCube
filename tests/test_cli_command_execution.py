@@ -77,6 +77,7 @@ EXPECTED_BUILTINS = {
     "cancel",
     "clear",
     "compress",
+    "context",
     "config",
     "debug",
     "doctor",

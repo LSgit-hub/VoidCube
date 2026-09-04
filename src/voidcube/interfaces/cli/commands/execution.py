@@ -63,6 +63,7 @@ BUILTIN_COMMAND_SPECS = MappingProxyType(
         "reasoning": BuiltinCommandSpec(handler_key="reasoning"),
         "fast": BuiltinCommandSpec(handler_key="fast"),
         "compress": BuiltinCommandSpec(handler_key="compress"),
+        "context": BuiltinCommandSpec(handler_key="context"),
         "usage": BuiltinCommandSpec(handler_key="usage"),
         "debug": BuiltinCommandSpec(handler_key="debug"),
         "paste": BuiltinCommandSpec(handler_key="paste"),

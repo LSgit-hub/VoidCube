@@ -84,6 +84,10 @@ from .handlers.compression import (
     CompressionCommandPorts,
     handle_compression_command,
 )
+from .handlers.context import (
+    ContextCommandPorts,
+    handle_context_command,
+)
 from .handlers.chat_blocks import (
     ChatBlockCommandPorts,
     handle_export_command,
@@ -319,6 +323,10 @@ def install_cli_command_execution(
             "compress": lambda request: handle_compression_command(
                 request,
                 ports=_compression_command_ports(host, emit=emit),
+            ),
+            "context": lambda request: handle_context_command(
+                request,
+                ports=_context_command_ports(host, emit=emit),
             ),
             "debug": lambda request: handle_debug_command(
                 request,
@@ -1212,6 +1220,88 @@ def _compression_command_ports(
         compress=compress,
         synchronize_compressed_session=synchronize_compressed_session,
         summarize=summarize_manual_compression,
+        emit=emit,
+    )
+
+
+def _context_command_ports(
+    host: Any,
+    *,
+    emit: Callable[[str], None],
+) -> ContextCommandPorts:
+    """Build ports for the live context-window override command."""
+    from ....infrastructure.config.configuration import load_config, save_config
+    from ....infrastructure.providers.model_metadata import MINIMUM_CONTEXT_LENGTH
+
+    def context_state(agent: Any) -> Mapping[str, Any]:
+        compressor = getattr(agent, "context_compressor", None)
+        policy = getattr(compressor, "policy", None)
+        if policy is None:
+            return {
+                "context_length": getattr(compressor, "context_length", 0),
+                "threshold_tokens": getattr(compressor, "threshold_tokens", 0),
+                "target_ratio": 0.20,
+                "tail_token_budget": 0,
+                "source": "unknown",
+                "minimum_context_length": MINIMUM_CONTEXT_LENGTH,
+            }
+        state = policy.as_dict()
+        state["minimum_context_length"] = MINIMUM_CONTEXT_LENGTH
+        return state
+
+    def set_context_length(agent: Any, context_length: int) -> Mapping[str, Any]:
+        compressor = getattr(agent, "context_compressor", None)
+        setter = getattr(compressor, "set_context_length", None)
+        if not callable(setter):
+            raise RuntimeError("active context engine does not support runtime overrides")
+        return setter(context_length, source="manual", recommended=True)
+
+    def save_context_length(provider: str, model: str, context_length: int) -> bool:
+        # Keep the override model-specific. Also persist the derived defaults so
+        # a restarted process applies the same strategy automatically.
+        try:
+            from ....runtime.agent.context_policy import ContextCompressionPolicy
+
+            settings = ContextCompressionPolicy.recommended_settings(context_length)
+            config = load_config()
+            runtime_provider = provider or str(
+                (config.get("runtime") or {}).get("active_provider") or ""
+            )
+            if not runtime_provider or not model:
+                return False
+            provider_cfg = config.setdefault("providers", {}).setdefault(runtime_provider, {})
+            model_contexts = provider_cfg.setdefault("model_context_lengths", {})
+            if not isinstance(model_contexts, dict):
+                model_contexts = {}
+                provider_cfg["model_context_lengths"] = model_contexts
+            # Assign the model as a dict key so IDs containing dots/slashes are
+            # not interpreted as additional configuration path segments.
+            model_contexts[model] = context_length
+            context_cfg = config.setdefault("context", {})
+            profiles = context_cfg.setdefault("compression_profiles", {})
+            if not isinstance(profiles, dict):
+                profiles = {}
+                context_cfg["compression_profiles"] = profiles
+            provider_profiles = profiles.setdefault(runtime_provider, {})
+            if not isinstance(provider_profiles, dict):
+                provider_profiles = {}
+                profiles[runtime_provider] = provider_profiles
+            provider_profiles[model] = dict(settings)
+            save_config(config)
+            active_agent = getattr(host, "agent", None)
+            if active_agent is not None and isinstance(getattr(active_agent, "config", None), dict):
+                active_agent.config = config
+            return True
+        except Exception:
+            return False
+
+    return ContextCommandPorts(
+        agent=lambda: getattr(host, "agent", None),
+        current_model=lambda: str(getattr(host, "model", "") or ""),
+        current_provider=lambda: str(getattr(host, "provider", "") or ""),
+        context_state=context_state,
+        set_context_length=set_context_length,
+        save_context_length=save_context_length,
         emit=emit,
     )
 

@@ -228,6 +228,7 @@ human_delay:
   max_ms: 2500
 context:
   engine: compressor
+  compression_profiles: {}
 memory:
   mem:
     service_url: http://127.0.0.1:6001

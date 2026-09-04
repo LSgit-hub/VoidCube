@@ -2,6 +2,7 @@ from voidcube.runtime.agent.context_policy import (
     ContextCompressionPolicy,
     configured_context_length,
 )
+from voidcube.runtime.agent.context_compressor import ContextCompressor
 
 
 def test_policy_keeps_default_budgets_and_exposes_source(monkeypatch):
@@ -135,3 +136,27 @@ def test_provider_context_override_reads_model_registry_shapes():
     assert configured_context_length(config, provider="api-a", model="model-a") == 1_000_000
     assert configured_context_length(config, provider="api-b", model="model-b") == 1_048_576
     assert configured_context_length(config, provider="api-c", model="model-c") == 1_048_576
+
+
+def test_recommended_settings_scale_with_context_window():
+    assert ContextCompressionPolicy.recommended_settings(128_000) == {
+        "threshold_percent": 0.50, "target_ratio": 0.20, "protect_last_n": 20,
+    }
+    assert ContextCompressionPolicy.recommended_settings(256_000)["threshold_percent"] == 0.60
+    assert ContextCompressionPolicy.recommended_settings(512_000) == {
+        "threshold_percent": 0.65, "target_ratio": 0.14, "protect_last_n": 28,
+    }
+    assert ContextCompressionPolicy.recommended_settings(1_000_000) == {
+        "threshold_percent": 0.70, "target_ratio": 0.12, "protect_last_n": 30,
+    }
+
+
+def test_compressor_runtime_context_override_refreshes_derived_budgets():
+    compressor = ContextCompressor(
+        "demo", config_context_length=128_000, quiet_mode=True
+    )
+    state = compressor.set_context_length(1_000_000)
+    assert state["context_length"] == 1_000_000
+    assert compressor.threshold_tokens == 700_000
+    assert compressor.tail_token_budget == 84_000
+    assert compressor.max_summary_tokens == 12_000

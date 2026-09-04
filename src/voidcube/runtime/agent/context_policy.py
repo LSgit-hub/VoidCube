@@ -95,13 +95,52 @@ class ContextCompressionPolicy:
         *,
         model: str | None = None,
         source: str = "probe",
+        threshold_percent: float | None = None,
+        target_ratio: float | None = None,
+        protect_last_n: int | None = None,
     ) -> "ContextCompressionPolicy":
         return replace(
             self,
             model=model or self.model,
             context_length=max(1, int(context_length)),
             source=source,
+            threshold_percent=(
+                self.threshold_percent
+                if threshold_percent is None
+                else max(0.0, min(float(threshold_percent), 1.0))
+            ),
+            target_ratio=(
+                self.target_ratio
+                if target_ratio is None
+                else max(0.10, min(float(target_ratio), 0.80))
+            ),
+            protect_last_n=(
+                self.protect_last_n
+                if protect_last_n is None
+                else max(0, int(protect_last_n))
+            ),
         )
+
+    @staticmethod
+    def recommended_settings(context_length: int) -> dict[str, float | int]:
+        """Return conservative budgets scaled to a selected context window.
+
+        Larger windows can retain more recent detail while still compacting
+        before the provider hard limit. These are recommendations only; the
+        The active runtime can apply these values immediately; callers that
+        persist an override should store the returned profile alongside the
+        model-specific context length.
+        """
+        length = max(1, int(context_length))
+        if length >= 1_000_000:
+            return {"threshold_percent": 0.70, "target_ratio": 0.12, "protect_last_n": 30}
+        if length >= 512_000:
+            return {"threshold_percent": 0.65, "target_ratio": 0.14, "protect_last_n": 28}
+        if length >= 256_000:
+            return {"threshold_percent": 0.60, "target_ratio": 0.15, "protect_last_n": 25}
+        if length >= 128_000:
+            return {"threshold_percent": 0.50, "target_ratio": 0.20, "protect_last_n": 20}
+        return {"threshold_percent": 0.45, "target_ratio": 0.20, "protect_last_n": 16}
 
     def as_dict(self) -> dict[str, Any]:
         return {

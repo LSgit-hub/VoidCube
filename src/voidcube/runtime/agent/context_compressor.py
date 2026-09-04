@@ -421,6 +421,40 @@ class ContextCompressor(ContextEngine):
         self.threshold_tokens = self.policy.threshold_tokens
         self._refresh_derived_budgets()
 
+    def set_context_length(
+        self,
+        context_length: int,
+        *,
+        source: str = "manual",
+        recommended: bool = True,
+    ) -> dict[str, Any]:
+        """Apply a runtime context override and refresh dependent budgets.
+
+        Manual overrides intentionally use a context-size-aware recommendation
+        so a 1M window is not compacted with the same tiny tail budget as 128K.
+        """
+        length = max(1, int(context_length))
+        settings = (
+            ContextCompressionPolicy.recommended_settings(length)
+            if recommended
+            else {}
+        )
+        self.policy = self.policy.with_context_length(
+            length,
+            model=self.model,
+            source=source,
+            threshold_percent=settings.get("threshold_percent"),
+            target_ratio=settings.get("target_ratio"),
+            protect_last_n=settings.get("protect_last_n"),
+        )
+        self.threshold_percent = self.policy.threshold_percent
+        self.summary_target_ratio = self.policy.target_ratio
+        self.protect_last_n = self.policy.protect_last_n
+        self.context_length = self.policy.context_length
+        self.threshold_tokens = self.policy.threshold_tokens
+        self._refresh_derived_budgets()
+        return self.policy.as_dict()
+
     def _refresh_derived_budgets(self) -> None:
         """Recalculate budgets that depend on the active model context."""
         self.tail_token_budget = self.policy.tail_token_budget

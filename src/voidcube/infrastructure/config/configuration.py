@@ -636,6 +636,8 @@ DEFAULT_CONFIG = {
     # a plugin in plugins/context_engine/<name>/ or ~/.VoidCube/plugins/.
     "context": {
         "engine": "compressor",
+        # Runtime /context overrides, keyed by provider then model.
+        "compression_profiles": {},
     },
 
     # Canonical Memory Service integration.

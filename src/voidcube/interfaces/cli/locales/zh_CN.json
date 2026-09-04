@@ -61,6 +61,10 @@
         "description": "手动压缩对话上下文",
         "usage": "用法: /compress [焦点主题]"
       },
+      "context": {
+        "description": "查看或设置上下文窗口长度",
+        "usage": "用法: /context [128K|256K|512K|1M]"
+      },
       "rollback": {
         "description": "列出或恢复文件系统检查点",
         "usage": "用法: /rollback [编号]"

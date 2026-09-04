@@ -122,6 +122,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True, args_hint="<prompt>"),
     CommandDef("compress", "手动压缩对话上下文", "会话管理",
                cli_only=True, args_hint="[focus]"),
+    CommandDef("context", "查看或设置上下文窗口长度", "会话管理",
+               cli_only=True, args_hint="[128K|256K|512K|1M]"),
     CommandDef("rollback", "列出或恢复文件系统检查点", "会话管理",
                cli_only=True, args_hint="[number]"),
     CommandDef("stop", "终止所有运行中的后台进程", "会话管理",
