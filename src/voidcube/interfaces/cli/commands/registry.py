@@ -1254,7 +1254,24 @@ def _context_command_ports(
         setter = getattr(compressor, "set_context_length", None)
         if not callable(setter):
             raise RuntimeError("active context engine does not support runtime overrides")
-        return setter(context_length, source="manual", recommended=True)
+        updated = setter(context_length, source="manual", recommended=True)
+        # Fallback restoration uses this snapshot; keep the manual override
+        # authoritative for the rest of the live session as well.
+        primary_runtime = getattr(agent, "_primary_runtime", None)
+        if isinstance(primary_runtime, dict):
+            primary_runtime.update(
+                {
+                    "compressor_model": getattr(compressor, "model", getattr(agent, "model", "")),
+                    "compressor_provider": getattr(compressor, "provider", getattr(agent, "provider", "")),
+                    "compressor_base_url": getattr(compressor, "base_url", getattr(agent, "base_url", "")),
+                    "compressor_api_key": getattr(compressor, "api_key", ""),
+                    "compressor_context_length": compressor.context_length,
+                    "compressor_threshold_tokens": compressor.threshold_tokens,
+                    "compressor_source": "manual",
+                }
+            )
+        setattr(agent, "_config_context_length", context_length)
+        return updated
 
     def save_context_length(provider: str, model: str, context_length: int) -> bool:
         # Keep the override model-specific. Also persist the derived defaults so

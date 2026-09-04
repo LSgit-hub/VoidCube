@@ -84,7 +84,7 @@ def handle_context_command(
     if context_length is None or context_length < minimum:
         ports.emit(
             f"  (._.) Context length must be at least {minimum:,} tokens "
-            "(for example: /context 256K)."
+            "(choose /context 128K, 256K, 512K, or 1M)."
         )
         return
 

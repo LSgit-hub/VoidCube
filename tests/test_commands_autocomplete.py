@@ -56,6 +56,15 @@ def test_goal_subcommands_include_localized_completion_descriptions():
     }
 
 
+def test_context_subcommands_are_suggested_after_trailing_space():
+    completions = {
+        item.text
+        for item in SlashCommandCompleter().get_completions(_doc("/context "), None)
+    }
+
+    assert completions == {"128K", "256K", "512K", "1M"}
+
+
 def test_command_completion_includes_voice_and_accepts_uppercase_prefix():
     completions = list(SlashCommandCompleter().get_completions(_doc("/V"), None))
 
