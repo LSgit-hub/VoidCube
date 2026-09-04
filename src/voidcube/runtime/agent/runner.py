@@ -664,6 +664,9 @@ class AIAgent:
         )
 
         self._iters_since_skill = 0
+        # Background review forks are evaluation traffic and must never enter
+        # ordinary long-term recall. Normal agents keep this empty.
+        self._memory_sync_tags: list[str] = []
 
         # Canonical Memory Service provider.
         self._memory_manager = None
@@ -1582,6 +1585,7 @@ class AIAgent:
                         provider=self.provider,
                     )
                     review_agent._skill_nudge_interval = 0
+                    review_agent._memory_sync_tags = ["evaluation"]
 
                     review_agent.run_conversation(
                         user_message=prompt,
@@ -5429,6 +5433,7 @@ class AIAgent:
                     user_message,
                     response,
                     session_id=session_id,
+                    tags=list(self._memory_sync_tags),
                 )
             sync_memory_fn = _sync_memory
 

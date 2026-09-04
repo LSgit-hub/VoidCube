@@ -27,6 +27,9 @@ def test_infer_sync_tags_is_conservative():
     ]
     assert infer_sync_tags("请记住我喜欢绿茶") == []
     assert infer_sync_tags("请诊断网络连接") == []
+    assert infer_sync_tags(
+        "Review the conversation above and consider saving or updating a skill if appropriate."
+    ) == ["evaluation"]
 
 
 def test_memory_manager_passes_inferred_tags_to_new_provider():

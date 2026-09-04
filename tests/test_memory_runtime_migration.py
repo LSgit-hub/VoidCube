@@ -237,6 +237,78 @@ def test_schema_reconciliation_quarantines_evaluation_sourced_memories(
     assert audit_count == 1
 
 
+def test_schema_reconciliation_tags_legacy_background_skill_reviews(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "memory.db"
+    bootstrap = MemoryDatabaseBootstrap(db_path, MemoryBackupManager(db_path))
+    bootstrap.initialize()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "INSERT INTO sessions(session_id, created_at) VALUES ('review-session', '2026-08-16')"
+        )
+        prompt = (
+            "Review the conversation above and consider saving or updating a skill if appropriate."
+        )
+        connection.executemany(
+            "INSERT INTO turns(turn_id, session_id, speaker, text, timestamp, tags, metadata, dedup_key) "
+            "VALUES (?, 'review-session', ?, ?, '2026-08-16', '[]', ?, ?)",
+            (
+                (
+                    "review-user",
+                    "user",
+                    prompt,
+                    '{"source":"agent_memory_provider"}',
+                    "review-write:user",
+                ),
+                (
+                    "review-agent",
+                    "agent",
+                    "Nothing to save.",
+                    '{"source":"agent_memory_provider"}',
+                    "review-write:agent",
+                ),
+            ),
+        )
+        values = (
+            "event",
+            "review memory",
+            "review summary",
+            "2026-08-16",
+            "2026-08-16",
+            "2026-08-16",
+        )
+        connection.execute(
+            "INSERT INTO compressed_memories(memory_id, memory_type, title, summary, "
+            "timespan_start, timespan_end, compressed_at, source_turns) "
+            "VALUES ('review-memory', ?, ?, ?, ?, ?, ?, '[\"review-user\"]')",
+            values,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    bootstrap.reconcile_schema()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        tags = dict(
+            connection.execute(
+                "SELECT turn_id, tags FROM turns WHERE turn_id IN ('review-user', 'review-agent')"
+            ).fetchall()
+        )
+        hidden = connection.execute(
+            "SELECT hidden FROM compressed_memories WHERE memory_id = 'review-memory'"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+
+    assert all('"evaluation"' in raw_tags for raw_tags in tags.values())
+    assert hidden == 1
+
+
 def test_memory_recall_environment_overrides_are_loaded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

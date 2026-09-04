@@ -131,6 +131,7 @@ class MemoryDatabaseBootstrap:
             setup_memory_promotion_schema(connection)
             self._migrate_scope_schema(cursor)
             self._migrate_domain_schema(cursor)
+            tagged = self._tag_known_evaluation_turns(cursor)
             quarantined = self._quarantine_evaluation_memories(cursor)
             self._setup_subsystem_schema(connection)
             self._create_indexes(cursor)
@@ -139,6 +140,11 @@ class MemoryDatabaseBootstrap:
                 logger.warning(
                     "Quarantined %d compressed memories sourced from evaluation turns",
                     quarantined,
+                )
+            if tagged:
+                logger.warning(
+                    "Tagged %d historical background-review turns as evaluation",
+                    tagged,
                 )
         finally:
             connection.close()
@@ -604,6 +610,68 @@ class MemoryDatabaseBootstrap:
             seeded,
             released,
         )
+
+    @staticmethod
+    def _tag_known_evaluation_turns(cursor: sqlite3.Cursor) -> int:
+        """Tag legacy background skill-review turns before recall/index rebuild.
+
+        Older runtimes persisted the review fork through the normal provider
+        without passing its evaluation label. The prompt is an internal,
+        stable marker and the provider metadata lets us avoid touching user
+        conversations that merely discuss skills or reviews.
+        """
+        rows = cursor.execute(
+            "SELECT turn_id, session_id, dedup_key, tags FROM turns "
+            "WHERE speaker = 'user' "
+            "AND json_valid(COALESCE(metadata, '{}')) "
+            "AND lower(CAST(json_extract(metadata, '$.source') AS TEXT)) "
+            "= 'agent_memory_provider' "
+            "AND lower(text) LIKE ?",
+            ("review the conversation above and consider saving or updating a skill%",),
+        ).fetchall()
+        tagged = 0
+        for _turn_id, session_id, dedup_key, raw_tags in rows:
+            try:
+                tags = json.loads(raw_tags or "[]")
+            except (TypeError, json.JSONDecodeError):
+                tags = []
+            if not isinstance(tags, list):
+                tags = []
+            normalized = {str(tag).strip().casefold() for tag in tags}
+            if "evaluation" not in normalized:
+                tags.append("evaluation")
+                cursor.execute(
+                    "UPDATE turns SET tags = ? WHERE turn_id = ?",
+                    (json.dumps(tags, ensure_ascii=False), _turn_id),
+                )
+                tagged += 1
+
+            # The paired assistant turn shares the write-id prefix. Tag it as
+            # well so Tier 1 recall cannot surface half of the review exchange.
+            if dedup_key and ":" in str(dedup_key):
+                write_prefix = str(dedup_key).rsplit(":", 1)[0]
+                paired = cursor.execute(
+                    "SELECT turn_id, tags FROM turns WHERE session_id = ? "
+                    "AND dedup_key = ? AND speaker = 'agent'",
+                    (session_id, f"{write_prefix}:agent"),
+                ).fetchone()
+                if paired:
+                    try:
+                        paired_tags = json.loads(paired[1] or "[]")
+                    except (TypeError, json.JSONDecodeError):
+                        paired_tags = []
+                    if not isinstance(paired_tags, list):
+                        paired_tags = []
+                    if "evaluation" not in {
+                        str(tag).strip().casefold() for tag in paired_tags
+                    }:
+                        paired_tags.append("evaluation")
+                        cursor.execute(
+                            "UPDATE turns SET tags = ? WHERE turn_id = ?",
+                            (json.dumps(paired_tags, ensure_ascii=False), paired[0]),
+                        )
+                        tagged += 1
+        return tagged
 
     @staticmethod
     def _quarantine_evaluation_memories(cursor: sqlite3.Cursor) -> int:

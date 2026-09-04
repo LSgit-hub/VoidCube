@@ -66,6 +66,9 @@ _EVALUATION_MEMORY_MARKERS = (
     "memory store",
     "memory service",
 )
+_BACKGROUND_REVIEW_MARKER = (
+    "review the conversation above and consider saving or updating a skill"
+)
 
 
 def infer_sync_tags(user_content: str, tags: Optional[List[str]] = None) -> List[str]:
@@ -78,7 +81,8 @@ def infer_sync_tags(user_content: str, tags: Optional[List[str]] = None) -> List
     normalized = user_content.casefold()
     has_evaluation_marker = any(marker.casefold() in normalized for marker in _EVALUATION_QUERY_MARKERS)
     has_memory_marker = any(marker.casefold() in normalized for marker in _EVALUATION_MEMORY_MARKERS)
-    if has_evaluation_marker and has_memory_marker and "evaluation" not in result:
+    is_background_review = _BACKGROUND_REVIEW_MARKER in normalized
+    if (is_background_review or (has_evaluation_marker and has_memory_marker)) and "evaluation" not in result:
         result.append("evaluation")
     return result
 
