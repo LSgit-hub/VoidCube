@@ -1090,6 +1090,8 @@ async def test_recall_limits_one_session_and_filters_low_value_results(tmp_path)
     assert "other-session" in {item["id"] for item in result["results"]}
     assert strict["results"] == []
     assert strict["recall_status"] == "weak_match"
+    traces = await service.list_recall_traces()
+    assert traces["traces"][0]["status"] == "weak_match"
 
 
 @pytest.mark.asyncio

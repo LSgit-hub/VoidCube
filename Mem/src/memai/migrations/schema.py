@@ -28,6 +28,7 @@ from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID
 logger = logging.getLogger(__name__)
 
 _MEMORY_RUNTIME_STATE_KEY = "memory_commit_revision"
+_EXTRACTION_V2_REQUEUE_STATE_KEY = "compression_extraction_v2_requeued"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +128,7 @@ class MemoryDatabaseBootstrap:
             cursor = connection.cursor()
             self._drop_empty_obsolete_memories_table(cursor)
             self._create_tables(cursor)
+            requeued = self._requeue_legacy_extraction_failures(cursor)
             self._migrate_write_receipts_schema(cursor)
             setup_memory_promotion_schema(connection)
             self._migrate_scope_schema(cursor)
@@ -145,6 +147,11 @@ class MemoryDatabaseBootstrap:
                 logger.warning(
                     "Tagged %d historical background-review turns as evaluation",
                     tagged,
+                )
+            if requeued:
+                logger.warning(
+                    "Requeued %d turns rejected by the retired extraction contract",
+                    requeued,
                 )
         finally:
             connection.close()
@@ -166,6 +173,37 @@ class MemoryDatabaseBootstrap:
             return
         cursor.execute("DROP TABLE memories")
         logger.info("Removed empty obsolete memories table")
+
+    @staticmethod
+    def _requeue_legacy_extraction_failures(cursor: sqlite3.Cursor) -> int:
+        """Retry old quality failures once after the extraction v2 rollout."""
+        already_applied = cursor.execute(
+            "SELECT 1 FROM memory_runtime_state WHERE state_key = ?",
+            (_EXTRACTION_V2_REQUEUE_STATE_KEY,),
+        ).fetchone()
+        if already_applied:
+            return 0
+        has_matching_audit = cursor.execute(
+            "SELECT 1 FROM compression_quality_audit WHERE status = 'rejected' "
+            "AND failed_checks LIKE '%no_valid_events%' LIMIT 1"
+        ).fetchone()
+        requeued = 0
+        if has_matching_audit:
+            result = cursor.execute(
+                "UPDATE turns SET compression_status = 'pending', "
+                "compression_retry_count = 0, compression_retry_after = NULL "
+                "WHERE compression_status = 'quality_quarantined'"
+            )
+            requeued = max(0, int(result.rowcount or 0))
+        cursor.execute(
+            "INSERT INTO memory_runtime_state "
+            "(state_key, state_value, updated_at) VALUES (?, 1, ?)",
+            (
+                _EXTRACTION_V2_REQUEUE_STATE_KEY,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        return requeued
 
     def _create_tables(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute(
@@ -265,6 +303,8 @@ class MemoryDatabaseBootstrap:
                 status TEXT NOT NULL,
                 candidate_count INTEGER NOT NULL,
                 event_count INTEGER NOT NULL,
+                valid_event_count INTEGER NOT NULL DEFAULT 0,
+                valid_event_fraction REAL NOT NULL DEFAULT 0,
                 covered_turn_count INTEGER NOT NULL,
                 event_coverage REAL NOT NULL,
                 backlinked_event_count INTEGER NOT NULL,
@@ -279,6 +319,7 @@ class MemoryDatabaseBootstrap:
                 identifier_fidelity REAL NOT NULL DEFAULT 0,
                 polarity_consistency REAL NOT NULL DEFAULT 0,
                 unsupported_identifiers TEXT NOT NULL DEFAULT '[]',
+                rejected_event_reasons TEXT NOT NULL DEFAULT '{}',
                 thresholds TEXT NOT NULL,
                 failed_checks TEXT NOT NULL,
                 sample_turn_ids TEXT NOT NULL
@@ -287,11 +328,14 @@ class MemoryDatabaseBootstrap:
         )
         quality_columns = self._column_names(cursor, "compression_quality_audit")
         for column, definition in (
+            ("valid_event_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("valid_event_fraction", "REAL NOT NULL DEFAULT 0"),
             ("source_supported_event_count", "INTEGER NOT NULL DEFAULT 0"),
             ("source_support", "REAL NOT NULL DEFAULT 0"),
             ("identifier_fidelity", "REAL NOT NULL DEFAULT 0"),
             ("polarity_consistency", "REAL NOT NULL DEFAULT 0"),
             ("unsupported_identifiers", "TEXT NOT NULL DEFAULT '[]'"),
+            ("rejected_event_reasons", "TEXT NOT NULL DEFAULT '{}'"),
             ("owner_id", "TEXT NOT NULL DEFAULT 'local-user'"),
             ("workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
         ):

@@ -235,9 +235,14 @@ def resolve_mem_llm(role: str = "default") -> MemLLMResolution:
         config_set = MemModelConfigSet(default=MemModelConfig(), roles={})
 
     mem_cfg = config_set.for_role(role) if role else config_set.default
-    model = mem_cfg.model or "deepseek-chat"
+    model = str(mem_cfg.model or "").strip()
     base_url = (mem_cfg.base_url or "https://api.deepseek.com/v1").rstrip("/")
     config_source = f"memory.llm.{role or 'default'} (provider={mem_cfg.provider})"
+
+    if not model:
+        detail = "memory.llm.model is not configured; select a model with /api"
+        logger.warning("Mem LLM model unavailable (%s): %s", config_source, detail)
+        return MemLLMResolution(None, "", "model_unconfigured", detail)
 
     try:
         get_mem_host_integration().validate_integration(
@@ -309,10 +314,10 @@ def resolve_mem_llm_client(role: str = "default"):
             role is not present in the config.
 
     Returns:
-        ``(client, model_name)``.  ``client`` is ``None`` when no API
-        key can be resolved (caller must degrade to heuristic /
-        mechanical path).  ``model_name`` is always populated so the
-        caller can log which model was selected.
+        ``(client, model_name)``.  ``client`` is ``None`` when the model
+        or API key cannot be resolved (caller must degrade to heuristic /
+        mechanical path).  ``model_name`` is empty when
+        ``memory.llm.model`` is not configured.
     """
     resolution = resolve_mem_llm(role=role)
     return resolution.client, resolution.model

@@ -46,6 +46,9 @@ class CachedLLMExtractionAdapter:
         self._repository = repository
 
     def extract_events(self, turns: Sequence[Any]):
+        valid_turn_ids = {str(getattr(turn, "turn_id", "")) for turn in turns}
+        if not valid_turn_ids:
+            return []
         input_text = _turn_input(turns)
         cache_key = build_cache_key(TASK_EXTRACT, self._model, input_text)
         cached = None
@@ -56,26 +59,17 @@ class CachedLLMExtractionAdapter:
                 cached = open_cached(self._db_path, cache_key)
         except Exception:
             cached = None
-        if cached is not None:
-            return cached
+        cached_payload = self._usable_payload(cached, valid_turn_ids)
+        if cached_payload:
+            return cached_payload
 
-        prompt = (
-            "Extract memory-worthy events from the conversation. "
-            "Output JSON array with: title, summary, event_kind, "
-            "importance, confidence, topics, entities, source_turns.\n\n"
-            + input_text
-        )
-        result = self._llm.complete_json(
-            system_prompt="You are a precise memory extraction assistant.",
-            user_payload={"conversation": prompt},
-            task="extractor.events",
-        )
-        if isinstance(result, list):
-            payload = result
-        elif isinstance(result, dict):
-            payload = result.get("events") or result.get("result") or []
-        else:
-            payload = []
+        # Use the client's canonical extraction protocol. It supplies the
+        # registered prompt, structured turns, provider-specific request
+        # shape, and tolerant JSON decoding in one place.
+        result = self._llm.extract_events(turns)
+        payload = self._usable_payload(result, valid_turn_ids)
+        if not payload:
+            return []
         try:
             if self._repository is not None:
                 store_cached_with_repository(
@@ -98,6 +92,22 @@ class CachedLLMExtractionAdapter:
         except Exception:
             pass
         return payload
+
+    @staticmethod
+    def _usable_payload(result: Any, valid_turn_ids: set[str]) -> list[dict[str, Any]]:
+        """Keep only extraction envelopes that can reference this batch."""
+        if not isinstance(result, Sequence) or isinstance(result, (str, bytes)):
+            return []
+        payload = [item for item in result if isinstance(item, dict)]
+        if not payload:
+            return []
+        has_valid_source = any(
+            isinstance(item.get("source_turns"), Sequence)
+            and not isinstance(item.get("source_turns"), (str, bytes))
+            and any(str(turn_id) in valid_turn_ids for turn_id in item["source_turns"])
+            for item in payload
+        )
+        return payload if has_valid_source else []
 
 
 def build_llm_first_pipeline(

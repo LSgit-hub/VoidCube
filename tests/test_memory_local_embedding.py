@@ -94,7 +94,8 @@ def test_semantic_index_defaults_to_local_fallback(tmp_path):
 
     assert index.enabled is True
     assert index._local_fallback is True
-    assert index.config.provider == ""
+    assert index.config.provider == "local"
+    assert index.config.model == "char-ngram-v1"
 
 
 def test_local_embedding_normalizes_dimensions_to_supported_minimum(tmp_path):
@@ -108,6 +109,60 @@ def test_local_embedding_normalizes_dimensions_to_supported_minimum(tmp_path):
 
     assert index.config.dimensions == 64
     assert len(index._embed(["dimension check"])[0]) == 64
+
+
+def test_local_embedding_migrates_blank_provider_metadata(tmp_path):
+    from memai.indexes.semantic_index import SemanticIndexConfig, SemanticMemoryIndex
+
+    service = _service(tmp_path)
+    SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(enabled=False),
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        stamp = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO sessions "
+            "(session_id, owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES ('legacy-session', 'local-user', 'default', "
+            "'agent_interaction', ?)",
+            (stamp,),
+        )
+        conn.execute(
+            "INSERT INTO turns "
+            "(turn_id, session_id, speaker, text, timestamp, tags, metadata, "
+            "compression_status, owner_id, workspace_id, memory_domain) "
+            "VALUES ('legacy', 'legacy-session', 'user', 'legacy embedding', ?, "
+            "'[]', '{}', 'pending', 'local-user', 'default', 'agent_interaction')",
+            (stamp,),
+        )
+        conn.execute(
+            "INSERT INTO memory_embeddings "
+            "(source_type, memory_id, owner_id, workspace_id, memory_domain, "
+            "content_hash, provider, model, dimensions, vector, updated_at) "
+            "VALUES ('turn', 'legacy', 'local-user', 'default', "
+            "'agent_interaction', 'hash', '', '', 64, '[]', ?)",
+            (stamp,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(enabled=True, provider="", model="", dimensions=64),
+    )
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        provider, model = conn.execute(
+            "SELECT provider, model FROM memory_embeddings "
+            "WHERE memory_id = 'legacy'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert (provider, model) == ("local", "char-ngram-v1")
 
 
 def _service(tmp_path) -> MemoryService:

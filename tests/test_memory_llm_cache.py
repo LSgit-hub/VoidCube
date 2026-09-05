@@ -36,6 +36,11 @@ class FakeLLM:
         self.last_task = task
         return self._response
 
+    def extract_events(self, turns):
+        self.call_count += 1
+        self.last_task = "extractor.events"
+        return self._response
+
 
 def _turn(turn_id: str, speaker: str, text: str):
     return SimpleNamespace(
@@ -117,10 +122,43 @@ def test_cached_extraction_adapter_calls_llm_once_per_batch(tmp_path):
     assert first == events
     assert second == events
     assert fake.call_count == 1  # second call served from cache
+    assert fake.last_task == "extractor.events"
 
     # A different batch is a cache miss.
     other = adapter.extract_events([_turn("t2", "user", "完全不同的另一段对话。")])
-    assert other == events
+    assert other == []  # fake response links only to t1 and is rejected
+    assert fake.call_count == 2
+
+
+def test_cached_extraction_adapter_does_not_cache_empty_result(tmp_path):
+    from memai.application.llm_extraction import CachedLLMExtractionAdapter
+
+    fake = FakeLLM([])
+    adapter = CachedLLMExtractionAdapter(
+        fake,
+        tmp_path / "memory.db",
+        model="fake-model",
+    )
+    turns = [_turn("t1", "user", "我们决定改造记忆系统。")]
+
+    assert adapter.extract_events(turns) == []
+    assert adapter.extract_events(turns) == []
+    assert fake.call_count == 2
+
+
+def test_cached_extraction_adapter_does_not_cache_unlinked_events(tmp_path):
+    from memai.application.llm_extraction import CachedLLMExtractionAdapter
+
+    fake = FakeLLM([{"title": "无效事件", "source_turns": ["missing"]}])
+    adapter = CachedLLMExtractionAdapter(
+        fake,
+        tmp_path / "memory.db",
+        model="fake-model",
+    )
+    turns = [_turn("t1", "user", "我们决定改造记忆系统。")]
+
+    assert adapter.extract_events(turns) == []
+    assert adapter.extract_events(turns) == []
     assert fake.call_count == 2
 
 

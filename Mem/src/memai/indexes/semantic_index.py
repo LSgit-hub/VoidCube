@@ -147,6 +147,12 @@ class SemanticMemoryIndex:
     ) -> None:
         self.db_path = Path(db_path)
         self.config = config or SemanticIndexConfig.from_host_config()
+        if self.config.enabled and not self.config.provider:
+            self.config = replace(
+                self.config,
+                provider="local",
+                model=self.config.model or "char-ngram-v1",
+            )
         self._transport = transport
         self._repository = repository
         self._local_fallback = False
@@ -635,6 +641,22 @@ class SemanticMemoryIndex:
                 "PRIMARY KEY(source_type, memory_id, owner_id, workspace_id, "
                 "memory_domain, provider, model))"
             )
+            if self.config.provider == "local":
+                conn.execute(
+                    "DELETE FROM memory_embeddings AS legacy WHERE provider = '' "
+                    "AND EXISTS (SELECT 1 FROM memory_embeddings AS canonical "
+                    "WHERE canonical.source_type = legacy.source_type "
+                    "AND canonical.memory_id = legacy.memory_id "
+                    "AND canonical.owner_id = legacy.owner_id "
+                    "AND canonical.workspace_id = legacy.workspace_id "
+                    "AND canonical.memory_domain = legacy.memory_domain "
+                    "AND canonical.provider = 'local' "
+                    "AND canonical.model = 'char-ngram-v1')"
+                )
+                conn.execute(
+                    "UPDATE memory_embeddings SET provider = 'local', "
+                    "model = 'char-ngram-v1' WHERE provider = ''"
+                )
             conn.execute(
                 "DROP INDEX IF EXISTS idx_memory_embeddings_scope_v2"
             )

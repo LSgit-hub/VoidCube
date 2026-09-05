@@ -11,6 +11,7 @@ def test_prompt_registry_loads_default_prompt_pack() -> None:
     prompt = registry.get("extractor.events")
 
     assert "timeline-worthy changes" in prompt
+    assert "Preserve every negation and identifier exactly" in prompt
 
 
 def test_prompt_registry_override_takes_priority(tmp_path: Path) -> None:

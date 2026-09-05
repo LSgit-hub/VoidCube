@@ -52,6 +52,19 @@ def test_mem_model_config_keeps_memory_provider_as_plugin_identity() -> None:
     assert model_config.api_key_env == "OPENAI_API_KEY"
 
 
+def test_mem_resolver_requires_explicit_model(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "memai.model_config.load_mem_model_config_set",
+        lambda: MemModelConfigSet(default=MemModelConfig(), roles={}),
+    )
+    monkeypatch.setattr("memai.model_config._resolve_mem_api_key", lambda _config: "")
+
+    resolution = resolve_mem_llm()
+
+    assert resolution.model == ""
+    assert resolution.status == "model_unconfigured"
+
+
 def test_mem_model_config_ignores_memory_plugin_level_model() -> None:
     config = {
         "memory": {

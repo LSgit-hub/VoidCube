@@ -4335,7 +4335,7 @@ class MemoryApplicationService:
         stored_metadata = _strip_identity_verification_metadata(
             self._memory_storage_value(request.metadata)
         )
-        now = datetime.now().astimezone().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         dedup_key = self._derive_turn_dedup_key(
             session_id,
             request,
@@ -4445,7 +4445,7 @@ class MemoryApplicationService:
             request.memory_actor, request.memory_domain
         )
         session_id = request.session_id.strip()
-        now = datetime.now().astimezone().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         stored_metadata = _strip_identity_verification_metadata(
             self._memory_storage_value(request.metadata)
         )
@@ -6049,11 +6049,16 @@ class MemoryApplicationService:
                     "promotion_approval_ref": item.get("promotion_approval_ref"),
                 }
             )
-        status = (
-            "failure"
-            if failure is not None
-            else ("hit" if payload and payload.get("count") else "empty")
-        )
+        if failure is not None:
+            status = "failure"
+        else:
+            # ``recall`` distinguishes a candidate pool that missed the
+            # score threshold (weak_match) from a genuine empty search. Keep
+            # that signal in the durable trace for quality metrics and
+            # feedback analysis.
+            status = str((payload or {}).get("recall_status") or "miss")
+            if status not in {"hit", "weak_match", "miss"}:
+                status = "hit" if payload and payload.get("count") else "miss"
         scope = MemoryScope.create(request.owner_id, request.workspace_id)
         source_domains = _authorized_read_domains(
             request.memory_actor, request.source_domains

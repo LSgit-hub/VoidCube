@@ -218,6 +218,66 @@ def test_legacy_resource_fields_migrate_once_and_repair_relations(tmp_path):
     assert len(list((tmp_path / "backups").glob("memory-*.db"))) == 1
 
 
+def test_extraction_v2_migration_requeues_old_no_event_failures_once(tmp_path):
+    service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
+    stamp = datetime.now(timezone.utc).isoformat()
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO sessions "
+            "(session_id, owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES ('retry-session', 'local-user', 'default', "
+            "'agent_interaction', ?)",
+            (stamp,),
+        )
+        conn.execute(
+            "INSERT INTO turns "
+            "(turn_id, session_id, speaker, text, timestamp, tags, metadata, "
+            "compression_status, compression_retry_count, owner_id, workspace_id, "
+            "memory_domain) VALUES ('retry-turn', 'retry-session', 'user', "
+            "'We decided to retry extraction.', ?, '[]', '{}', "
+            "'quality_quarantined', 3, 'local-user', 'default', 'agent_interaction')",
+            (stamp,),
+        )
+        conn.execute(
+            "INSERT INTO compression_quality_audit "
+            "(audit_id, evaluated_at, status, candidate_count, event_count, "
+            "covered_turn_count, event_coverage, backlinked_event_count, "
+            "backlink_completeness, source_chars, event_summary_chars, "
+            "compression_ratio, degraded_event_count, degraded_fraction, "
+            "thresholds, failed_checks, sample_turn_ids) VALUES "
+            "('old-empty', ?, 'rejected', 1, 0, 0, 0, 0, 0, 30, 0, 0, 0, 0, "
+            "'{}', '[\"no_valid_events\"]', '[\"retry-turn\"]')",
+            (stamp,),
+        )
+        conn.execute(
+            "DELETE FROM memory_runtime_state "
+            "WHERE state_key = 'compression_extraction_v2_requeued'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    service._repository.reconcile_schema()
+    service._repository.reconcile_schema()
+
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        state = conn.execute(
+            "SELECT compression_status, compression_retry_count, "
+            "compression_retry_after FROM turns WHERE turn_id = 'retry-turn'"
+        ).fetchone()
+        marker_count = conn.execute(
+            "SELECT COUNT(*) FROM memory_runtime_state "
+            "WHERE state_key = 'compression_extraction_v2_requeued'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert state == ("pending", 0, None)
+    assert marker_count == 1
+
+
 def test_time_summary_schema_is_idempotent_and_versioned(tmp_path):
     service = MemoryService(MemoryServiceConfig(db_path=str(tmp_path / "memory.db")))
     service._repository.reconcile_schema()

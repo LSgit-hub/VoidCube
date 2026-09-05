@@ -1035,13 +1035,14 @@ class Tier1ToTier2Bridge:
         conn.execute(
             "INSERT OR REPLACE INTO compression_quality_audit "
             "(audit_id, memory_domain, owner_id, workspace_id, evaluated_at, status, candidate_count, event_count, "
-            "covered_turn_count, event_coverage, backlinked_event_count, "
+            "valid_event_count, valid_event_fraction, covered_turn_count, "
+            "event_coverage, backlinked_event_count, "
             "backlink_completeness, source_chars, event_summary_chars, "
             "compression_ratio, degraded_event_count, degraded_fraction, "
             "source_supported_event_count, source_support, identifier_fidelity, "
-            "polarity_consistency, unsupported_identifiers, thresholds, failed_checks, "
-            "sample_turn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "polarity_consistency, unsupported_identifiers, rejected_event_reasons, "
+            "thresholds, failed_checks, sample_turn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 quality_evidence["audit_id"],
                 quality_evidence["memory_domain"],
@@ -1051,6 +1052,8 @@ class Tier1ToTier2Bridge:
                 status,
                 quality_evidence["candidate_count"],
                 quality_evidence["event_count"],
+                quality_evidence["valid_event_count"],
+                quality_evidence["valid_event_fraction"],
                 quality_evidence["covered_turn_count"],
                 quality_evidence["event_coverage"],
                 quality_evidence["backlinked_event_count"],
@@ -1065,6 +1068,10 @@ class Tier1ToTier2Bridge:
                 quality_evidence["identifier_fidelity"],
                 quality_evidence["polarity_consistency"],
                 json.dumps(quality_evidence["unsupported_identifiers"]),
+                json.dumps(
+                    quality_evidence["rejected_event_reasons"],
+                    sort_keys=True,
+                ),
                 json.dumps(quality_evidence["thresholds"], sort_keys=True),
                 json.dumps(quality_evidence["failed_checks"]),
                 json.dumps(quality_evidence["sample_turn_ids"]),

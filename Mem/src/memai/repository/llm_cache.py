@@ -21,7 +21,7 @@ from .contracts import MemoryRepository
 CACHE_TABLE = "mem_llm_cache"
 
 # Task names used as cache namespaces.
-TASK_EXTRACT = "extractor.events"
+TASK_EXTRACT = "extractor.events.v2"
 TASK_ESCALATE = "escalate"
 TASK_PURGE_REVIEW = "purge_review"
 TASK_SESSION_SUMMARY = "session_summary.v1"
