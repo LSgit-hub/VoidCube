@@ -10,7 +10,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, cast
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from memai.redaction import redact_sensitive_text
@@ -237,7 +237,14 @@ def _authorized_read_domains(
     requested: List[MemoryDomain] | tuple[MemoryDomain, ...] | None,
 ) -> tuple[str, ...]:
     try:
-        return domain_values(authorize_read(actor, requested))
+        # Convert to a compatible format for authorize_read
+        if requested is None:
+            normalized: tuple[MemoryDomain | str, ...] | list[MemoryDomain | str] = ()
+        elif isinstance(requested, list):
+            normalized = [MemoryDomain(m) if isinstance(m, str) else m for m in requested]
+        else:
+            normalized = tuple(MemoryDomain(m) if isinstance(m, str) else m for m in requested)
+        return domain_values(authorize_read(actor, normalized))
     except (MemoryDomainAccessError, ValueError) as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -917,7 +924,7 @@ class MemoryApplicationService:
 
     def __init__(
         self,
-        config: MemoryServiceConfig = None,
+        config: MemoryServiceConfig | None = None,
         *,
         repository: MemoryRepository | None = None,
     ):
@@ -2862,7 +2869,7 @@ class MemoryApplicationService:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.config.gateway_address}/admin/services/{service_id}",
-                    timeout=5,
+                    timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:
                     if response.status != 200:
                         self._gateway_registration_healthy = False
@@ -3130,7 +3137,7 @@ class MemoryApplicationService:
                 error=str(exc),
             )
 
-    async def run_all_rules(self, request: dict = None):
+    async def run_all_rules(self, request: dict | None = None):
         """Accept an asynchronous request to run all memory maintenance rules.
 
         Rules executed in order:
@@ -4580,7 +4587,7 @@ class MemoryApplicationService:
             memory_domain=memory_domain,
             callback=write,
         )
-        result = receipt.value
+        result = cast(Dict[str, Any], receipt.value)
         turn_ids = dict(result["turn_ids"])
         profile_settlement = dict(result["profile_settlement"])
         if receipt.replay and profile_settlement.get("inserted"):
@@ -4684,7 +4691,7 @@ class MemoryApplicationService:
                 "reason": str(self._memory_storage_value(request.reason)).strip(),
             }
         )
-        def write(conn: sqlite3.Connection) -> tuple[dict[str, Any], dict[str, Any]]:
+        def write(conn: sqlite3.Connection) -> tuple[dict[str, Any], dict[str, Any] | None]:
             candidate, promotion = consent_memory_promotion_candidate(
                 conn,
                 candidate_id,
@@ -4803,8 +4810,8 @@ class MemoryApplicationService:
         }
 
     async def query_turns(
-        self, start: str = None, end: str = None, speaker: str = None,
-        session_id: str = None, limit: int = 100, offset: int = 0,
+        self, start: str | None = None, end: str | None = None, speaker: str | None = None,
+        session_id: str | None = None, limit: int = 100, offset: int = 0,
         newest_first: bool = False,
         owner_id: str = DEFAULT_OWNER_ID,
         workspace_id: str = DEFAULT_WORKSPACE_ID,
@@ -4886,10 +4893,15 @@ class MemoryApplicationService:
             request.memory_actor, request.source_domains
         )
         requested_date = request.date.isoformat()
-        date_start = f"{requested_date}T00:00:00"
-        date_end = f"{(request.date + timedelta(days=1)).isoformat()}T00:00:00"
+        # 按配置时区换算该天的真实带偏移边界（day_period 返回含时区偏移的 ISO）
+        date_start, date_end = day_period(
+            requested_date, timezone_name=self.config.time_summary_timezone
+        )
+        # 用 julianday 归一比较：SQLite 会把带偏移 ISO 换算成 UTC 儒略日在比较，
+        # 跨时区 / 历史(+08)与新数据(+00)混存时不会错位
         sql = "SELECT turn_id, session_id, speaker, text, timestamp FROM turns " \
-              "WHERE timestamp >= ? AND timestamp < ? " \
+              "WHERE julianday(timestamp) >= julianday(?) " \
+              "AND julianday(timestamp) < julianday(?) " \
               "AND owner_id = ? AND workspace_id = ?"
         placeholders = ",".join("?" for _ in source_domains)
         sql += f" AND memory_domain IN ({placeholders})"
@@ -4902,7 +4914,7 @@ class MemoryApplicationService:
         if request.speaker:
             sql += " AND speaker = ?"
             params.append(request.speaker)
-        sql += " ORDER BY timestamp ASC LIMIT ?"
+        sql += " ORDER BY julianday(timestamp) ASC LIMIT ?"
         params.append(request.limit)
         rows = self._repository_read(lambda conn: conn.execute(sql, params).fetchall())
         return {
@@ -4918,7 +4930,7 @@ class MemoryApplicationService:
             "count": len(rows),
         }
 
-    async def tier2_compress(self, request: Tier2CompressRequest = None):
+    async def tier2_compress(self, request: Tier2CompressRequest | None = None):
         """Run the canonical Tier 1 → Tier 2 bridge with request-scoped policy."""
         req = request or Tier2CompressRequest()
         memory_domain = _authorized_write_domain(req.memory_actor, req.memory_domain)
@@ -5881,7 +5893,6 @@ class MemoryApplicationService:
             request.memory_actor, request.source_domains
         )
         plan = None
-        payload: Dict[str, Any] | None = None
         failure: Exception | None = None
         try:
             plan = build_recall_plan(
@@ -5925,6 +5936,8 @@ class MemoryApplicationService:
                     graph_min_relevance=self.config.recall_graph_min_relevance,
                 )
             )
+            # payload is guaranteed to be Dict[str, Any] after this assignment
+            assert payload is not None
             payload["promotion_count"] = 0
             if request.include_promotions:
                 promoted, promoted_source_keys, promoted_candidate_count = (
@@ -6412,7 +6425,7 @@ class MemoryApplicationService:
 
             counts["memory_references_detached"] = self._remove_purged_memory_references(
                 conn,
-                memory_ids=compressed_ids | profile_ids,
+                memory_ids=list(compressed_ids | profile_ids),
                 owner_id=scope.owner_id,
                 workspace_id=scope.workspace_id,
                 memory_domain=memory_domain,
@@ -6852,7 +6865,8 @@ class MemoryApplicationService:
                 memory_domain=memory_domain,
                 callback=write,
             )
-            memory = dict(receipt.value)
+            value = receipt.value
+            memory: Dict[str, Any] = value if isinstance(value, dict) else {}
             self._semantic_wake.set()
             return {
                 "status": "remembered",
@@ -6992,7 +7006,7 @@ class MemoryApplicationService:
             "count": len(rows),
         }
 
-    async def trigger_lifecycle(self, request: dict = None):
+    async def trigger_lifecycle(self, request: dict | None = None):
         """Run the retained purge pass; successor compression is paused."""
         req = request or {}
         result = {}
@@ -7317,7 +7331,7 @@ class MemoryService(MemoryApplicationService):
 
     def __init__(
         self,
-        config: MemoryServiceConfig = None,
+        config: MemoryServiceConfig | None = None,
         *,
         repository: MemoryRepository | None = None,
     ):
