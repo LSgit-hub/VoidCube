@@ -1346,13 +1346,24 @@ class MemoryApplicationService:
                     )
                 )
                 conn.execute(
-                    "INSERT OR REPLACE INTO compressed_memories "
+                    "INSERT INTO compressed_memories "
                     "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
                     "importance, confidence, topics, entities, source_turns, "
                     "evidence_refs, origin_type, origin_id, verified_at, "
                     "derived_from_id, compressed_at, compression_level, status, weight, "
                     "owner_id, workspace_id, memory_domain, event_kind, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(memory_id) DO UPDATE SET "
+                    "memory_type=excluded.memory_type, title=excluded.title, summary=excluded.summary, "
+                    "timespan_start=excluded.timespan_start, timespan_end=excluded.timespan_end, "
+                    "importance=excluded.importance, confidence=excluded.confidence, topics=excluded.topics, "
+                    "entities=excluded.entities, source_turns=excluded.source_turns, "
+                    "evidence_refs=excluded.evidence_refs, origin_type=excluded.origin_type, "
+                    "origin_id=excluded.origin_id, verified_at=excluded.verified_at, "
+                    "derived_from_id=excluded.derived_from_id, compressed_at=excluded.compressed_at, "
+                    "compression_level=excluded.compression_level, event_kind=excluded.event_kind, "
+                    "created_at=COALESCE(compressed_memories.created_at, excluded.created_at) "
+                    "WHERE compressed_memories.status = 'active'",
                     (
                         successor_id,
                         plan["next_type"],
@@ -4944,6 +4955,7 @@ class MemoryApplicationService:
             pipeline_factory=self._build_compression_pipeline,
             compression_degraded=not self._llm_healthy,
             min_backlink_completeness=self.config.tier2_min_backlink_completeness,
+            min_event_coverage=self.config.tier2_min_event_coverage,
             max_compression_ratio=self.config.tier2_max_compression_ratio,
             max_degraded_fraction=self.config.tier2_max_degraded_fraction,
             min_source_support=self.config.tier2_min_source_support,
@@ -5910,6 +5922,7 @@ class MemoryApplicationService:
                 workspace_id=scope.workspace_id,
                 source_domains=source_domains,
                 limit=self.config.recall_candidate_limit,
+                as_of=request.as_of,
             )
             payload = await self._repository_write_async(
                 lambda conn: recall_memories(

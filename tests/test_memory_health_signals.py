@@ -1728,7 +1728,7 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
 @pytest.mark.asyncio
 @pytest.mark.operational
-async def test_compression_quality_gate_audits_incomplete_turn_coverage_without_rejecting(tmp_path):
+async def test_compression_quality_gate_rejects_incomplete_turn_coverage(tmp_path):
     svc = _make_service(tmp_path)
     svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="quality-reject", metadata={}))
@@ -1785,15 +1785,18 @@ async def test_compression_quality_gate_audits_incomplete_turn_coverage_without_
     finally:
         conn.close()
 
-    assert result["status"] == "compressed"
-    assert result["turns_processed"] == 2
+    assert result["status"] == "quality_rejected"
+    assert result["turns_processed"] == 0
     assert result["quality_evidence"]["event_coverage"] == pytest.approx(0.5)
-    assert result["quality_evidence"]["failed_checks"] == []
-    assert active_count == 0
-    assert archive_count == 2
-    assert audit_status == "passed"
+    assert result["quality_evidence"]["validated_event_coverage"] == pytest.approx(0.5)
+    assert result["quality_evidence"]["failed_checks"] == [
+        "event_coverage", "validated_event_coverage"
+    ]
+    assert active_count == 2
+    assert archive_count == 0
+    assert audit_status == "rejected"
     assert event_coverage == pytest.approx(0.5)
-    assert json.loads(failed_checks) == []
+    assert json.loads(failed_checks) == ["event_coverage", "validated_event_coverage"]
 
 
 def test_quality_rejection_stops_retrying_after_three_attempts(tmp_path):
@@ -2468,6 +2471,24 @@ def test_bridge_sets_created_at_and_propagates_event_kind_to_all_levels(tmp_path
     try:
         _write_compressed_memories_to_db(conn, result, now_dt.isoformat())
         conn.commit()
+        stable_event_id = conn.execute(
+            "SELECT memory_id FROM compressed_memories WHERE memory_type = 'event' "
+            "AND memory_id NOT LIKE 'identity-founding-%'"
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE compressed_memories SET pinned = 1, hidden = 1, access_count = 7, "
+            "retention_state = 'purge_candidate', purge_candidate_at = ? "
+            "WHERE memory_id = ?",
+            (now_dt.isoformat(), stable_event_id),
+        )
+        conn.commit()
+        _write_compressed_memories_to_db(conn, result, now_dt.isoformat())
+        preserved = conn.execute(
+            "SELECT pinned, hidden, access_count, retention_state, purge_candidate_at "
+            "FROM compressed_memories WHERE memory_id = ?",
+            (stable_event_id,),
+        ).fetchone()
+        conn.commit()
         rows = conn.execute(
             "SELECT memory_type, event_kind, created_at FROM compressed_memories "
             "WHERE memory_id NOT LIKE 'identity-founding-%' ORDER BY compression_level"
@@ -2491,3 +2512,5 @@ def test_bridge_sets_created_at_and_propagates_event_kind_to_all_levels(tmp_path
     assert profile_count == 0
     assert event_parent_id == stable_scene_id
     assert all(row[2] == now_dt.isoformat() for row in rows)
+    assert preserved[:4] == (1, 1, 7, "purge_candidate")
+    assert preserved[4] == now_dt.isoformat()

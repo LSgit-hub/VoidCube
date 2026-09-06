@@ -175,6 +175,57 @@ def _service(tmp_path) -> MemoryService:
     )
 
 
+def test_local_semantic_search_applies_as_of_before_candidate_limit(tmp_path):
+    from memai.indexes.semantic_index import SemanticIndexConfig, SemanticMemoryIndex
+
+    service = _service(tmp_path)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        conn.execute(
+            "INSERT INTO sessions (session_id, owner_id, workspace_id, memory_domain, created_at) "
+            "VALUES ('asof-semantic', 'local-user', 'default', 'agent_interaction', ?)",
+            ("2026-01-01T00:00:00+00:00",),
+        )
+        conn.execute(
+            "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, compression_status, "
+            "owner_id, workspace_id, memory_domain) VALUES (?, 'asof-semantic', 'user', ?, ?, 'pending', "
+            "'local-user', 'default', 'agent_interaction')",
+            (
+                "old-semantic",
+                "The database migration plan was approved.",
+                "2026-01-02T00:00:00+00:00",
+            ),
+        )
+        for index in range(5):
+            conn.execute(
+                "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, compression_status, "
+                "owner_id, workspace_id, memory_domain) VALUES (?, 'asof-semantic', 'user', ?, ?, 'pending', "
+                "'local-user', 'default', 'agent_interaction')",
+                (
+                    f"future-semantic-{index}",
+                    "database migration plan",
+                    f"2026-02-{10 + index:02d}T00:00:00+00:00",
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    index = SemanticMemoryIndex(
+        service._db_path,
+        SemanticIndexConfig(enabled=True, provider="", model=""),
+    )
+    matches = index.search(
+        "database migration plan",
+        owner_id="local-user",
+        workspace_id="default",
+        limit=1,
+        as_of="2026-01-31T00:00:00+00:00",
+    )
+
+    assert list(matches) == [("turn", "old-semantic")]
+
+
 @pytest.mark.asyncio
 async def test_semantic_recall_surfaces_paraphrase_without_lexical_overlap(
     tmp_path,

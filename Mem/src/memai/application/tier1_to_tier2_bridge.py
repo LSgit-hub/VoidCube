@@ -197,20 +197,28 @@ def _write_compressed_memories_to_db(
         )
         ek = event.event_kind.value if hasattr(event.event_kind, 'value') else str(event.event_kind)
         conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
+            "INSERT INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, "
-            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "timeline_parent_id, compressed_at, compression_level, event_kind, owner_id, workspace_id, "
             "memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(memory_id) DO UPDATE SET "
+            "memory_type=excluded.memory_type, title=excluded.title, summary=excluded.summary, "
+            "timespan_start=excluded.timespan_start, timespan_end=excluded.timespan_end, "
+            "importance=excluded.importance, confidence=excluded.confidence, topics=excluded.topics, "
+            "entities=excluded.entities, source_turns=excluded.source_turns, "
+            "timeline_parent_id=excluded.timeline_parent_id, compressed_at=excluded.compressed_at, "
+            "compression_level=excluded.compression_level, event_kind=excluded.event_kind, "
+            "created_at=COALESCE(compressed_memories.created_at, excluded.created_at) "
+            "WHERE compressed_memories.status = 'active'",
             (
                 stable_ids.get(event.id, event.id), "event", event.title, event.summary,
                 event.timespan_start.isoformat(), event.timespan_end.isoformat(),
                 event.importance, event.confidence,
                 json.dumps(event.topics), json.dumps(event.entities),
                 json.dumps(event.source_turns), resolved_parent_id, now,
-                0, "active", 1.0, ek, owner_id, workspace_id, memory_domain, now,
+                0, ek, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
@@ -229,20 +237,28 @@ def _write_compressed_memories_to_db(
         scene_kind = max(set(child_kinds), key=child_kinds.count) if child_kinds else None
         scene_kind_by_id[str(scene.id)] = scene_kind
         conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
+            "INSERT INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, "
-            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "timeline_parent_id, compressed_at, compression_level, event_kind, owner_id, workspace_id, "
             "memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(memory_id) DO UPDATE SET "
+            "memory_type=excluded.memory_type, title=excluded.title, summary=excluded.summary, "
+            "timespan_start=excluded.timespan_start, timespan_end=excluded.timespan_end, "
+            "importance=excluded.importance, confidence=excluded.confidence, topics=excluded.topics, "
+            "entities=excluded.entities, source_turns=excluded.source_turns, "
+            "timeline_parent_id=excluded.timeline_parent_id, compressed_at=excluded.compressed_at, "
+            "compression_level=excluded.compression_level, event_kind=excluded.event_kind, "
+            "created_at=COALESCE(compressed_memories.created_at, excluded.created_at) "
+            "WHERE compressed_memories.status = 'active'",
             (
                 stable_ids.get(scene.id, scene.id), "scene", scene.title, scene.summary,
                 scene.timespan_start.isoformat(), scene.timespan_end.isoformat(),
                 scene.importance, scene.confidence,
                 json.dumps(scene.topics), json.dumps(scene.entities),
                 json.dumps(scene.evidence_refs), resolved_parent_id, now,
-                1, "active", 0.7, scene_kind, owner_id, workspace_id, memory_domain, now,
+                1, scene_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
@@ -260,20 +276,28 @@ def _write_compressed_memories_to_db(
         arc_kind = max(set(arc_child_kinds), key=arc_child_kinds.count) if arc_child_kinds else None
         arc_kind_by_id[str(arc.id)] = arc_kind
         conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
+            "INSERT INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, "
-            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "timeline_parent_id, compressed_at, compression_level, event_kind, owner_id, workspace_id, "
             "memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(memory_id) DO UPDATE SET "
+            "memory_type=excluded.memory_type, title=excluded.title, summary=excluded.summary, "
+            "timespan_start=excluded.timespan_start, timespan_end=excluded.timespan_end, "
+            "importance=excluded.importance, confidence=excluded.confidence, topics=excluded.topics, "
+            "entities=excluded.entities, source_turns=excluded.source_turns, "
+            "timeline_parent_id=excluded.timeline_parent_id, compressed_at=excluded.compressed_at, "
+            "compression_level=excluded.compression_level, event_kind=excluded.event_kind, "
+            "created_at=COALESCE(compressed_memories.created_at, excluded.created_at) "
+            "WHERE compressed_memories.status = 'active'",
             (
                 stable_ids.get(arc.id, arc.id), "arc", arc.title, arc.summary,
                 arc.timespan_start.isoformat(), arc.timespan_end.isoformat(),
                 arc.importance, arc.confidence,
                 json.dumps(arc.topics), json.dumps(arc.entities),
                 json.dumps(arc.evidence_refs), resolved_parent_id, now,
-                2, "active", 0.4, arc_kind, owner_id, workspace_id, memory_domain, now,
+                2, arc_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
@@ -285,20 +309,28 @@ def _write_compressed_memories_to_db(
         ]
         epoch_kind = max(set(epoch_child_kinds), key=epoch_child_kinds.count) if epoch_child_kinds else None
         conn.execute(
-            "INSERT OR REPLACE INTO compressed_memories "
+            "INSERT INTO compressed_memories "
             "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
             "importance, confidence, topics, entities, source_turns, "
-            "timeline_parent_id, compressed_at, compression_level, status, weight, "
-            "activity_state, retention_state, event_kind, owner_id, workspace_id, "
+            "timeline_parent_id, compressed_at, compression_level, event_kind, owner_id, workspace_id, "
             "memory_domain, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'retained', ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(memory_id) DO UPDATE SET "
+            "memory_type=excluded.memory_type, title=excluded.title, summary=excluded.summary, "
+            "timespan_start=excluded.timespan_start, timespan_end=excluded.timespan_end, "
+            "importance=excluded.importance, confidence=excluded.confidence, topics=excluded.topics, "
+            "entities=excluded.entities, source_turns=excluded.source_turns, "
+            "timeline_parent_id=excluded.timeline_parent_id, compressed_at=excluded.compressed_at, "
+            "compression_level=excluded.compression_level, event_kind=excluded.event_kind, "
+            "created_at=COALESCE(compressed_memories.created_at, excluded.created_at) "
+            "WHERE compressed_memories.status = 'active'",
             (
                 stable_ids.get(epoch.id, epoch.id), "epoch", epoch.title, epoch.summary,
                 epoch.timespan_start.isoformat(), epoch.timespan_end.isoformat(),
                 epoch.importance, epoch.confidence,
                 json.dumps(epoch.topics), json.dumps(epoch.entities),
                 json.dumps(epoch.evidence_refs), None, now,
-                3, "active", 0.2, epoch_kind, owner_id, workspace_id, memory_domain, now,
+                3, epoch_kind, owner_id, workspace_id, memory_domain, now,
             ),
         )
         written += 1
@@ -428,6 +460,7 @@ class Tier1ToTier2Bridge:
         min_backlink_completeness: float = 1.0,
         max_compression_ratio: float = 1.0,
         max_degraded_fraction: float = 0.0,
+        min_event_coverage: float = 1.0,
         min_source_support: float = 0.35,
         min_identifier_fidelity: float = 1.0,
         min_polarity_consistency: float = 1.0,
@@ -452,6 +485,7 @@ class Tier1ToTier2Bridge:
             "min_backlink_completeness": min_backlink_completeness,
             "max_compression_ratio": max_compression_ratio,
             "max_degraded_fraction": max_degraded_fraction,
+            "min_event_coverage": min_event_coverage,
             "min_source_support": min_source_support,
             "min_identifier_fidelity": min_identifier_fidelity,
             "min_polarity_consistency": min_polarity_consistency,
@@ -870,6 +904,18 @@ class Tier1ToTier2Bridge:
             if polarity_consistency_scores else 0.0
         )
         valid_event_fraction = len(accepted_event_ids) / event_count if event_count else 0.0
+        accepted_event_id_set = set(accepted_event_ids)
+        validated_covered_turn_ids = {
+            str(turn_id)
+            for event in events
+            if str(getattr(event, "id", "")) in accepted_event_id_set
+            for turn_id in (getattr(event, "source_turns", []) or [])
+            if str(turn_id) in candidate_ids
+        }
+        validated_event_coverage = (
+            len(validated_covered_turn_ids) / candidate_count
+            if candidate_count else 1.0
+        )
         source_supported_event_count = sum(
             score >= self.quality_thresholds["min_source_support"]
             for score in source_support_scores
@@ -921,6 +967,10 @@ class Tier1ToTier2Bridge:
             failed_checks.append("compression_ratio")
         if degraded_fraction > self.quality_thresholds["max_degraded_fraction"]:
             failed_checks.append("degraded_fraction")
+        if event_coverage < self.quality_thresholds["min_event_coverage"]:
+            failed_checks.append("event_coverage")
+        if accepted_event_ids and validated_event_coverage < self.quality_thresholds["min_event_coverage"]:
+            failed_checks.append("validated_event_coverage")
         if session_boundary_violations:
             failed_checks.append("session_boundary")
         if not accepted_event_ids:
@@ -933,6 +983,7 @@ class Tier1ToTier2Bridge:
             "event_count": event_count,
             "covered_turn_count": len(covered_turn_ids),
             "event_coverage": round(event_coverage, 6),
+            "validated_event_coverage": round(validated_event_coverage, 6),
             "valid_event_count": len(accepted_event_ids),
             "valid_event_fraction": round(valid_event_fraction, 6),
             "accepted_event_ids": accepted_event_ids,

@@ -380,6 +380,7 @@ class SemanticMemoryIndex:
         workspace_id: str,
         source_domains: Sequence[str] = ("agent_interaction",),
         limit: int = 50,
+        as_of: str | None = None,
     ) -> dict[tuple[str, str], float]:
         if not self.enabled or not str(query or "").strip():
             return {}
@@ -391,6 +392,7 @@ class SemanticMemoryIndex:
                     workspace_id=workspace_id,
                     source_domains=source_domains,
                     limit=limit,
+                    as_of=as_of,
                 )
             query_vector = self._embed([str(query)])[0]
             self._validate_vector(query_vector)
@@ -400,7 +402,12 @@ class SemanticMemoryIndex:
                 return {}
 
             def read(conn):
-                if self._vec0_ready:
+                # sqlite-vec applies ``k`` inside the virtual table before
+                # ordinary SQL predicates. A historical filter would
+                # therefore be too late and could lose older candidates to
+                # newer near-duplicates; use the fully filtered path for
+                # snapshot queries.
+                if self._vec0_ready and not as_of:
                     return self._search_vec0(
                         conn,
                         query_vector,
@@ -410,12 +417,34 @@ class SemanticMemoryIndex:
                         bounded_limit,
                     )
                 domain_placeholders = ",".join("?" for _ in domains)
+                as_of_clause = ""
+                as_of_params: list[Any] = []
+                if as_of:
+                    as_of_clause = (
+                        " AND ((source_type = 'turn' AND EXISTS (SELECT 1 FROM turns s "
+                        "WHERE s.turn_id = memory_embeddings.memory_id AND s.owner_id = memory_embeddings.owner_id "
+                        "AND s.workspace_id = memory_embeddings.workspace_id AND s.memory_domain = memory_embeddings.memory_domain "
+                        "AND julianday(s.timestamp) <= julianday(?))) OR (source_type = 'archive' AND EXISTS (SELECT 1 FROM turns_archive s "
+                        "WHERE s.turn_id = memory_embeddings.memory_id AND s.owner_id = memory_embeddings.owner_id "
+                        "AND s.workspace_id = memory_embeddings.workspace_id AND s.memory_domain = memory_embeddings.memory_domain "
+                        "AND julianday(s.timestamp) <= julianday(?))) OR (source_type = 'compressed' AND EXISTS (SELECT 1 FROM compressed_memories s "
+                        "WHERE s.memory_id = memory_embeddings.memory_id AND s.owner_id = memory_embeddings.owner_id "
+                        "AND s.workspace_id = memory_embeddings.workspace_id AND s.memory_domain = memory_embeddings.memory_domain "
+                        "AND julianday(COALESCE(s.created_at, s.compressed_at)) <= julianday(?))) OR (source_type = 'profile' AND EXISTS (SELECT 1 FROM profile_memories s "
+                        "WHERE s.memory_id = memory_embeddings.memory_id AND s.owner_id = memory_embeddings.owner_id "
+                        "AND s.workspace_id = memory_embeddings.workspace_id AND s.memory_domain = memory_embeddings.memory_domain "
+                        "AND julianday(s.created_at) <= julianday(?))) OR (source_type = 'time_summary' AND EXISTS (SELECT 1 FROM time_summaries s "
+                        "WHERE s.summary_id = memory_embeddings.memory_id AND s.owner_id = memory_embeddings.owner_id "
+                        "AND s.workspace_id = memory_embeddings.workspace_id AND s.memory_domain = memory_embeddings.memory_domain "
+                        "AND julianday(s.created_at) <= julianday(?)))"
+                    )
+                    as_of_params = [as_of] * 5
                 return conn.execute(
                     "SELECT source_type, memory_id, vector FROM memory_embeddings "
                     "WHERE provider = ? AND model = ? AND dimensions = ? "
                     "AND ((owner_id = ? AND workspace_id = ?) OR "
                     "(owner_id = ? AND workspace_id = ?)) "
-                    f"AND memory_domain IN ({domain_placeholders})",
+                    f"AND memory_domain IN ({domain_placeholders}){as_of_clause}",
                     (
                         self.config.provider,
                         self.config.model,
@@ -425,6 +454,7 @@ class SemanticMemoryIndex:
                         GLOBAL_SCOPE_ID,
                         GLOBAL_SCOPE_ID,
                         *domains,
+                        *as_of_params,
                     ),
                 ).fetchall()
 
@@ -467,6 +497,7 @@ class SemanticMemoryIndex:
         workspace_id: str,
         source_domains: Sequence[str],
         limit: int,
+        as_of: str | None = None,
     ) -> dict[tuple[str, str], float]:
         from memai.indexes.local_embedding import CharNgramEmbedder
 
@@ -484,30 +515,31 @@ class SemanticMemoryIndex:
         def read(conn):
             return conn.execute(
                 "WITH source_records(source_type, memory_id, owner_id, workspace_id, "
-                "memory_domain, content) AS ("
-                "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, text "
+                "memory_domain, content, record_time) AS ("
+                "SELECT 'turn', turn_id, owner_id, workspace_id, memory_domain, text, timestamp "
                 "FROM turns WHERE compression_status != 'compressed' "
                 "UNION ALL SELECT 'archive', turn_id, owner_id, workspace_id, "
-                "memory_domain, COALESCE(original_text, text_summary, '') "
+                "memory_domain, COALESCE(original_text, text_summary, ''), timestamp "
                 "FROM turns_archive "
                 "UNION ALL SELECT 'compressed', memory_id, owner_id, workspace_id, "
                 "memory_domain, COALESCE(title, '') || ' ' || COALESCE(summary, '') || "
-                "' ' || COALESCE(topics, '') || ' ' || COALESCE(entities, '') "
+                "' ' || COALESCE(topics, '') || ' ' || COALESCE(entities, ''), COALESCE(created_at, compressed_at) "
                 "FROM compressed_memories WHERE status = 'active' AND hidden = 0 "
                 "AND COALESCE(identity_layer, '') != 'founding' "
                 "UNION ALL SELECT 'profile', memory_id, owner_id, workspace_id, "
                 "memory_domain, COALESCE(subject, '') || ' ' || COALESCE(predicate, '') || "
-                "' ' || COALESCE(value, '') || ' ' || COALESCE(summary, '') "
+                "' ' || COALESCE(value, '') || ' ' || COALESCE(summary, ''), created_at "
                 "FROM profile_memories WHERE status = 'active' "
                 "UNION ALL SELECT 'time_summary', summary_id, owner_id, workspace_id, "
                 "memory_domain, COALESCE(title, '') || ' ' || COALESCE(summary, '') || "
-                "' ' || COALESCE(outcomes, '') || ' ' || COALESCE(open_questions, '') "
+                "' ' || COALESCE(outcomes, '') || ' ' || COALESCE(open_questions, ''), created_at "
                 "FROM time_summaries WHERE status = 'active') "
                 "SELECT source_type, memory_id, content FROM source_records "
                 "WHERE ((owner_id = ? AND workspace_id = ?) OR "
                 "(owner_id = ? AND workspace_id = ?)) "
-                f"AND memory_domain IN ({placeholders})",
-                scope_params,
+                f"AND memory_domain IN ({placeholders})"
+                + (" AND julianday(record_time) <= julianday(?)" if as_of else ""),
+                (*scope_params, *([as_of] if as_of else [])),
             ).fetchall()
 
         rows = self._execute_read(read)
@@ -563,8 +595,8 @@ class SemanticMemoryIndex:
             GLOBAL_SCOPE_ID,
             GLOBAL_SCOPE_ID,
             *domains,
-            limit + 10,  # slight overfetch to account for stale/removed refs
         ]
+        params.append(limit + 10)  # slight overfetch to account for stale/removed refs
         rows = conn.execute(
             f"SELECT e.source_type, e.memory_id, e.vector, "
             f"v.distance "

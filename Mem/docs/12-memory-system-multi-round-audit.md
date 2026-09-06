@@ -105,7 +105,9 @@ git diff --check
 - 证据：按失败顺序复跑迁移 + 图召回组合、跨域 promotion 撤销和生命周期异常回滚；最终远程保留测试、记忆资源契约、会话重绑定和 wheel 契约共 164 passed；本地核心回归 217 passed；Ruff、compileall、`git diff --check` 和真实 wheel 构建均通过。
 - 资产边界：root `tests/` 按仓库约定仅保留在开发机、不随远程仓库分发；`Mem/tests/` 与已跟踪的记忆资源契约测试承担远程交付门禁。当前本地回归仍纳入复核证据，但不改变该资产策略。
 - 本次复核新增反例：Profile 的开放有效期（`valid_to = NULL`）在显式时间窗中原先被错误收窄到 `valid_from`；`as_of` 查询还会把 `quarantined` 遗留记录带入普通召回。两项均已修复并增加回归测试。
-- 通过条件：没有未处理 P0/P1；所有 P2/P3 有证据、负责人和后续计划。
+- 本轮再次从实现语义反向复核发现并修复：部分 turn 被事件覆盖时仍会整批归档；重复压缩使用 `INSERT OR REPLACE` 会重置 pin/hidden/access/retention；语义索引在候选预取阶段未应用 `as_of`；Profile 的非 active 同 ID 写入可能复活已撤销事实；跨 scope 复用 profile id 还会发生主键冲突。上述路径现分别使用覆盖率门禁、生命周期保留型 UPSERT、索引侧时间裁剪、冲突忽略和跨 scope ID 隔离，并增加回归测试。
+- 仍未关闭的设计风险：自动 Event→Scene→Arc→Epoch 纵向合并当前明确暂停，跨批次主题不会自动演化；`redact_before_store` 默认关闭且正则脱敏不是完整 PII/密钥防护。两项需要产品/隐私策略决策，不能以测试通过替代。
+- 通过条件：没有未处理 P0；P1 必须已修复或由产品明确接受；所有 P2/P3 有证据、负责人和后续计划。
 
 ## 缺陷登记
 
@@ -118,6 +120,11 @@ git diff --check
 | AUDIT-005 | R4 | P1 | 生命周期异常路径未统一 rollback/close，可能留下半事务和连接泄漏 | 生命周期事务外壳；派生图失败回归 | 已修复 |
 | AUDIT-006 | R6 | P1 | Profile `valid_to = NULL` 表示持续有效，但显式时间窗查询用 `COALESCE(valid_to, valid_from)` 错误排除后续日期 | `application/recall.py` 改为开放区间重叠判断；`test_profile_recall_treats_null_valid_to_as_open_ended` | 已修复 |
 | AUDIT-007 | R6 | P1 | Profile `as_of` 分支未排除 `quarantined` 遗留记录，可能污染普通历史召回 | `application/recall.py` 增加 `status != 'quarantined'`；`test_profile_as_of_recall_excludes_quarantined_legacy_rows` | 已修复 |
+| AUDIT-008 | R6 | P1 | 事件只覆盖部分候选 turn 时仍把整批 turn 归档，未覆盖事实永久失去 Tier 2 表示 | `tier1_to_tier2_bridge.py` 增加 `min_event_coverage` 与 validated coverage 门禁；不完整批次保留 Tier 1；健康信号回归 | 已修复 |
+| AUDIT-009 | R6 | P1 | Tier 2/生命周期/Profile 的 `INSERT OR REPLACE` 删除旧行再插入，重置 pin、隐藏、访问计数、保留和撤销状态 | 桥接/升级改为保留生命周期字段的 UPSERT，Profile 冲突忽略；重复写入状态回归 | 已修复 |
+| AUDIT-010 | R6 | P1 | 语义索引先取全局 top-N 再由 SQL 应用 `as_of`，未来相似记录可挤掉历史候选造成漏召回 | `semantic_index.py` 在向量/本地路径候选阶段按来源时间裁剪；`memory_service.py` 传递 `as_of` | 已修复 |
+| AUDIT-011 | R6 | P1/P2 | 自动长期层级合并暂停；默认原文持久化且脱敏覆盖有限，长期记忆可能膨胀或保存敏感内容 | 现状已明确记录；需产品确认合并策略和隐私硬策略 | 待决 |
+| AUDIT-012 | R6 | P1 | Profile 提取器 id 未按 scope 隔离，跨 owner/workspace 同 id 会覆盖或静默丢弃事实 | `profile_store.py` 对跨 scope 冲突生成隔离 id；Profile 回归通过 | 已修复 |
 
 ## 变更纪律
 

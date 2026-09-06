@@ -106,12 +106,25 @@ def upsert_profile_memory(
         if memory_domain == "agent_interaction"
         else f"{memory_domain}:{profile.id}"
     )
+    # Profile memory_id is historically supplied by the extractor and is not
+    # scope-qualified for the default domain. Never let a collision across
+    # owner/workspace/domain overwrite or suppress another scope's fact.
+    existing_id = conn.execute(
+        "SELECT owner_id, workspace_id, memory_domain FROM profile_memories "
+        "WHERE memory_id = ?",
+        (memory_id,),
+    ).fetchone()
+    if existing_id and tuple(str(value) for value in existing_id) != (
+        str(owner_id), str(workspace_id), str(memory_domain)
+    ):
+        memory_id = f"{owner_id}:{workspace_id}:{memory_domain}:{memory_id}"
     conn.execute(
-        "INSERT OR REPLACE INTO profile_memories "
+        "INSERT INTO profile_memories "
         "(memory_id, memory_domain, memory_kind, subject, predicate, slot_key, value, summary, confidence, "
         "certainty_state, status, valid_from, valid_to, evidence_refs, source_turns, "
         "supersedes, conflict_refs, created_at, updated_at, owner_id, workspace_id, "
-        "capture_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "capture_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(memory_id) DO NOTHING",
         (
             memory_id,
             memory_domain,

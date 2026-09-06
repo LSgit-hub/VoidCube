@@ -41,6 +41,7 @@ class MemoryServiceConfig(BaseModel):
     tier2_batch_size: int = Field(default=25, ge=1, le=1000)
     tier2_scope_timeout_seconds: int = Field(default=180, ge=30, le=3600)
     tier2_min_backlink_completeness: float = Field(default=1.0, ge=0.0, le=1.0)
+    tier2_min_event_coverage: float = Field(default=1.0, ge=0.0, le=1.0)
     tier2_max_compression_ratio: float = Field(default=1.0, gt=0.0)
     tier2_max_degraded_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
     tier2_min_source_support: float = Field(default=0.35, ge=0.0, le=1.0)
