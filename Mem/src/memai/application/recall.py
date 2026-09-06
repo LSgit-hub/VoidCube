@@ -1267,6 +1267,9 @@ def _profile_candidates(
             "AND successor.created_at <= ? "
             "AND EXISTS (SELECT 1 FROM json_each(successor.supersedes) "
             "WHERE json_each.value = profile_memories.memory_id)))",
+            # Historical snapshots may include superseded facts, but legacy
+            # heuristic/quarantined rows are never part of ordinary recall.
+            "status != 'quarantined'",
             "owner_id = ?",
             "workspace_id = ?",
         ]
@@ -1299,7 +1302,11 @@ def _profile_candidates(
         semantic_ids=semantic_ids,
     )
     if plan.timespan_start:
-        clauses.append("COALESCE(valid_to, valid_from) >= ?")
+        # ``valid_to = NULL`` denotes an open-ended fact.  Coalescing it to
+        # ``valid_from`` incorrectly makes an ongoing profile visible only on
+        # its capture date, so explicit historical windows would miss durable
+        # preferences and constraints.
+        clauses.append("(valid_to IS NULL OR valid_to >= ?)")
         params.append(plan.timespan_start)
     if plan.timespan_end:
         clauses.append("valid_from <= ?")

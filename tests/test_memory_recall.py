@@ -132,6 +132,116 @@ def test_recall_context_hides_internal_metadata_by_default() -> None:
     assert "score=0.923" in audit_context
 
 
+def test_profile_recall_treats_null_valid_to_as_open_ended(tmp_path):
+    service = _service(tmp_path)
+    captured = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        profile = SimpleNamespace(
+            id="profile-open-ended",
+            memory_kind="preference",
+            subject="user",
+            predicate="preferred_language",
+            value="中文",
+            summary="用户偏好中文回复。",
+            confidence=0.95,
+            certainty_state="confirmed",
+            status="active",
+            valid_from=captured,
+            valid_to=None,
+            evidence_refs=[],
+            source_turns=[],
+            supersedes=[],
+            conflict_refs=[],
+            created_at=captured,
+        )
+        upsert_profile_memory(
+            conn,
+            profile,
+            owner_id="local-user",
+            workspace_id="default",
+            now=captured.isoformat(),
+        )
+        conn.commit()
+        plan = build_recall_plan(
+            "用户偏好中文",
+            memory_type="profile",
+            timespan_start="2026-03-01T00:00:00+00:00",
+            timespan_end="2026-03-31T23:59:59+00:00",
+        )
+        result = recall_memories(
+            conn,
+            plan,
+            include_tier1=False,
+            limit=5,
+            min_score=0.0,
+            owner_id="local-user",
+            workspace_id="default",
+            now=datetime(2026, 3, 20, tzinfo=timezone.utc),
+        )
+    finally:
+        conn.close()
+
+    assert [item["id"] for item in result["results"]] == ["profile-open-ended"]
+
+
+def test_profile_as_of_recall_excludes_quarantined_legacy_rows(tmp_path):
+    service = _service(tmp_path)
+    captured = datetime(2026, 1, 15, tzinfo=timezone.utc)
+    conn = open_memory_sqlite(service._db_path)
+    try:
+        for memory_id, status in (("profile-active", "active"), ("profile-quarantined", "quarantined")):
+            profile = SimpleNamespace(
+                id=memory_id,
+                memory_kind="preference",
+                subject="user",
+                predicate=(
+                    "preferred_language"
+                    if status == "active"
+                    else "preferred_language_legacy"
+                ),
+                value="中文" if status == "active" else "中文旧记录",
+                summary="用户偏好中文回复。",
+                confidence=0.95,
+                certainty_state="confirmed",
+                status=status,
+                valid_from=captured,
+                valid_to=None,
+                evidence_refs=[],
+                source_turns=[],
+                supersedes=[],
+                conflict_refs=[],
+                created_at=captured,
+            )
+            upsert_profile_memory(
+                conn,
+                profile,
+                owner_id="local-user",
+                workspace_id="default",
+                now=captured.isoformat(),
+            )
+        conn.commit()
+        plan = build_recall_plan(
+            "用户偏好中文",
+            memory_type="profile",
+            as_of="2026-02-01T00:00:00+00:00",
+        )
+        result = recall_memories(
+            conn,
+            plan,
+            include_tier1=False,
+            limit=5,
+            min_score=0.0,
+            owner_id="local-user",
+            workspace_id="default",
+            now=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        )
+    finally:
+        conn.close()
+
+    assert [item["id"] for item in result["results"]] == ["profile-active"]
+
+
 def _service(tmp_path) -> MemoryService:
     return MemoryService(
         MemoryServiceConfig(

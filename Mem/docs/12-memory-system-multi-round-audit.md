@@ -95,6 +95,7 @@ git diff --check
 - 状态：**已完成**。
 - 重点：旧 schema、备份恢复、graph/FTS/embedding 重建、wheel 内容和退役入口扫描。
 - 证据：迁移/备份/恢复回归通过；`tests/test_packaging_contract.py` 24 passed，包含退役集成和 wheel 内容零入口契约；`scripts/build_wheel.py` 真实构建并验证 `dist/voidcube_agent-1.0.0-py3-none-any.whl` 成功。鉴权改动已执行该适用扫描。
+- 追加运维演练（2026-09-06）：`.venv/Scripts/python.exe scripts/smoke_memory_outbox.py --mode all --duration-seconds 180 --interval-seconds 5 --batch-size 20` 通过；HTTP 双 provider healthy、2 个 reporter、0 个 dead letter；恢复 soak 31 个周期、651 次写入、`duplicate_claims=0`，最终 pending/inflight/dead-letter 均为 0。配套 outbox 回归 53 passed。
 - 通过条件：空库、旧库、恢复库均能通过同一组核心不变量；适用扫描零入口。
 
 ### R6：独立复核
@@ -103,6 +104,7 @@ git diff --check
 - 重点：只看已修复代码的反例和残余风险，不重复执行同一轮的证明。
 - 证据：按失败顺序复跑迁移 + 图召回组合、跨域 promotion 撤销和生命周期异常回滚；最终远程保留测试、记忆资源契约、会话重绑定和 wheel 契约共 164 passed；本地核心回归 217 passed；Ruff、compileall、`git diff --check` 和真实 wheel 构建均通过。
 - 资产边界：root `tests/` 按仓库约定仅保留在开发机、不随远程仓库分发；`Mem/tests/` 与已跟踪的记忆资源契约测试承担远程交付门禁。当前本地回归仍纳入复核证据，但不改变该资产策略。
+- 本次复核新增反例：Profile 的开放有效期（`valid_to = NULL`）在显式时间窗中原先被错误收窄到 `valid_from`；`as_of` 查询还会把 `quarantined` 遗留记录带入普通召回。两项均已修复并增加回归测试。
 - 通过条件：没有未处理 P0/P1；所有 P2/P3 有证据、负责人和后续计划。
 
 ## 缺陷登记
@@ -114,6 +116,8 @@ git diff --check
 | AUDIT-003 | R2 | P1 | 长词存在时两字 CJK FTS fallback 污染 Tier 2 候选并压制 graph tier | `lexical_index.py` 限制 fallback；图召回组合回归 | 已修复 |
 | AUDIT-004 | R2/R4 | P2 | 服务配置构造改变进程级 host integration，测试顺序可改变语义召回策略 | 迁移测试作用域恢复 fixture；组合回归 | 已修复 |
 | AUDIT-005 | R4 | P1 | 生命周期异常路径未统一 rollback/close，可能留下半事务和连接泄漏 | 生命周期事务外壳；派生图失败回归 | 已修复 |
+| AUDIT-006 | R6 | P1 | Profile `valid_to = NULL` 表示持续有效，但显式时间窗查询用 `COALESCE(valid_to, valid_from)` 错误排除后续日期 | `application/recall.py` 改为开放区间重叠判断；`test_profile_recall_treats_null_valid_to_as_open_ended` | 已修复 |
+| AUDIT-007 | R6 | P1 | Profile `as_of` 分支未排除 `quarantined` 遗留记录，可能污染普通历史召回 | `application/recall.py` 增加 `status != 'quarantined'`；`test_profile_as_of_recall_excludes_quarantined_legacy_rows` | 已修复 |
 
 ## 变更纪律
 
