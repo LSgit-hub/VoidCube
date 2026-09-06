@@ -79,7 +79,12 @@ CONTEXT_PROBE_TIERS = [
 # A single startup capability probe.  This is deliberately separate from the
 # runtime recovery tiers: it runs only when explicitly requested by the Agent
 # initializer and never while a conversation is being compressed.
-STARTUP_CONTEXT_PROBE_LENGTH = 1_000_000
+#
+# The probe measures the *input* window, not the output cap.  We send a modest
+# output allowance so no provider rejects the probe on output-cap grounds; a
+# 1M output budget is refused by DeepSeek-V4 (input 1M / output 384K), which
+# produced a false "no context available" and a silent 128K fallback.
+STARTUP_PROBE_OUTPUT_BUDGET = 1024
 
 # Default context length when no detection method succeeds.
 DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
@@ -544,56 +549,78 @@ def probe_endpoint_context_length(
     api_key: str = "",
     timeout: tuple[float, float] = (0.5, 20.0),
 ) -> Optional[int]:
-    """Probe an OpenAI-compatible endpoint for a large context capability.
+    """Probe an OpenAI-compatible endpoint for the largest accepted input window.
 
     There is no standard context-limit endpoint in the OpenAI-compatible
-    protocol.  When metadata is absent, a minimal completion request with a
-    large output allowance is the only non-history probe available.  A
-    successful response establishes a lower bound for the accepted window;
-    an error is used only when it contains an explicit context limit.  Other
-    errors (including output-cap errors) are intentionally ignored.
+    protocol.  The previous implementation set a huge ``max_tokens`` (output
+    cap) and treated a successful reply as proof of a large context window.
+    That conflated the *output* cap with the *input* window and was rejected by
+    providers whose completion cap is smaller — e.g. DeepSeek-V4 (1M input,
+    384K output), where ``max_tokens=1M`` was refused and the probe returned
+    None, silently falling back to 128K.
 
-    Callers should invoke this at startup and persist the result.  This
-    function must not be called from the compression loop.
+    Instead we probe the *input* window directly: send a large message with a
+    modest output allowance, stepping down CONTEXT_PROBE_TIERS until one is
+    accepted.  A 2xx reply establishes a lower bound for the accepted window.
+    Output-cap errors (which say nothing about the input window) are ignored
+    rather than treated as a context limit.
+
+    Callers should invoke this at startup and persist the result.  This function
+    must not be called from the compression loop.
     """
     normalized = _normalize_base_url(base_url)
     if not normalized or not api_key or not model:
         return None
     endpoint = normalized + "/chat/completions"
-    payload = {
-        "model": _strip_provider_prefix(model),
-        "messages": [{
-            "role": "user",
-            "content": "Return exactly OK and stop.",
-        }],
-        "max_tokens": STARTUP_CONTEXT_PROBE_LENGTH,
-        "temperature": 0,
-        "stream": False,
-    }
     headers = {"Authorization": f"Bearer {api_key}"}
-    try:
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+    probe_model = _strip_provider_prefix(model)
+
+    for tier in CONTEXT_PROBE_TIERS:  # 128K → 64K → ... → 8K, descending
+        payload = {
+            "model": probe_model,
+            "messages": [{"role": "user", "content": _build_probe_input(tier)}],
+            "max_tokens": STARTUP_PROBE_OUTPUT_BUDGET,
+            "temperature": 0,
+            "stream": False,
+        }
+        try:
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        except Exception as exc:
+            logger.debug("Startup context probe failed for %s (tier %s): %s", model, tier, exc)
+            continue
         if response.ok:
-            return STARTUP_CONTEXT_PROBE_LENGTH
+            return tier
         try:
             body = response.json()
             error_text = json.dumps(body, ensure_ascii=False)
         except Exception:
             error_text = response.text or ""
-        # A provider may reject the requested output allowance because its
-        # completion cap is smaller than 1M.  That says nothing about the
-        # input context window and must not be recorded as one.
+        # An output-cap rejection says nothing about the input window; step
+        # down and keep probing rather than recording a bogus limit.
         error_lower = error_text.lower()
         if "context" not in error_lower and (
             "max_tokens" in error_lower
             or "max completion" in error_lower
             or "output token" in error_lower
         ):
-            return None
-        return parse_context_limit_from_error(error_text)
-    except Exception as exc:
-        logger.debug("Startup context probe failed for %s: %s", model, exc)
-        return None
+            continue
+        limit = parse_context_limit_from_error(error_text)
+        if limit:
+            return limit
+    return None
+
+
+def _build_probe_input(tokens: int) -> str:
+    """Build a message body whose token count roughly matches ``tokens``.
+
+    Uses the ~4 chars/token estimate so the probe actually exercises the input
+    window, rather than a tiny prompt that says nothing about it.  Only used by
+    the startup context probe.
+    """
+    word = "context-probe "
+    target_chars = tokens * 4
+    reps = (target_chars // len(word)) + 1
+    return (word * reps)[:target_chars]
 
 
 def _get_context_cache_path() -> Path:

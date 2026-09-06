@@ -112,7 +112,7 @@ def test_cached_endpoint_metadata_allows_model_detail_enrichment(monkeypatch):
     assert any(url.endswith("/models/model-a") for url in calls)
 
 
-def test_startup_probe_accepts_large_context_capability(monkeypatch):
+def test_startup_probe_accepts_large_input_window(monkeypatch):
     calls = []
 
     class Response:
@@ -129,9 +129,13 @@ def test_startup_probe_accepts_large_context_capability(monkeypatch):
     result = model_metadata.probe_endpoint_context_length(
         "model-a", base_url="https://models.example.test/v1", api_key="secret"
     )
-    assert result == 1_000_000
+    # First attempt already succeeds -> the largest accepted tier (128K) is the
+    # lower bound for the input window.  This probes the INPUT window with a
+    # modest output budget, not the output cap.
+    assert result == model_metadata.CONTEXT_PROBE_TIERS[0]
     assert calls[0][0].endswith("/chat/completions")
-    assert calls[0][1]["max_tokens"] == 1_000_000
+    assert calls[0][1]["max_tokens"] == model_metadata.STARTUP_PROBE_OUTPUT_BUDGET
+    assert len(calls) == 1
 
 
 def test_startup_probe_uses_explicit_context_error_limit(monkeypatch):
@@ -151,12 +155,14 @@ def test_startup_probe_uses_explicit_context_error_limit(monkeypatch):
 def test_startup_probe_does_not_treat_output_cap_as_context_limit(monkeypatch):
     class Response:
         ok = False
-        text = "max_tokens must be less than or equal to 32768"
+        text = ""
 
         def json(self):
-            raise ValueError("not json")
+            return {"error": {"message": "max_tokens must be less than or equal to 32768"}}
 
     monkeypatch.setattr(model_metadata.requests, "post", lambda *args, **kwargs: Response())
+    # An output-cap rejection says nothing about the input window, so every tier
+    # is skipped and the probe reports "unknown" (None) rather than a bogus limit.
     assert model_metadata.probe_endpoint_context_length(
         "model-a", base_url="https://models.example.test/v1", api_key="secret"
     ) is None
