@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 import hashlib
 import json
 import re
+import time
+import uuid
 from typing import Any, Sequence
 
 
@@ -149,6 +151,7 @@ def propose_consolidations(
     min_cluster_size: int = 3,
     min_confidence: float = 0.7,
     mode: str = "auto",
+    stats: dict[str, Any] | None = None,
 ) -> list[ConsolidationProposal]:
     """Find recurring same-level topics and optionally materialize them."""
     if mode not in {"auto", "shadow", "disabled"}:
@@ -158,6 +161,7 @@ def propose_consolidations(
     clauses = [
         "status = 'active'",
         "hidden = 0",
+        "COALESCE(origin_type, '') != 'longitudinal_consolidation'",
         "COALESCE(identity_layer, '') != 'founding'",
         f"memory_type IN ({','.join('?' for _ in _MEMORY_TYPES)})",
     ]
@@ -204,14 +208,27 @@ def propose_consolidations(
                 "memory_domain": str(row[15]),
             }
         )
+    if stats is not None:
+        stats["candidate_count"] = len(records)
+    groups = _cluster(records)
+    if stats is not None:
+        stats["cluster_count"] = len(groups)
     proposals: list[ConsolidationProposal] = []
-    for group in _cluster(records):
+    for group in groups:
         if len(group) < max(2, int(min_cluster_size)):
+            if stats is not None:
+                stats["undersized_skipped"] += 1
             continue
         if not _cohesive(group):
+            if stats is not None:
+                stats["incohesive_skipped"] += 1
             continue
         if min(item["confidence"] for item in group) < float(min_confidence):
+            if stats is not None:
+                stats["low_confidence_skipped"] += 1
             continue
+        if stats is not None:
+            stats["eligible_cluster_count"] += 1
         source_ids = tuple(sorted(item["memory_id"] for item in group))
         seed = "\0".join(
             [group[0]["owner_id"], group[0]["workspace_id"], group[0]["memory_domain"], *source_ids]
@@ -246,7 +263,7 @@ def propose_consolidations(
 
     groups_by_source = {
         tuple(sorted(item["memory_id"] for item in group)): group
-        for group in _cluster(records)
+        for group in groups
     }
     applied_scopes: set[tuple[str, str, str]] = set()
     resolved_proposals: list[ConsolidationProposal] = []
@@ -289,6 +306,8 @@ def propose_consolidations(
         )
         if mode == "auto" and proposal.status == "applied":
             if already_materialized:
+                if stats is not None:
+                    stats["idempotent_skip_count"] += 1
                 resolved_proposals.append(proposal)
                 continue
             group = groups_by_source[proposal.source_memory_ids]
@@ -387,6 +406,16 @@ def run_consolidation(
     min_confidence: float = 0.7,
     mode: str = "auto",
 ) -> dict[str, Any]:
+    started = time.perf_counter()
+    stats: dict[str, Any] = {
+        "candidate_count": 0,
+        "cluster_count": 0,
+        "eligible_cluster_count": 0,
+        "low_confidence_skipped": 0,
+        "undersized_skipped": 0,
+        "incohesive_skipped": 0,
+        "idempotent_skip_count": 0,
+    }
     proposals = propose_consolidations(
         conn,
         owner_id=owner_id,
@@ -396,8 +425,9 @@ def run_consolidation(
         min_cluster_size=min_cluster_size,
         min_confidence=min_confidence,
         mode=mode,
+        stats=stats,
     )
-    return {
+    result = {
         "mode": mode,
         "proposals_generated": len(proposals),
         "applied_count": sum(proposal.applied_now for proposal in proposals),
@@ -407,3 +437,67 @@ def run_consolidation(
         ),
         "proposals": [proposal.to_dict() for proposal in proposals],
     }
+    if mode != "disabled":
+        result.update(stats)
+        result["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        conn.execute(
+            "INSERT INTO memory_consolidation_runs "
+            "(run_id, owner_id, workspace_id, memory_domain, mode, candidate_count, "
+            "cluster_count, eligible_cluster_count, proposals_generated, applied_count, "
+            "conflict_count, low_confidence_skipped, undersized_skipped, "
+            "incohesive_skipped, idempotent_skip_count, changed_count, duration_ms, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            (
+                "mcr_" + uuid.uuid4().hex,
+                owner_id,
+                workspace_id,
+                memory_domain,
+                mode,
+                result["candidate_count"],
+                result["cluster_count"],
+                result["eligible_cluster_count"],
+                result["proposals_generated"],
+                result["applied_count"],
+                result["conflict_count"],
+                result["low_confidence_skipped"],
+                result["undersized_skipped"],
+                result["incohesive_skipped"],
+                result["idempotent_skip_count"],
+                result["changed_count"],
+                result["duration_ms"],
+            ),
+        )
+    return result
+
+
+def latest_consolidation_run(conn, *, owner_id: str | None = None,
+                             workspace_id: str | None = None,
+                             memory_domain: str | None = None) -> dict[str, Any] | None:
+    """Return the newest persisted consolidation metrics for an optional scope."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    for column, value in (("owner_id", owner_id), ("workspace_id", workspace_id), ("memory_domain", memory_domain)):
+        if value is not None:
+            clauses.append(f"{column} = ?")
+            params.append(str(value))
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    row = conn.execute(
+        "SELECT run_id, owner_id, workspace_id, memory_domain, mode, candidate_count, "
+        "cluster_count, eligible_cluster_count, proposals_generated, applied_count, "
+        "conflict_count, low_confidence_skipped, undersized_skipped, incohesive_skipped, "
+        "idempotent_skip_count, changed_count, duration_ms, created_at "
+        "FROM memory_consolidation_runs" + where + " ORDER BY created_at DESC, run_id DESC LIMIT 1",
+        params,
+    ).fetchone()
+    if row is None:
+        return None
+    keys = ("run_id", "owner_id", "workspace_id", "memory_domain", "mode", "candidate_count",
+            "cluster_count", "eligible_cluster_count", "proposals_generated", "applied_count",
+            "conflict_count", "low_confidence_skipped", "undersized_skipped", "incohesive_skipped",
+            "idempotent_skip_count", "changed_count", "duration_ms", "created_at")
+    result = dict(zip(keys, row))
+    for key in keys[5:16]:
+        result[key] = int(result[key] or 0)
+    result["changed_count"] = int(result["changed_count"] or 0)
+    result["duration_ms"] = float(result["duration_ms"] or 0.0)
+    return result

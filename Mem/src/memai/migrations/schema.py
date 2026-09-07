@@ -365,6 +365,30 @@ class MemoryDatabaseBootstrap:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS memory_consolidation_runs (
+                run_id TEXT PRIMARY KEY,
+                owner_id TEXT,
+                workspace_id TEXT,
+                memory_domain TEXT,
+                mode TEXT NOT NULL,
+                candidate_count INTEGER NOT NULL DEFAULT 0,
+                cluster_count INTEGER NOT NULL DEFAULT 0,
+                eligible_cluster_count INTEGER NOT NULL DEFAULT 0,
+                proposals_generated INTEGER NOT NULL DEFAULT 0,
+                applied_count INTEGER NOT NULL DEFAULT 0,
+                conflict_count INTEGER NOT NULL DEFAULT 0,
+                low_confidence_skipped INTEGER NOT NULL DEFAULT 0,
+                undersized_skipped INTEGER NOT NULL DEFAULT 0,
+                incohesive_skipped INTEGER NOT NULL DEFAULT 0,
+                idempotent_skip_count INTEGER NOT NULL DEFAULT 0,
+                changed_count INTEGER NOT NULL DEFAULT 0,
+                duration_ms REAL NOT NULL DEFAULT 0.0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS recall_traces (
                 trace_id TEXT PRIMARY KEY,
                 memory_actor TEXT NOT NULL DEFAULT 'api_a',

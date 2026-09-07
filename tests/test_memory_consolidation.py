@@ -231,6 +231,39 @@ def test_consolidation_http_routes_are_exposed(tmp_path):
     assert listed.json()["count"] == 0
 
 
+def test_consolidation_run_metrics_are_persisted_and_idempotent(tmp_path):
+    service = _service(tmp_path)
+    for suffix in ("a", "b", "c"):
+        _insert_event(service, f"metric-{suffix}", "Shared database migration")
+
+    import asyncio
+
+    first = asyncio.run(service.run_longitudinal_consolidation())
+    second = asyncio.run(service.run_longitudinal_consolidation())
+    latest = asyncio.run(service.latest_consolidation_run())
+    status = asyncio.run(service.rules_status())
+
+    assert first["candidate_count"] == 3
+    assert first["cluster_count"] == 1
+    assert first["eligible_cluster_count"] == 1
+    assert first["duration_ms"] >= 0
+    assert second["idempotent_skip_count"] == 1
+    assert second["changed_count"] == 0
+    assert latest["idempotent_skip_count"] == 1
+    assert latest["duration_ms"] >= 0
+    assert status["longitudinal_consolidation_last_run"]["run_id"] == latest["run_id"]
+
+
+def test_latest_consolidation_metrics_http_route(tmp_path):
+    service = _service(tmp_path)
+    client = TestClient(service.app)
+
+    response = client.get("/compressed/consolidation/latest")
+
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
 def test_retired_lifecycle_shim_never_creates_age_successors(tmp_path):
     service = _service(tmp_path)
     _insert_event(service, "legacy-event", "A historical event")

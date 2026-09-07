@@ -70,7 +70,10 @@ from memai.repository.sqlite_repository import (
 )
 from memai.transport.http_adapter import build_memory_http_app
 from memai.application.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
-from memai.application.longitudinal_consolidation import run_consolidation
+from memai.application.longitudinal_consolidation import (
+    latest_consolidation_run as get_latest_consolidation_run,
+    run_consolidation,
+)
 from memai.application.maintenance_schedule import (
     claim_rule_execution,
     get_rule_state,
@@ -1573,6 +1576,7 @@ class MemoryApplicationService:
             "compression_quality": self.compression_quality,
             "run_longitudinal_consolidation": self.run_longitudinal_consolidation,
             "list_consolidation_proposals": self.list_consolidation_proposals,
+            "latest_consolidation_run": self.latest_consolidation_run,
         }
 
     async def create_backup(self):
@@ -1797,7 +1801,10 @@ class MemoryApplicationService:
         memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
         limit: int = 50,
     ):
-        authorized_domain = _authorized_read_domains(memory_actor, (memory_domain,))[0]
+        # Normalize the transport string before authorization so static type
+        # checkers see the same domain enum that the runtime receives.
+        requested_domain = MemoryDomain(memory_domain)
+        authorized_domain = _authorized_read_domains(memory_actor, [requested_domain])[0]
         rows = self._repository_read(
             lambda conn: conn.execute(
                 "SELECT proposal_id, owner_id, workspace_id, memory_domain, "
@@ -1834,6 +1841,25 @@ class MemoryApplicationService:
             ],
             "count": len(rows),
         }
+
+    async def latest_consolidation_run(
+        self,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_domain: str = DEFAULT_MEMORY_DOMAIN.value,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+    ):
+        """Return persisted metrics for the newest consolidation run in scope."""
+        requested_domain = MemoryDomain(memory_domain)
+        authorized_domain = _authorized_read_domains(memory_actor, [requested_domain])[0]
+        return self._repository_read(
+            lambda conn: get_latest_consolidation_run(
+                conn,
+                owner_id=str(owner_id),
+                workspace_id=str(workspace_id),
+                memory_domain=authorized_domain,
+            )
+        ) or {}
 
     @staticmethod
     def _identity_revision_row(row) -> Dict[str, Any]:
@@ -2771,6 +2797,14 @@ class MemoryApplicationService:
             "longitudinal_consolidation",
             repository=self._repository,
         )
+        latest_consolidation = self._repository_read(
+            lambda conn: get_latest_consolidation_run(
+                conn,
+                owner_id=DEFAULT_OWNER_ID,
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                memory_domain=DEFAULT_MEMORY_DOMAIN.value,
+            )
+        )
         maintenance_run = self._maintenance_run_snapshot()
         return {
             **{
@@ -2809,6 +2843,7 @@ class MemoryApplicationService:
             "longitudinal_consolidation_mode": self.config.longitudinal_consolidation_mode,
             "longitudinal_consolidation_min_confidence": self.config.longitudinal_consolidation_min_confidence,
             "longitudinal_consolidation_state": consolidation_state,
+            "longitudinal_consolidation_last_run": latest_consolidation,
             "tier2_bridge_last_result": self._last_tier2_bridge_result,
             # P0-4 健康信号: last cycle that performed real write work, and the
             # last time LLM health was actually probed. UI computes memory_active

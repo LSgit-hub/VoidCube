@@ -127,6 +127,11 @@ MEMORY_HTTP_ROUTES = (
         "list_consolidation_proposals",
         ("GET",),
     ),
+    MemoryHttpRoute(
+        "/compressed/consolidation/latest",
+        "latest_consolidation_run",
+        ("GET",),
+    ),
 )
 
 
