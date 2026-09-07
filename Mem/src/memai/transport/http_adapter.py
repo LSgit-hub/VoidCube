@@ -117,6 +117,16 @@ MEMORY_HTTP_ROUTES = (
         ("GET",),
     ),
     MemoryHttpRoute("/compressed/quality", "compression_quality", ("GET",)),
+    MemoryHttpRoute(
+        "/compressed/consolidation",
+        "run_longitudinal_consolidation",
+        ("POST",),
+    ),
+    MemoryHttpRoute(
+        "/compressed/consolidation/proposals",
+        "list_consolidation_proposals",
+        ("GET",),
+    ),
 )
 
 

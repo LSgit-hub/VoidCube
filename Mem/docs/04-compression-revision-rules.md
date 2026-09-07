@@ -17,6 +17,12 @@
 较旧的 Event、Scene、Arc、Epoch 可以参与检索、主题演变、状态分析和证据追踪，
 但当前不会因为 14、60、180 或 365 天过去而自动生成 successor 并取代原记录。
 
+跨批次长期演化由 `longitudinal_consolidation` 维护规则负责：它只在相同
+`owner/workspace/domain` 内按同一记忆层级发现重复主题，写入带确定性 ID 的
+`memory_consolidation_proposals` 审计记录。默认 `auto` 模式会直接创建可追溯的派生
+记忆，且不修改或删除来源；冲突簇自动拒绝合并，不进入人工审核队列。`shadow`
+仅用于开发期诊断，不是生产存储流程。
+
 ## 3. Tier 1 保留与处理窗口
 
 - `0-7 days`：原始 Turn 保持在 Tier 1，继续接受相关性衰减。

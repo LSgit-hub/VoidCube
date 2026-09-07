@@ -88,6 +88,7 @@ class MemoryBackupManager:
         "memory_rule_state",
         "memory_runtime_state",
         "memory_write_receipts",
+        "memory_consolidation_proposals",
     )
 
     def __init__(self, db_path: str | Path, *, retention_count: int = 5) -> None:

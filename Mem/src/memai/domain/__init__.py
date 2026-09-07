@@ -1,1 +1,1 @@
-"""Core memory contracts, scopes, lifecycle policy, and time summaries."""
+"""Core memory contracts, scopes, retention policy, and time summaries."""

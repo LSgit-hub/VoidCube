@@ -177,14 +177,25 @@ def load_config_from_env() -> SystemConfig:
             "MEMORY_WRITE_SHUTDOWN_TIMEOUT_SECONDS",
             "memory_write_shutdown_timeout_seconds",
         ),
-        ("MEMORY_LIFECYCLE_CADENCE_DAYS", "lifecycle_cadence_days"),
-        ("MEMORY_EVENT_TO_SCENE_DAYS", "lifecycle_event_to_scene_days"),
-        ("MEMORY_SCENE_TO_ARC_DAYS", "lifecycle_scene_to_arc_days"),
-        ("MEMORY_ARC_TO_EPOCH_DAYS", "lifecycle_arc_to_epoch_days"),
-        ("MEMORY_EPOCH_TO_FINAL_DAYS", "lifecycle_epoch_to_final_days"),
-        ("MEMORY_FINAL_REVIEW_DAYS", "lifecycle_final_review_days"),
+        (
+            "MEMORY_LONGITUDINAL_CONSOLIDATION_MIN_CLUSTER_SIZE",
+            "longitudinal_consolidation_min_cluster_size",
+        ),
+        (
+            "MEMORY_LONGITUDINAL_CONSOLIDATION_LIMIT",
+            "longitudinal_consolidation_limit",
+        ),
     ):
         _apply_int_override(config.memory, env_name, field_name)
+    config.memory.longitudinal_consolidation_mode = os.getenv(
+        "MEMORY_LONGITUDINAL_CONSOLIDATION_MODE",
+        config.memory.longitudinal_consolidation_mode,
+    ).strip().lower()
+    _apply_float_override(
+        config.memory,
+        "MEMORY_LONGITUDINAL_CONSOLIDATION_MIN_CONFIDENCE",
+        "longitudinal_consolidation_min_confidence",
+    )
     for env_name, field_name in (
         ("MEMORY_WRITE_BATCH_WAIT_MS", "memory_write_batch_wait_ms"),
         (

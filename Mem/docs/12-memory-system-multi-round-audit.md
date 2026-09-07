@@ -106,7 +106,7 @@ git diff --check
 - 资产边界：root `tests/` 按仓库约定仅保留在开发机、不随远程仓库分发；`Mem/tests/` 与已跟踪的记忆资源契约测试承担远程交付门禁。当前本地回归仍纳入复核证据，但不改变该资产策略。
 - 本次复核新增反例：Profile 的开放有效期（`valid_to = NULL`）在显式时间窗中原先被错误收窄到 `valid_from`；`as_of` 查询还会把 `quarantined` 遗留记录带入普通召回。两项均已修复并增加回归测试。
 - 本轮再次从实现语义反向复核发现并修复：部分 turn 被事件覆盖时仍会整批归档；重复压缩使用 `INSERT OR REPLACE` 会重置 pin/hidden/access/retention；语义索引在候选预取阶段未应用 `as_of`；Profile 的非 active 同 ID 写入可能复活已撤销事实；跨 scope 复用 profile id 还会发生主键冲突。上述路径现分别使用覆盖率门禁、生命周期保留型 UPSERT、索引侧时间裁剪、冲突忽略和跨 scope ID 隔离，并增加回归测试。
-- 仍未关闭的设计风险：自动 Event→Scene→Arc→Epoch 纵向合并当前明确暂停，跨批次主题不会自动演化；`redact_before_store` 默认关闭且正则脱敏不是完整 PII/密钥防护。两项需要产品/隐私策略决策，不能以测试通过替代。
+- 本轮已清退按年龄逐条生成 successor 的旧生命周期实现。长期演化改为跨批次、同层级、同作用域的 `longitudinal_consolidation` 自动派生流程；无冲突且达到置信门槛的簇直接创建新记忆，冲突簇自动拒绝，来源始终保留。人工审核不属于此流程，`shadow` 仅保留为开发诊断模式。`redact_before_store` 默认关闭且正则脱敏不是完整 PII/密钥防护，按产品决策暂不处理。
 - 通过条件：没有未处理 P0；P1 必须已修复或由产品明确接受；所有 P2/P3 有证据、负责人和后续计划。
 
 ## 缺陷登记
@@ -123,7 +123,7 @@ git diff --check
 | AUDIT-008 | R6 | P1 | 事件只覆盖部分候选 turn 时仍把整批 turn 归档，未覆盖事实永久失去 Tier 2 表示 | `tier1_to_tier2_bridge.py` 增加 `min_event_coverage` 与 validated coverage 门禁；不完整批次保留 Tier 1；健康信号回归 | 已修复 |
 | AUDIT-009 | R6 | P1 | Tier 2/生命周期/Profile 的 `INSERT OR REPLACE` 删除旧行再插入，重置 pin、隐藏、访问计数、保留和撤销状态 | 桥接/升级改为保留生命周期字段的 UPSERT，Profile 冲突忽略；重复写入状态回归 | 已修复 |
 | AUDIT-010 | R6 | P1 | 语义索引先取全局 top-N 再由 SQL 应用 `as_of`，未来相似记录可挤掉历史候选造成漏召回 | `semantic_index.py` 在向量/本地路径候选阶段按来源时间裁剪；`memory_service.py` 传递 `as_of` | 已修复 |
-| AUDIT-011 | R6 | P1/P2 | 自动长期层级合并暂停；默认原文持久化且脱敏覆盖有限，长期记忆可能膨胀或保存敏感内容 | 现状已明确记录；需产品确认合并策略和隐私硬策略 | 待决 |
+| AUDIT-011 | R6 | P1/P2 | 旧年龄升级会逐条制造 successor，跨批次主题无法演化，且配置/重试逻辑复杂 | 已删除年龄升级与 LLM successor 链；新增跨批次自动派生、置信门槛、冲突自动拒绝、确定性幂等和 scope 隔离测试 | 已修复 |
 | AUDIT-012 | R6 | P1 | Profile 提取器 id 未按 scope 隔离，跨 owner/workspace 同 id 会覆盖或静默丢弃事实 | `profile_store.py` 对跨 scope 冲突生成隔离 id；Profile 回归通过 | 已修复 |
 
 ## 变更纪律

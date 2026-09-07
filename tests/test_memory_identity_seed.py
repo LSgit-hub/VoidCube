@@ -401,4 +401,7 @@ async def test_only_self_authored_sources_settle_into_identity_history(
     finally:
         conn.close()
     lifecycle = await service._apply_compression_lifecycle()
-    assert lifecycle == {"escalated": 0, "purged": 0}
+    assert lifecycle["escalated"] == 0
+    assert lifecycle["purged"] == 0
+    assert lifecycle["mode"] == "auto"
+    assert lifecycle["proposals_generated"] == 0

@@ -28,10 +28,6 @@ from memai.application.memory_service import (
     Tier2CompressRequest,
     TurnCreate,
 )
-from memai.domain.lifecycle_policy import (
-    evaluate_lifecycle_quality,
-    lifecycle_age_thresholds,
-)
 from memai.application.maintenance_schedule import (
     claim_rule_execution,
     get_rule_state,
@@ -63,24 +59,20 @@ def test_memory_timing_defaults_match_weekly_consolidation_policy(tmp_path):
 
     assert config.tier1_retention_days == 7
     assert config.tier2_batch_size == 25
-    assert config.lifecycle_cadence_days == 7
-    assert lifecycle_age_thresholds(config) == (
-        (("event", 0), 14),
-        (("scene", 1), 60),
-        (("arc", 2), 180),
-        (("epoch", 3), 365),
-        (("epoch", 4), 90),
-    )
+    assert config.longitudinal_consolidation_mode == "auto"
+    assert config.longitudinal_consolidation_min_cluster_size == 3
+    assert config.longitudinal_consolidation_min_confidence == 0.7
+    assert config.longitudinal_consolidation_limit == 20
 
 
 def test_scheduled_rule_claim_uses_a_lease_to_prevent_duplicate_work(tmp_path):
     db_path = tmp_path / "mem.db"
 
     first = claim_rule_execution(
-        db_path, rule_name="lifecycle_escalation", cadence_days=7
+        db_path, rule_name="longitudinal_consolidation", cadence_days=7
     )
     second = claim_rule_execution(
-        db_path, rule_name="lifecycle_escalation", cadence_days=7
+        db_path, rule_name="longitudinal_consolidation", cadence_days=7
     )
 
     assert first.due is True
@@ -88,91 +80,23 @@ def test_scheduled_rule_claim_uses_a_lease_to_prevent_duplicate_work(tmp_path):
     assert second.skip_reason == "in_progress"
 
     record_rule_result(
-        db_path, rule_name="lifecycle_escalation", succeeded=True
+        db_path, rule_name="longitudinal_consolidation", succeeded=True
     )
     after_success = claim_rule_execution(
-        db_path, rule_name="lifecycle_escalation", cadence_days=7
+        db_path, rule_name="longitudinal_consolidation", cadence_days=7
     )
     assert after_success.due is False
     assert after_success.skip_reason == "cadence"
 
 
 @pytest.mark.asyncio
-async def test_scheduled_lifecycle_cadence_persists_across_restarts(
-    tmp_path, monkeypatch
-):
-    first = _make_service(tmp_path)
-    async def no_op():
-        return 0
-
-    async def lifecycle():
-        pytest.fail("automatic lifecycle escalation must remain disabled")
-
-    for service in (first,):
-        monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
-        monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
-        monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
-        monkeypatch.setattr(service, "_apply_compression_lifecycle", lifecycle)
-        monkeypatch.setattr(service, "_purge_expired_memories", no_op)
-
-    initial = await first._run_all_rules_internal(respect_cadence=True)
-    assert initial["lifecycle_escalation"]["skipped"] == "disabled"
-
-    restarted = _make_service(tmp_path)
-    monkeypatch.setattr(restarted, "_identity_experience_cycle", no_op)
-    monkeypatch.setattr(restarted, "_tier1_decay_cycle", no_op)
-    monkeypatch.setattr(restarted, "_tier2_bridge_cycle", no_op)
-    monkeypatch.setattr(restarted, "_apply_compression_lifecycle", lifecycle)
-    monkeypatch.setattr(restarted, "_purge_expired_memories", no_op)
-
-    throttled = await restarted._run_all_rules_internal(respect_cadence=True)
-    assert throttled["lifecycle_escalation"]["skipped"] == "disabled"
-    assert get_rule_state(
-        restarted._db_path, "lifecycle_escalation"
-    )["last_succeeded_at"] is None
-
-
-@pytest.mark.asyncio
-async def test_disabled_scheduled_lifecycle_does_not_call_legacy_escalation(
-    tmp_path, monkeypatch
-):
+async def test_longitudinal_consolidation_rule_runs_in_maintenance(tmp_path, monkeypatch):
     service = _make_service(tmp_path)
 
-    async def no_op():
-        return 0
+    result = await service._longitudinal_consolidation_cycle()
 
-    async def failing_lifecycle():
-        pytest.fail("automatic lifecycle escalation must remain disabled")
-
-    monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
-    monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
-    monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
-    monkeypatch.setattr(service, "_apply_compression_lifecycle", failing_lifecycle)
-    monkeypatch.setattr(service, "_purge_expired_memories", no_op)
-
-    first = await service._run_all_rules_internal(respect_cadence=True)
-    second = await service._run_all_rules_internal(respect_cadence=True)
-
-    assert first["lifecycle_escalation"]["skipped"] == "disabled"
-    assert second["lifecycle_escalation"]["skipped"] == "disabled"
-    state = get_rule_state(service._db_path, "lifecycle_escalation")
-    assert state["last_succeeded_at"] is None
-    assert state["last_error"] is None
-
-
-@pytest.mark.asyncio
-async def test_trigger_lifecycle_does_not_escalate_by_default(tmp_path, monkeypatch):
-    service = _make_service(tmp_path)
-
-    async def fail_escalation():
-        pytest.fail("manual lifecycle escalation must be explicitly disabled")
-
-    monkeypatch.setattr(service, "_apply_compression_lifecycle", fail_escalation)
-    result = await service.trigger_lifecycle()
-
-    assert result["status"] == "ok"
-    assert "escalation" not in result
-    assert result["purge"] == {"deleted": 0}
+    assert result["mode"] == "auto"
+    assert result["proposals_generated"] == 0
 
 
 @pytest.mark.asyncio
@@ -190,7 +114,7 @@ async def test_public_maintenance_request_shares_background_rule_cadence(
     monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
     monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
     monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
-    monkeypatch.setattr(service, "_apply_compression_lifecycle", lifecycle)
+    monkeypatch.setattr(service, "_longitudinal_consolidation_cycle", lifecycle)
     monkeypatch.setattr(service, "_purge_expired_memories", no_op)
 
     first = await service.run_all_rules()
@@ -216,7 +140,7 @@ async def test_public_maintenance_request_shares_background_rule_cadence(
     assert rules["tier1_decay"] == {"skipped": "cadence"}
     assert rules["tier2_bridge"] == {"skipped": "cadence"}
     assert rules["refresh_dormant_arcs"] == {"skipped": "cadence"}
-    assert rules["lifecycle_escalation"]["skipped"] == "disabled"
+    assert rules["longitudinal_consolidation"] == {"skipped": "cadence"}
     assert rules["purge_expired"] == {"skipped": "cadence"}
     assert rules["_effective_work"] == 0
 
@@ -240,7 +164,7 @@ async def test_public_maintenance_request_reports_in_progress_without_duplicate_
     monkeypatch.setattr(service, "_identity_experience_cycle", blocking_identity_cycle)
     monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
     monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
-    monkeypatch.setattr(service, "_apply_compression_lifecycle", no_op)
+    monkeypatch.setattr(service, "_longitudinal_consolidation_cycle", no_op)
     monkeypatch.setattr(service, "_purge_expired_memories", no_op)
 
     accepted = await service.run_all_rules()
@@ -269,7 +193,7 @@ async def test_requested_maintenance_records_rule_failure(tmp_path, monkeypatch)
     monkeypatch.setattr(service, "_identity_experience_cycle", no_op)
     monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
     monkeypatch.setattr(service, "_tier2_bridge_cycle", failing_bridge)
-    monkeypatch.setattr(service, "_apply_compression_lifecycle", no_op)
+    monkeypatch.setattr(service, "_longitudinal_consolidation_cycle", no_op)
     monkeypatch.setattr(service, "_purge_expired_memories", no_op)
 
     accepted = await service.run_all_rules()
@@ -323,7 +247,7 @@ async def test_overlapping_maintenance_request_is_skipped(tmp_path, monkeypatch)
     )
     monkeypatch.setattr(service, "_tier1_decay_cycle", no_op)
     monkeypatch.setattr(service, "_tier2_bridge_cycle", no_op)
-    monkeypatch.setattr(service, "_apply_compression_lifecycle", no_op)
+    monkeypatch.setattr(service, "_longitudinal_consolidation_cycle", no_op)
     monkeypatch.setattr(service, "_purge_expired_memories", no_op)
 
     active = asyncio.create_task(service._run_all_rules_internal())
@@ -506,6 +430,7 @@ def test_rule_effective_count_across_return_shapes():
     assert f({"escalated": 2, "purged": 3}) == 5
     assert f({"turns_processed": 4}) == 4
     assert f({"deleted": 6}) == 6
+    assert f({"changed_count": 2, "proposals_generated": 8}) == 2
     assert f({"error": "boom"}) == 0
     assert f(None) == 0
 
@@ -728,7 +653,7 @@ async def test_rules_status_exposes_memory_maintenance_due_gate(tmp_path):
             "tier1_decay",
             "tier2_bridge",
             "refresh_dormant_arcs",
-            "lifecycle_escalation",
+            "longitudinal_consolidation",
             "purge_expired",
         )
     }
@@ -821,219 +746,6 @@ async def test_rule_failure_is_logged_as_warning(tmp_path, caplog):
 
     assert result["tier1_decay"]["error"] == "decay boom"
     assert "Memory maintenance rule tier1_decay failed" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_lifecycle_escalation_preserves_source_turns_and_derivation_link(tmp_path):
-    svc = _make_service(tmp_path)
-    old_compressed_at = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        conn.execute(
-            "INSERT INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "importance, confidence, topics, entities, source_turns, timeline_parent_id, "
-            "compressed_at, compression_level, status, weight) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                "event-child-1",
-                "event",
-                "Child event",
-                "Original event summary",
-                old_compressed_at,
-                old_compressed_at,
-                0.8,
-                0.9,
-                json.dumps(["memory"]),
-                json.dumps(["VoidCube"]),
-                json.dumps(["turn-1", "turn-2"]),
-                None,
-                old_compressed_at,
-                0,
-                "active",
-                1.0,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    async def fake_escalate_summary(**kwargs):
-        return "Parent scene", "Original event summary escalated into a scene."
-
-    svc._llm_escalate_summary = fake_escalate_summary  # type: ignore[method-assign]
-
-    result = await svc._apply_compression_lifecycle()
-
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        parent = conn.execute(
-            "SELECT memory_id, derived_from_id, source_turns, memory_type, compression_level "
-            "FROM compressed_memories WHERE memory_type = 'scene'",
-        ).fetchone()
-        child = conn.execute(
-            "SELECT status, superseded_by FROM compressed_memories WHERE memory_id = ?",
-            ("event-child-1",),
-        ).fetchone()
-    finally:
-        conn.close()
-
-    assert result["escalated"] == 1
-    assert parent[1] == "event-child-1"
-    assert json.loads(parent[2]) == ["turn-1", "turn-2"]
-    assert parent[3] == "scene"
-    assert parent[4] == 1
-    assert child[0] == "superseded"
-    assert child[1] == parent[0]
-
-
-@pytest.mark.asyncio
-async def test_lifecycle_rejects_summary_with_unsupported_identifier(tmp_path):
-    svc = _make_service(tmp_path)
-    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        conn.execute(
-            "INSERT INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "compressed_at, compression_level, status, source_turns) "
-            "VALUES ('event-hallucination', 'event', 'Release', 'Release completed', "
-            "?, ?, ?, 0, 'active', '[]')",
-            (old, old, old),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    async def hallucinate(**kwargs):
-        return "Release", "Release completed with invented ticket ZX-9999."
-
-    svc._llm_escalate_summary = hallucinate  # type: ignore[method-assign]
-    result = await svc._apply_compression_lifecycle()
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        status, retry_count, retry_after = conn.execute(
-            "SELECT status, lifecycle_retry_count, lifecycle_retry_after "
-            "FROM compressed_memories WHERE memory_id = 'event-hallucination'"
-        ).fetchone()
-    finally:
-        conn.close()
-    assert result["quality_rejected"] == 1
-    assert status == "active"
-    assert retry_count == 1
-    assert retry_after is not None
-
-
-@pytest.mark.asyncio
-async def test_lifecycle_rolls_back_and_closes_connection_on_derived_index_failure(
-    tmp_path, monkeypatch
-):
-    svc = _make_service(tmp_path)
-    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        conn.execute(
-            "INSERT INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "topics, entities, compressed_at, compression_level, status, source_turns) "
-            "VALUES ('event-transactional', 'event', 'Release', "
-            "'Release completed with durable evidence.', ?, ?, ?, ?, ?, 0, 'active', '[]')",
-            (old, old, json.dumps(["release"]), json.dumps(["project"]), old),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    async def escalate(**kwargs):
-        return "Release scene", "Release completed with durable evidence."
-
-    def fail_rebuild(*args, **kwargs):
-        raise RuntimeError("entity graph unavailable")
-
-    svc._llm_escalate_summary = escalate  # type: ignore[method-assign]
-    monkeypatch.setattr("memai.indexes.entity_graph.rebuild_entity_graph", fail_rebuild)
-
-    with pytest.raises(RuntimeError, match="entity graph unavailable"):
-        result = await svc._apply_compression_lifecycle()
-
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        original = conn.execute(
-            "SELECT status, superseded_by FROM compressed_memories "
-            "WHERE memory_id = 'event-transactional'"
-        ).fetchone()
-        successor_count = conn.execute(
-            "SELECT COUNT(*) FROM compressed_memories WHERE derived_from_id = 'event-transactional'"
-        ).fetchone()[0]
-    finally:
-        conn.close()
-
-    assert original == ("active", None)
-    assert successor_count == 0
-
-
-def test_lifecycle_quality_uses_abstraction_specific_configurable_thresholds():
-    quality = evaluate_lifecycle_quality(
-        source_title="API migration 2026",
-        source_summary="The database migration completed after staged validation.",
-        proposed_title="Migration era",
-        proposed_summary="A validated transition established the next operational era for API migration 2026.",
-        min_source_support=0.15,
-        min_identifier_fidelity=0.8,
-    )
-    assert quality.passed is True
-
-
-@pytest.mark.asyncio
-async def test_lifecycle_quality_rejection_stops_after_configured_attempts(tmp_path):
-    svc = _make_service(tmp_path)
-    old = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        conn.execute(
-            "INSERT INTO compressed_memories "
-            "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-            "compressed_at, compression_level, status, source_turns) "
-            "VALUES ('event-retry-limit', 'event', 'Release', 'Release completed', "
-            "?, ?, ?, 0, 'active', '[]')",
-            (old, old, old),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    calls = 0
-
-    async def hallucinate(**kwargs):
-        nonlocal calls
-        calls += 1
-        return "Release", "Release completed with invented ticket ZX-9999."
-
-    svc._llm_escalate_summary = hallucinate  # type: ignore[method-assign]
-    for attempt in range(svc.config.lifecycle_max_quality_retries):
-        await svc._apply_compression_lifecycle()
-        if attempt + 1 < svc.config.lifecycle_max_quality_retries:
-            conn = open_memory_sqlite(svc._db_path)
-            try:
-                conn.execute(
-                    "UPDATE compressed_memories SET lifecycle_retry_after = ? "
-                    "WHERE memory_id = 'event-retry-limit'",
-                    (old,),
-                )
-                conn.commit()
-            finally:
-                conn.close()
-    await svc._apply_compression_lifecycle()
-    conn = open_memory_sqlite(svc._db_path)
-    try:
-        retry_count, retry_after = conn.execute(
-            "SELECT lifecycle_retry_count, lifecycle_retry_after FROM compressed_memories "
-            "WHERE memory_id = 'event-retry-limit'"
-        ).fetchone()
-    finally:
-        conn.close()
-    assert calls == svc.config.lifecycle_max_quality_retries
-    assert retry_count == svc.config.lifecycle_max_quality_retries
-    assert retry_after is None
 
 
 @pytest.mark.asyncio

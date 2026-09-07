@@ -56,16 +56,18 @@ def test_memory_timing_policy_honors_environment_overrides(monkeypatch):
     monkeypatch.setenv("MEMORY_TIER1_RETENTION_DAYS", "11")
     monkeypatch.setenv("MEMORY_TIER2_BATCH_SIZE", "17")
     monkeypatch.setenv("MEMORY_TIER2_SCOPE_TIMEOUT_SECONDS", "120")
-    monkeypatch.setenv("MEMORY_LIFECYCLE_CADENCE_DAYS", "9")
-    monkeypatch.setenv("MEMORY_EVENT_TO_SCENE_DAYS", "21")
+    monkeypatch.setenv("MEMORY_LONGITUDINAL_CONSOLIDATION_MIN_CLUSTER_SIZE", "4")
+    monkeypatch.setenv("MEMORY_LONGITUDINAL_CONSOLIDATION_LIMIT", "21")
+    monkeypatch.setenv("MEMORY_LONGITUDINAL_CONSOLIDATION_MIN_CONFIDENCE", "0.82")
 
     config = load_config_from_env().memory
 
     assert config.tier1_retention_days == 11
     assert config.tier2_batch_size == 17
     assert config.tier2_scope_timeout_seconds == 120
-    assert config.lifecycle_cadence_days == 9
-    assert config.lifecycle_event_to_scene_days == 21
+    assert config.longitudinal_consolidation_min_cluster_size == 4
+    assert config.longitudinal_consolidation_limit == 21
+    assert config.longitudinal_consolidation_min_confidence == 0.82
 
 
 def test_memory_redaction_policy_loads_from_canonical_config(tmp_path, monkeypatch):

@@ -70,11 +70,7 @@ from memai.repository.sqlite_repository import (
 )
 from memai.transport.http_adapter import build_memory_http_app
 from memai.application.maintenance import run_tier1_decay_cycle, run_tier2_bridge_cycle
-from memai.domain.lifecycle_policy import (
-    evaluate_lifecycle_quality,
-    lifecycle_age_thresholds,
-    record_lifecycle_rejection,
-)
+from memai.application.longitudinal_consolidation import run_consolidation
 from memai.application.maintenance_schedule import (
     claim_rule_execution,
     get_rule_state,
@@ -131,8 +127,7 @@ _CMEM_COLUMNS = (
     "compressed_at, compression_level, status, superseded_by, weight, event_kind, "
     "access_count, last_accessed_at, citation_count, pinned, hidden, identity_layer, "
     "evidence_refs, origin_type, origin_id, verified_at, owner_id, workspace_id, "
-    "memory_domain, created_at, lifecycle_retry_count, lifecycle_retry_after, "
-    "lifecycle_last_error, identity_metadata, activity_state, dormant_at, "
+    "memory_domain, created_at, identity_metadata, activity_state, dormant_at, "
     "dormant_reason, last_reactivated_at, retention_state, purge_candidate_at, "
     "purge_reason, purged_at"
 )
@@ -508,13 +503,11 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
             "origin_id": 27, "verified_at": 28,
             "owner_id": 29, "workspace_id": 30,
             "memory_domain": 31, "created_at": 32,
-            "lifecycle_retry_count": 33, "lifecycle_retry_after": 34,
-            "lifecycle_last_error": 35,
-            "identity_metadata": 36,
-            "activity_state": 37, "dormant_at": 38,
-            "dormant_reason": 39, "last_reactivated_at": 40,
-            "retention_state": 41, "purge_candidate_at": 42,
-            "purge_reason": 43, "purged_at": 44,
+            "identity_metadata": 33,
+            "activity_state": 34, "dormant_at": 35,
+            "dormant_reason": 36, "last_reactivated_at": 37,
+            "retention_state": 38, "purge_candidate_at": 39,
+            "purge_reason": 40, "purged_at": 41,
         }
         position = index.get(name)
         return row[position] if position is not None and len(row) > position else default
@@ -555,9 +548,6 @@ def _cmem_row_to_dict(row) -> Dict[str, Any]:
         "workspace_id": value("workspace_id", DEFAULT_WORKSPACE_ID),
         "memory_domain": value("memory_domain", DEFAULT_MEMORY_DOMAIN.value),
         "created_at": value("created_at"),
-        "lifecycle_retry_count": value("lifecycle_retry_count", 0),
-        "lifecycle_retry_after": value("lifecycle_retry_after"),
-        "lifecycle_last_error": value("lifecycle_last_error"),
         "identity_metadata": json_value("identity_metadata", {}),
         "activity_state": value("activity_state", "active"),
         "dormant_at": value("dormant_at"),
@@ -1098,497 +1088,26 @@ class MemoryApplicationService:
             **stats,
         }
 
-    # ── Compression Lifecycle ─────────────────────────────────────
-
-    # Weight by Tier 2 level.  Event/Scene/Arc/Epoch are generated together by
-    # the Tier1->Tier2 bridge; the former age-driven successor chain remains
-    # behind an explicit, disabled legacy path.
-    #   Level 0 (Event): weight = 1.00
-    #   Level 1 (Scene): weight = 0.70
-    #   Level 2 (Arc):   weight = 0.40
-    #   Level 3 (Epoch): weight = 0.20
-    #   Level 4 (Final): weight = 0.05 (legacy only)
-    _LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2, 4: 0.05}
+    # Default retrieval weights by the hierarchy level created by the Tier 2
+    # bridge. These weights are unrelated to long-term consolidation decisions.
+    _COMPRESSION_LEVEL_WEIGHT = {0: 1.0, 1: 0.7, 2: 0.4, 3: 0.2}
 
     async def _apply_compression_lifecycle(self) -> Dict[str, Any]:
-        """Legacy explicit escalation path; automatic callers keep it paused."""
-        now = datetime.now(timezone.utc)
+        """Compatibility shim for the retired age-based lifecycle command.
 
-        def read_candidates(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
-            rows: list[tuple[Any, ...]] = []
-            for (mem_type, level), max_age_days in lifecycle_age_thresholds(self.config):
-                cutoff = (now - timedelta(days=max_age_days)).isoformat()
-                rows.extend(
-                    conn.execute(
-                        "SELECT memory_id, title, summary, topics, entities, event_kind, "
-                        "timespan_start, timespan_end, importance, confidence, source_turns, "
-                        "evidence_refs, origin_type, origin_id, verified_at, "
-                        "owner_id, workspace_id, memory_domain, memory_type, compression_level "
-                        "FROM compressed_memories "
-                        "WHERE memory_type = ? AND compression_level = ? "
-                        "AND status = 'active' AND hidden = 0 AND pinned = 0 "
-                        "AND identity_layer IS NULL "
-                        "AND memory_id NOT LIKE 'identity-founding-%' AND compressed_at < ? "
-                        "AND lifecycle_retry_count < ? "
-                        "AND (lifecycle_retry_after IS NULL OR lifecycle_retry_after <= ?)"
-                        ,
-                        (
-                            mem_type,
-                            level,
-                            cutoff,
-                            self.config.lifecycle_max_quality_retries,
-                            now.isoformat(),
-                        ),
-                    ).fetchall()
-                )
-            return rows
-
-        candidates = self._repository_read(read_candidates)
-        plans: list[dict[str, Any]] = []
-        quality_rejected = 0
-
-        for row in candidates:
-            (
-                mem_id,
-                title,
-                summary,
-                topics_json,
-                entities_json,
-                event_kind,
-                ts_start,
-                ts_end,
-                importance,
-                confidence,
-                source_turns_json,
-                evidence_refs_json,
-                origin_type,
-                origin_id,
-                verified_at,
-                owner_id,
-                workspace_id,
-                memory_domain,
-                mem_type,
-                level,
-            ) = row
-
-            if int(level) >= 4:
-                should_keep = await self._llm_purge_review(
-                    mem_id=str(mem_id),
-                    title=str(title),
-                    summary=str(summary),
-                    topics=_json_string_list(topics_json),
-                )
-                plans.append(
-                    {
-                        "kind": "final_keep" if should_keep else "final_purge",
-                        "memory_id": str(mem_id),
-                        "owner_id": str(owner_id),
-                        "workspace_id": str(workspace_id),
-                        "memory_domain": str(memory_domain),
-                    }
-                )
-                continue
-
-            next_level = int(level) + 1
-            next_type = {0: "scene", 1: "arc", 2: "epoch", 3: "epoch"}[int(level)]
-            next_weight = self._LEVEL_WEIGHT.get(next_level, 0.1)
-            escalated_title, escalated_summary = await self._llm_escalate_summary(
-                mem_id=str(mem_id),
-                title=str(title),
-                summary=str(summary),
-                from_type=str(mem_type),
-                from_level=int(level),
-                to_type=next_type,
-                to_level=next_level,
-                topics=_json_string_list(topics_json),
-            )
-            quality = evaluate_lifecycle_quality(
-                source_title=str(title or ""),
-                source_summary=str(summary or ""),
-                proposed_title=str(escalated_title or ""),
-                proposed_summary=str(escalated_summary or ""),
-                min_source_support=self.config.lifecycle_min_source_support,
-                min_identifier_fidelity=self.config.lifecycle_min_identifier_fidelity,
-            )
-            if not quality.passed:
-                quality_rejected += 1
-                plans.append(
-                    {
-                        "kind": "rejection",
-                        "memory_id": str(mem_id),
-                        "owner_id": str(owner_id),
-                        "workspace_id": str(workspace_id),
-                        "memory_domain": str(memory_domain),
-                        "reason": ",".join(quality.failed_checks),
-                    }
-                )
-                continue
-
-            plans.append(
-                {
-                    "kind": "escalate",
-                    "memory_id": str(mem_id),
-                    "owner_id": str(owner_id),
-                    "workspace_id": str(workspace_id),
-                    "memory_domain": str(memory_domain),
-                    "mem_type": str(mem_type),
-                    "next_type": next_type,
-                    "next_level": next_level,
-                    "next_weight": next_weight,
-                    "title": str(escalated_title),
-                    "summary": str(escalated_summary),
-                    "timespan_start": ts_start,
-                    "timespan_end": ts_end,
-                    "importance": float(importance),
-                    "confidence": float(confidence),
-                    "source_turns_json": source_turns_json,
-                    "evidence_refs_json": evidence_refs_json,
-                    "origin_type": origin_type,
-                    "origin_id": origin_id,
-                    "verified_at": verified_at,
-                    "event_kind": event_kind,
-                    "topics_json": topics_json,
-                    "entities_json": entities_json,
-                }
-            )
-
-        def write(conn: sqlite3.Connection) -> Dict[str, Any]:
-            from memai.indexes.entity_graph import rebuild_entity_graph
-
-            escalated = 0
-            purged = 0
-            graph_scopes: set[tuple[str, str, str]] = set()
-            for plan in plans:
-                kind = plan["kind"]
-                memory_id = plan["memory_id"]
-                owner_id = plan["owner_id"]
-                workspace_id = plan["workspace_id"]
-                memory_domain = plan["memory_domain"]
-                if kind == "final_keep":
-                    conn.execute(
-                        "UPDATE compressed_memories SET compression_level = 3, "
-                        "status = 'active', weight = 0.15, compressed_at = ? "
-                        "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-                        "AND memory_domain = ?",
-                        (now.isoformat(), memory_id, owner_id, workspace_id, memory_domain),
-                    )
-                    continue
-                if kind == "final_purge":
-                    conn.execute(
-                        "UPDATE compressed_memories SET status = 'purged', "
-                        "activity_state = 'resolved', retention_state = 'purged', "
-                        "purged_at = COALESCE(purged_at, ?), weight = 0.0, compressed_at = ? WHERE memory_id = ? "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                        (
-                            now.isoformat(),
-                            now.isoformat(),
-                            memory_id,
-                            owner_id,
-                            workspace_id,
-                            memory_domain,
-                        ),
-                    )
-                    if _vec0_available(conn):
-                        rowids = [
-                            int(row[0])
-                            for row in conn.execute(
-                                "SELECT rowid FROM memory_embeddings WHERE source_type = 'compressed' "
-                                "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
-                                "AND memory_id = ?",
-                                (owner_id, workspace_id, memory_domain, memory_id),
-                            ).fetchall()
-                        ]
-                        if rowids:
-                            vec_placeholders = ",".join("?" for _ in rowids)
-                            conn.execute(
-                                f"DELETE FROM {_VEC0_TABLE} WHERE rowid IN ({vec_placeholders})",
-                                tuple(rowids),
-                            )
-                    conn.execute(
-                        "DELETE FROM memory_embeddings WHERE source_type = 'compressed' "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
-                        "AND memory_id = ?",
-                        (owner_id, workspace_id, memory_domain, memory_id),
-                    )
-                    conn.execute(
-                        "DELETE FROM memory_fts WHERE source_type = 'compressed' "
-                        "AND owner_id = ? AND workspace_id = ? AND memory_domain = ? "
-                        "AND memory_id = ?",
-                        (owner_id, workspace_id, memory_domain, memory_id),
-                    )
-                    purged += 1
-                    graph_scopes.add((owner_id, workspace_id, memory_domain))
-                    continue
-                if kind == "rejection":
-                    retry_count = record_lifecycle_rejection(
-                        conn,
-                        memory_id=memory_id,
-                        owner_id=owner_id,
-                        workspace_id=workspace_id,
-                        memory_domain=memory_domain,
-                        reason=plan["reason"],
-                        now=now,
-                        max_retries=self.config.lifecycle_max_quality_retries,
-                        retry_base_hours=self.config.lifecycle_retry_base_hours,
-                    )
-                    logger.warning(
-                        "Compression lifecycle rejected escalation for %s (attempt ?/%d): %s",
-                        memory_id,
-                        self.config.lifecycle_max_quality_retries,
-                        plan["reason"],
-                    )
-                    continue
-                successor_id = str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        "voidcube-memory-lifecycle:"
-                        f"{owner_id}:{workspace_id}:{memory_domain}:{memory_id}:{plan['next_level']}",
-                    )
-                )
-                conn.execute(
-                    "INSERT INTO compressed_memories "
-                    "(memory_id, memory_type, title, summary, timespan_start, timespan_end, "
-                    "importance, confidence, topics, entities, source_turns, "
-                    "evidence_refs, origin_type, origin_id, verified_at, "
-                    "derived_from_id, compressed_at, compression_level, status, weight, "
-                    "owner_id, workspace_id, memory_domain, event_kind, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(memory_id) DO UPDATE SET "
-                    "memory_type=excluded.memory_type, title=excluded.title, summary=excluded.summary, "
-                    "timespan_start=excluded.timespan_start, timespan_end=excluded.timespan_end, "
-                    "importance=excluded.importance, confidence=excluded.confidence, topics=excluded.topics, "
-                    "entities=excluded.entities, source_turns=excluded.source_turns, "
-                    "evidence_refs=excluded.evidence_refs, origin_type=excluded.origin_type, "
-                    "origin_id=excluded.origin_id, verified_at=excluded.verified_at, "
-                    "derived_from_id=excluded.derived_from_id, compressed_at=excluded.compressed_at, "
-                    "compression_level=excluded.compression_level, event_kind=excluded.event_kind, "
-                    "created_at=COALESCE(compressed_memories.created_at, excluded.created_at) "
-                    "WHERE compressed_memories.status = 'active'",
-                    (
-                        successor_id,
-                        plan["next_type"],
-                        plan["title"],
-                        plan["summary"],
-                        plan["timespan_start"],
-                        plan["timespan_end"],
-                        plan["importance"] * 0.85,
-                        plan["confidence"] * 0.9,
-                        plan["topics_json"],
-                        plan["entities_json"],
-                        json.dumps(_json_string_list(plan["source_turns_json"])),
-                        plan["evidence_refs_json"],
-                        plan["origin_type"],
-                        plan["origin_id"],
-                        plan["verified_at"],
-                        memory_id,
-                        now.isoformat(),
-                        plan["next_level"],
-                        "active",
-                        plan["next_weight"],
-                        owner_id,
-                        workspace_id,
-                        memory_domain,
-                        plan["event_kind"],
-                        now.isoformat(),
-                    ),
-                )
-                conn.execute(
-                    "UPDATE compressed_memories SET status = 'superseded', "
-                    "superseded_by = ?, weight = weight * 0.3 WHERE memory_id = ? "
-                    "AND owner_id = ? AND workspace_id = ? AND memory_domain = ?",
-                    (successor_id, memory_id, owner_id, workspace_id, memory_domain),
-                )
-                conn.execute(
-                    "UPDATE compressed_memories SET citation_count = citation_count + 1 "
-                    "WHERE memory_id = ? AND owner_id = ? AND workspace_id = ? "
-                    "AND memory_domain = ?",
-                    (successor_id, owner_id, workspace_id, memory_domain),
-                )
-                graph_scopes.add((owner_id, workspace_id, memory_domain))
-                escalated += 1
-
-            if graph_scopes:
-                from memai.indexes.entity_graph import rebuild_entity_graph
-
-                for owner_id, workspace_id, memory_domain in sorted(graph_scopes):
-                    rebuild_entity_graph(
-                        conn,
-                        owner_id=owner_id,
-                        workspace_id=workspace_id,
-                        memory_domain=memory_domain,
-                    )
-
-            conn.execute(
-                "UPDATE compressed_memories SET created_at = compressed_at "
-                "WHERE created_at IS NULL"
-            )
-            if escalated or purged:
-                logger.info(
-                    "Compression lifecycle: %d escalated, %d purged", escalated, purged
-                )
-            result = {"escalated": escalated, "purged": purged}
-            if quality_rejected:
-                result["quality_rejected"] = quality_rejected
-            return result
-
-        return await self._repository_write_async(write)
-
-    async def _llm_escalate_summary(
-        self, *, mem_id: str, title: str, summary: str,
-        from_type: str, from_level: int, to_type: str, to_level: int,
-        topics: list,
-    ) -> tuple[str, str]:
-        """Use LLM to produce a higher-level abstract when escalating memory.
-
-        Without LLM: falls back to mechanical prefix (e.g. "[L2] original title").
-        With LLM: generates a genuinely more abstract summary appropriate for
-        the target level (Scene→Arc: synthesize scene into arc narrative,
-        Arc→Epoch: distill arc into epoch-level historical significance).
-
-        The selected model is resolved from ``memory.llm.*`` and its endpoint
-        and credentials come from the shared Provider pool. The CLI
-        ``/api -> 4`` command updates that reference without duplicating keys.
+        Long-term evolution is now represented by cross-batch consolidation
+        proposals. This shim never mutates source memories and exists only for
+        callers that have not migrated to ``run_longitudinal_consolidation``.
         """
-        level_names = {0: "事件", 1: "场景", 2: "弧线", 3: "纪元", 4: "终章"}
-        from_name = level_names.get(from_level, str(from_level))
-        to_name = level_names.get(to_level, str(to_level))
-        topics_text = ", ".join(topics[:5]) if topics else "通用"
-
-        # Try LLM via the unified resolver (summarization role; cached).
-        try:
-            from memai.repository.llm_cache import (
-                build_cache_key,
-                open_cached_with_repository,
-                store_cached_with_repository,
-            )
-
-            client, model = self._resolve_mem_llm_client(role="summarization")
-            if client is not None:
-                prompt = (
-                    f"将以下{from_name}级别的记忆升级为{to_name}级别的摘要。\n"
-                    f"原始标题: {title}\n"
-                    f"原始摘要: {summary}\n"
-                    f"主题: {topics_text}\n\n"
-                    f"{to_name}级别的摘要应该更抽象、更关注长期意义和结构性变化，"
-                    f"而不是具体细节。保留核心事实但提升抽象层次。\n"
-                    f"用中文输出JSON: {{\"title\": \"...\", \"summary\": \"...\"}}"
-                )
-                input_text = (
-                    f"{mem_id}|{from_level}|{to_level}|{title}|{summary}|{topics_text}"
-                )
-                cache_key = build_cache_key("escalate", model, input_text)
-                cached = None
-                try:
-                    cached = open_cached_with_repository(self._repository, cache_key)
-                except Exception:
-                    cached = None
-                if cached is not None and isinstance(cached, dict):
-                    cached_title = str(cached.get("title", "")).strip()
-                    cached_summary = str(cached.get("summary", "")).strip()
-                    if cached_title and cached_summary:
-                        logger.info(
-                            "Cached LLM escalated %s: %s→%s (%s→%s)",
-                            mem_id, from_name, to_name, title[:40], cached_title[:40],
-                        )
-                        return cached_title, cached_summary
-
-                result = client.complete_json(
-                    system_prompt=(
-                        "你是长期记忆的编年史学者。你的任务是将低层记忆升级为更高抽象层次。"
-                        "保持历史准确性，但提升视角——从具体事件到模式，从模式到意义。"
-                    ),
-                    user_payload={"task": prompt},
-                    task="scholar.revision",
-                )
-                if isinstance(result, dict):
-                    llm_title = str(result.get("title", "")).strip()
-                    llm_summary = str(result.get("summary", "")).strip()
-                    if llm_title and llm_summary:
-                        try:
-                            store_cached_with_repository(
-                                self._repository,
-                                cache_key=cache_key,
-                                task="escalate",
-                                model=model,
-                                input_text=input_text,
-                                result=result,
-                            )
-                        except Exception:
-                            pass
-                        logger.info(
-                            "LLM escalated %s: %s→%s (%s→%s)",
-                            mem_id, from_name, to_name, title[:40], llm_title[:40],
-                        )
-                        return llm_title, llm_summary
-        except Exception as exc:
-            logger.debug("LLM escalation unavailable for %s: %s", mem_id, exc)
-
-        # Fallback: mechanical
-        fallback_title = f"[{to_name}] {title}"
-        fallback_summary = (
-            f"【从{from_name}升级】{summary}\n"
-            f"（自动升级，非LLM重摘要。设置memory.llm.api_key_env对应的API密钥以启用智能升级。）"
-        )
-        return fallback_title, fallback_summary
-
-    async def _llm_purge_review(
-        self, *, mem_id: str, title: str, summary: str, topics: list,
-    ) -> bool:
-        """LLM final review before permanent deletion (>730 days old).
-
-        Uses the same ``_resolve_mem_llm_client`` helper as the rest of
-        Mem, so the LLM (or its absence) is consistent with escalation
-        and Tier 2 compression.
-        """
-        try:
-            from memai.repository.llm_cache import (
-                build_cache_key,
-                open_cached_with_repository,
-                store_cached_with_repository,
-            )
-
-            client, model = self._resolve_mem_llm_client()
-            if client is None:
-                return False  # No LLM → purge (safe: entries are >2 years old)
-            topics_text = ", ".join(topics[:5]) if topics else "无"
-            input_text = f"{mem_id}|{title}|{summary}|{topics_text}"
-            cache_key = build_cache_key("purge_review", model, input_text)
-            cached = None
-            try:
-                cached = open_cached_with_repository(self._repository, cache_key)
-            except Exception:
-                cached = None
-            if cached is not None and isinstance(cached, dict) and "keep" in cached:
-                return bool(cached.get("keep", False))
-
-            prompt = (
-                f"以下是一条即将被永久删除的长期记忆（超过730天）。"
-                f"判断是否具有持久历史价值应保留。\n"
-                f"标题: {title}\n摘要: {summary}\n主题: {topics_text}\n"
-                f"重大决策/架构转折/身份定义 → 保留。过时进度细节 → 删除。"
-                f"输出JSON: {{\"keep\": true/false, \"reason\": \"...\"}}"
-            )
-            result = client.complete_json(
-                system_prompt="你是长期记忆的守护者。审慎判断历史记录的去留。",
-                user_payload={"task": prompt},
-                task="scholar.revision",
-            )
-            if isinstance(result, dict):
-                try:
-                    store_cached_with_repository(
-                        self._repository,
-                        cache_key=cache_key,
-                        task="purge_review",
-                        model=model,
-                        input_text=input_text,
-                        result=result,
-                    )
-                except Exception:
-                    pass
-                return bool(result.get("keep", False))
-        except Exception:
-            pass
-        return False
+        result = await self.run_longitudinal_consolidation()
+        return {
+            "escalated": 0,
+            "purged": 0,
+            "proposals_generated": result.get("proposals_generated", 0),
+            "proposals": result.get("proposals", []),
+            "mode": result.get("mode", self.config.longitudinal_consolidation_mode),
+            "deprecated": True,
+        }
 
     @staticmethod
     def _remove_purged_memory_references(
@@ -2052,6 +1571,8 @@ class MemoryApplicationService:
             "rebuild_entity_graph": self.rebuild_entity_graph,
             "get_graph_neighbors": self.get_graph_neighbors,
             "compression_quality": self.compression_quality,
+            "run_longitudinal_consolidation": self.run_longitudinal_consolidation,
+            "list_consolidation_proposals": self.list_consolidation_proposals,
         }
 
     async def create_backup(self):
@@ -2244,6 +1765,74 @@ class MemoryApplicationService:
             "count": len(audits),
             "accepted": passed,
             "rejected": len(audits) - passed,
+        }
+
+    async def run_longitudinal_consolidation(self, request: dict | None = None):
+        """Automatically derive cross-batch memories or run in diagnostic mode."""
+        req = request or {}
+        owner_id = str(req.get("owner_id") or DEFAULT_OWNER_ID)
+        workspace_id = str(req.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+        memory_domain = _authorized_write_domain(
+            req.get("memory_actor", DEFAULT_MEMORY_ACTOR),
+            req.get("memory_domain", DEFAULT_MEMORY_DOMAIN.value),
+        )
+        return await self._repository_write_async(
+            lambda conn: run_consolidation(
+                conn,
+                owner_id=owner_id,
+                workspace_id=workspace_id,
+                memory_domain=memory_domain,
+                mode=self.config.longitudinal_consolidation_mode,
+                limit=self.config.longitudinal_consolidation_limit,
+                min_cluster_size=self.config.longitudinal_consolidation_min_cluster_size,
+                min_confidence=self.config.longitudinal_consolidation_min_confidence,
+            )
+        )
+
+    async def list_consolidation_proposals(
+        self,
+        owner_id: str = DEFAULT_OWNER_ID,
+        workspace_id: str = DEFAULT_WORKSPACE_ID,
+        memory_domain: str = DEFAULT_MEMORY_DOMAIN.value,
+        memory_actor: MemoryActor = DEFAULT_MEMORY_ACTOR,
+        limit: int = 50,
+    ):
+        authorized_domain = _authorized_read_domains(memory_actor, (memory_domain,))[0]
+        rows = self._repository_read(
+            lambda conn: conn.execute(
+                "SELECT proposal_id, owner_id, workspace_id, memory_domain, "
+                "source_memory_ids, target_type, title, summary, evidence_count, "
+                "conflict_count, status, created_at "
+                "FROM memory_consolidation_proposals WHERE owner_id = ? "
+                "AND workspace_id = ? AND memory_domain = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (
+                    str(owner_id),
+                    str(workspace_id),
+                    authorized_domain,
+                    max(1, min(int(limit), 200)),
+                ),
+            ).fetchall()
+        )
+        return {
+            "proposals": [
+                {
+                    "proposal_id": row[0],
+                    "owner_id": row[1],
+                    "workspace_id": row[2],
+                    "memory_domain": row[3],
+                    "source_memory_ids": _json_string_list(row[4]),
+                    "target_type": row[5],
+                    "title": row[6],
+                    "summary": row[7],
+                    "evidence_count": int(row[8] or 0),
+                    "conflict_count": int(row[9] or 0),
+                    "status": row[10],
+                    "created_at": row[11],
+                }
+                for row in rows
+            ],
+            "count": len(rows),
         }
 
     @staticmethod
@@ -2979,7 +2568,7 @@ class MemoryApplicationService:
             ("tier1_decay", self._tier1_decay_cycle),
             ("tier2_bridge", self._tier2_bridge_cycle),
             ("refresh_dormant_arcs", self._refresh_dormant_arcs),
-            ("lifecycle_escalation", self._apply_compression_lifecycle),
+            ("longitudinal_consolidation", self._longitudinal_consolidation_cycle),
             ("purge_expired", self._purge_expired_memories),
         ]
         if skip_if_busy and self._maintenance_lock.locked():
@@ -2996,16 +2585,7 @@ class MemoryApplicationService:
             results: Dict[str, Any] = {}
             effective_work = 0
             for rule_name, rule_fn in rules:
-                if (
-                    rule_name == "lifecycle_escalation"
-                    and not self._AUTOMATIC_LIFECYCLE_ESCALATION_ENABLED
-                ):
-                    results[rule_name] = {
-                        "skipped": "disabled",
-                        "reason": "Tier 2 lifecycle escalation is paused",
-                    }
-                    continue
-                if respect_cadence and rule_name != "lifecycle_escalation":
+                if respect_cadence:
                     last_run = self._last_rule_run_monotonic.get(rule_name)
                     if (
                         last_run is not None
@@ -3013,20 +2593,6 @@ class MemoryApplicationService:
                         < self.config.compression_interval
                     ):
                         results[rule_name] = {"skipped": "cadence"}
-                        continue
-                if respect_cadence and rule_name == "lifecycle_escalation":
-                    cadence = claim_rule_execution(
-                        self._db_path,
-                        rule_name=rule_name,
-                        cadence_days=self.config.lifecycle_cadence_days,
-                        repository=self._repository,
-                    )
-                    if not cadence.due:
-                        results[rule_name] = {
-                            "skipped": cadence.skip_reason or "cadence",
-                            "last_succeeded_at": cadence.last_succeeded_at,
-                            "next_due_at": cadence.next_due_at,
-                        }
                         continue
                 try:
                     result = await rule_fn()
@@ -3037,13 +2603,6 @@ class MemoryApplicationService:
                         self._rule_run_counts.get(rule_name, 0) + 1
                     )
                     effective_work += self._rule_effective_count(result)
-                    if rule_name == "lifecycle_escalation":
-                        record_rule_result(
-                            self._db_path,
-                            rule_name=rule_name,
-                            succeeded=True,
-                            repository=self._repository,
-                        )
                 except Exception as exc:
                     logger.warning(
                         "Memory maintenance rule %s failed: %s",
@@ -3052,14 +2611,6 @@ class MemoryApplicationService:
                         exc_info=True,
                     )
                     results[rule_name] = {"error": str(exc)}
-                    if rule_name == "lifecycle_escalation":
-                        record_rule_result(
-                            self._db_path,
-                            rule_name=rule_name,
-                            succeeded=False,
-                            error=str(exc),
-                            repository=self._repository,
-                        )
             # Only real writes count as effective activity. Cadence and lock
             # skips must not make an idle memory pipeline look active.
             if effective_work > 0:
@@ -3073,6 +2624,18 @@ class MemoryApplicationService:
             lambda conn: sync_identity_experiences(conn, commit=False)
         )
 
+    async def _longitudinal_consolidation_cycle(self) -> Dict[str, Any]:
+        """Derive cross-batch topic memories while preserving every source."""
+        return await self._repository_write_async(
+            lambda conn: run_consolidation(
+                conn,
+                mode=self.config.longitudinal_consolidation_mode,
+                limit=self.config.longitudinal_consolidation_limit,
+                min_cluster_size=self.config.longitudinal_consolidation_min_cluster_size,
+                min_confidence=self.config.longitudinal_consolidation_min_confidence,
+            )
+        )
+
     @staticmethod
     def _rule_effective_count(result: Any) -> int:
         """Number of rows a rule actually wrote/changed, across rule return shapes."""
@@ -3081,8 +2644,17 @@ class MemoryApplicationService:
         if isinstance(result, dict):
             if "error" in result:
                 return 0
+            changed_count = result.get("changed_count")
+            if isinstance(changed_count, int):
+                return max(0, changed_count)
             total = 0
-            for key in ("escalated", "purged", "turns_processed", "deleted", "updated_count"):
+            for key in (
+                "escalated",
+                "purged",
+                "turns_processed",
+                "deleted",
+                "updated_count",
+            ):
                 val = result.get(key)
                 if isinstance(val, int):
                     total += max(0, val)
@@ -3155,8 +2727,8 @@ class MemoryApplicationService:
           1. identity_experience — Settle verified experiences and evidence-backed narrative
           2. tier1_decay         — Exponential decay of turn relevance_scores
           3. tier2_bridge        — Feed expired turns into ChroniclePipeline → compressed_memories
-          4. lifecycle_escalation — Paused; no Event/Scene/Arc/Epoch successor compression
-          5. purge_expired       — Hard-delete ordinary purged entries past audit retention
+          4. longitudinal_consolidation — Automatic cross-batch topic derivation
+          5. purge_expired              — Hard-delete ordinary purged entries past audit retention
         """
         del request
         active_task = self._maintenance_request_task
@@ -3194,9 +2766,9 @@ class MemoryApplicationService:
 
     async def rules_status(self):
         """Return the last execution time and count for each rule."""
-        lifecycle_state = get_rule_state(
+        consolidation_state = get_rule_state(
             self._db_path,
-            "lifecycle_escalation",
+            "longitudinal_consolidation",
             repository=self._repository,
         )
         maintenance_run = self._maintenance_run_snapshot()
@@ -3217,7 +2789,7 @@ class MemoryApplicationService:
                     "tier1_decay",
                     "tier2_bridge",
                     "refresh_dormant_arcs",
-                    "lifecycle_escalation",
+                    "longitudinal_consolidation",
                     "purge_expired",
                 ]
             },
@@ -3234,9 +2806,9 @@ class MemoryApplicationService:
             "purge_epoch_max_importance": self.config.purge_epoch_max_importance,
             "purge_candidate_grace_days": self.config.purge_candidate_grace_days,
             "purge_audit_retention_days": self.config.purge_audit_retention_days,
-            "lifecycle_cadence_days": self.config.lifecycle_cadence_days,
-            "lifecycle_escalation_enabled": self._AUTOMATIC_LIFECYCLE_ESCALATION_ENABLED,
-            "lifecycle_state": lifecycle_state,
+            "longitudinal_consolidation_mode": self.config.longitudinal_consolidation_mode,
+            "longitudinal_consolidation_min_confidence": self.config.longitudinal_consolidation_min_confidence,
+            "longitudinal_consolidation_state": consolidation_state,
             "tier2_bridge_last_result": self._last_tier2_bridge_result,
             # P0-4 健康信号: last cycle that performed real write work, and the
             # last time LLM health was actually probed. UI computes memory_active
@@ -7020,17 +6592,18 @@ class MemoryApplicationService:
         }
 
     async def trigger_lifecycle(self, request: dict | None = None):
-        """Run the retained purge pass; successor compression is paused."""
+        """Compatibility entry point for retention plus consolidation proposals.
+
+        The route is retained for clients that have not migrated yet. It no
+        longer performs age-based Event -> Scene -> Arc -> Epoch promotion.
+        """
         req = request or {}
         result = {}
         if req.get("escalate", False):
-            result["escalation"] = {
-                "skipped": "disabled",
-                "reason": "Tier 2 lifecycle escalation is paused",
-            }
+            result["consolidation"] = await self.run_longitudinal_consolidation(req)
         if req.get("purge", True):
             result["purge"] = {"deleted": await self._purge_expired_memories()}
-        return {"status": "ok", **result}
+        return {"status": "ok", "deprecated": True, **result}
 
     # ── User Feedback: Pin / Hide ──────────────────────────────────
 
@@ -7245,7 +6818,7 @@ class MemoryApplicationService:
             if not row:
                 raise HTTPException(status_code=404, detail="Memory not found")
             _mem_type, level = row[0], row[1] or 0
-            base_w = self._LEVEL_WEIGHT.get(level, 0.2)
+            base_w = self._COMPRESSION_LEVEL_WEIGHT.get(level, 0.2)
             conn.execute(
                 "UPDATE compressed_memories SET pinned = 0, hidden = 0, "
                 f"weight = ?, {self._retention_reactivation_update_clause()} "

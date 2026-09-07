@@ -346,6 +346,25 @@ class MemoryDatabaseBootstrap:
                 )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS memory_consolidation_proposals (
+                proposal_id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
+                source_memory_ids TEXT NOT NULL DEFAULT '[]',
+                target_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                evidence_count INTEGER NOT NULL DEFAULT 0,
+                conflict_count INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'shadow'
+                    CHECK(status IN ('shadow', 'rejected', 'applied')),
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS recall_traces (
                 trace_id TEXT PRIMARY KEY,
                 memory_actor TEXT NOT NULL DEFAULT 'api_a',
@@ -474,9 +493,6 @@ class MemoryDatabaseBootstrap:
                 workspace_id TEXT NOT NULL DEFAULT 'default',
                 memory_domain TEXT NOT NULL DEFAULT 'agent_interaction',
                 created_at TEXT,
-                lifecycle_retry_count INTEGER NOT NULL DEFAULT 0,
-                lifecycle_retry_after TEXT,
-                lifecycle_last_error TEXT,
                 identity_metadata TEXT
             )
             """
@@ -945,9 +961,6 @@ class MemoryDatabaseBootstrap:
             ("origin_type", "TEXT"),
             ("origin_id", "TEXT"),
             ("verified_at", "TEXT"),
-            ("lifecycle_retry_count", "INTEGER NOT NULL DEFAULT 0"),
-            ("lifecycle_retry_after", "TEXT"),
-            ("lifecycle_last_error", "TEXT"),
             ("identity_metadata", "TEXT"),
             ("timeline_parent_id", "TEXT"),
             ("derived_from_id", "TEXT"),
