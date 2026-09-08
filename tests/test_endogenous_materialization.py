@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 
+import pytest
+
+from voidcube.systems.supervisor.endogenous_candidate_pipeline import apply_adaptive_candidate_budget
+from voidcube.systems.supervisor.endogenous_drive_cycle import gate_endogenous_candidates_by_posture
 from voidcube.systems.supervisor.endogenous_materialization import (
     build_lm_materialization_context,
     eligible_lm_candidate_kinds,
@@ -14,6 +18,9 @@ from voidcube.systems.supervisor.endogenous_materialization import (
 
 @dataclass
 class Policy:
+    candidate_budget: int = 1
+    exploratory_learning_quota: int = 0
+    observation_bias: float = 0.0
     memory_continuity_bias: float = 0.6
     truthfulness_bias: float = 0.7
     learning_expansion_bias: float = 0.5
@@ -22,6 +29,81 @@ class Policy:
     candidate_throttle: float = 0.1
     preferred_focus: str = "truthfulness"
     body_growth_quota: int = 1
+
+
+def _materialize_governance_observation(*, proposal_changes=None, active_tasks=None, focus="observation"):
+    policy = Policy(preferred_focus=focus, body_growth_quota=0)
+    evidence_packet = {
+        "plans": {"self_evolution": {"eligible_for_planning": False}},
+        "evidence_graph": {"nodes": [{"topic": "learning_trace", "avg_confidence": 0.8}]},
+        "agenda_graph": {"focus": "observation", "focus_confidence": 0.8},
+    }
+    context = build_lm_materialization_context(
+        drive_context={"api_b_judgement_tasks": active_tasks or [], "drive_history": {"outcomes": []}},
+        evidence_packet=evidence_packet,
+        cognitive_assessment={},
+        adaptive_policy=policy,
+        pending_review_count=0,
+        stale_backlog_count=0,
+        api_b_judgement_count=len(active_tasks or []),
+    )
+    proposal = {
+        "candidate_kind": "governance_hygiene_review",
+        "title": "Observe task selection and posture alignment",
+        "summary": "Read existing learning evidence to diagnose a decision mismatch.",
+        "task_type": "observation",
+        "execution_mode": "observe_only",
+        "risk_level": "low",
+        "observation_required": True,
+        "referenced_evidence_nodes": ["learning_trace"],
+        "referenced_agenda_nodes": ["focus:observation"],
+        **(proposal_changes or {}),
+    }
+    candidates = materialize_lm_proposals(
+        proposals=[proposal],
+        existing_keys=set(),
+        evidence_packet=evidence_packet,
+        adaptive_policy=policy,
+        active_sessions=0,
+        backlog_pressure=lambda *_: 0.0,
+        drive_judgement=lambda kind: {"candidate_kind": kind},
+        **context,
+    )
+    return apply_adaptive_candidate_budget(candidates, adaptive_policy=policy)
+
+
+def test_observation_posture_can_plan_grounded_governance_observation_without_backlog():
+    candidates = _materialize_governance_observation()
+    kept, deferred = gate_endogenous_candidates_by_posture(
+        candidate_items=[item.to_api_b_judgement_item() for item in candidates],
+        drive_posture={"payload": {"preferred_focus": "observation", "candidate_budget": 1}},
+    )
+
+    assert len(kept) == 1
+    assert deferred == []
+    assert kept[0]["constraints"]["lm_execution_mode"] == "observe_only"
+    assert kept[0]["constraints"]["must_not_execute_without_review"] is True
+    assert kept[0]["constraints"]["must_not_modify_active_body"] is True
+    assert kept[0]["metadata"]["eligibility_reason"] == "grounded_governance_observation"
+
+
+@pytest.mark.parametrize("changes", [
+    {"task_type": "improvement"},
+    {"execution_mode": "guarded_execution"},
+    {"risk_level": "high"},
+    {"blocking_factors": ["missing authorization"]},
+    {"referenced_evidence_nodes": ["unknown"]},
+    {"referenced_agenda_nodes": ["unknown"]},
+    {"candidate_kind": "body_improvement"},
+])
+def test_observation_does_not_admit_unsafe_or_ungrounded_governance_work(changes):
+    assert _materialize_governance_observation(proposal_changes=changes) == []
+
+
+def test_observation_does_not_duplicate_live_governance_work_or_enable_other_postures():
+    active = [{"status": "awaiting_review", "metadata": {"candidate_kind": "governance_hygiene_review"}}]
+    assert _materialize_governance_observation(active_tasks=active) == []
+    assert _materialize_governance_observation(focus="truthfulness") == []
 
 
 def test_governance_hygiene_signals_are_pure_and_use_explicit_inputs():

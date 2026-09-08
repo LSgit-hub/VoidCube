@@ -4638,6 +4638,58 @@ async def test_start_autonomous_chain_gate_repairs_missing_workers_when_already_
         await supervisor._endogenous_drive_task
 
 
+@pytest.mark.asyncio
+async def test_drive_worker_reports_failure_then_recovers_with_compact_status(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.config.service_runtime.endogenous_drive_interval = 0
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    snapshots = []
+
+    async def run_cycle():
+        snapshots.append(supervisor._autonomous_chain_gate_status())
+        if len(snapshots) == 1:
+            raise RuntimeError("test drive failure")
+        if len(snapshots) == 2:
+            assert snapshots[-1]["last_drive_error"] == "RuntimeError: test drive failure"
+            return {"status": "planned", "planned": 1, "tasks": [{"large": "payload"}]}
+        assert snapshots[-1]["last_drive_error"] is None
+        raise asyncio.CancelledError()
+
+    supervisor._autonomous_cycle_service.run_drive_cycle = run_cycle
+    try:
+        await supervisor._start_autonomous_chain_workers()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(supervisor._endogenous_drive_task, timeout=5)
+        assert len(snapshots) == 3
+        assert all(item["last_drive_at"] for item in snapshots)
+        assert all(item["next_drive_at"] is None for item in snapshots)
+        assert supervisor._autonomous_chain_gate_status()["last_drive_result"] == {"status": "cancelled"}
+        assert "tasks" not in supervisor._service_runtime.last_drive_result
+    finally:
+        supervisor._autonomous_chain_review_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await supervisor._autonomous_chain_review_task
+
+
+@pytest.mark.parametrize(("event", "title"), [
+    ("endogenous_drive_started", "正在进行内生评估"),
+    ("endogenous_drive_failed", "内生评估失败"),
+    ("endogenous_drive_idle", "本轮提案未通过筛选"),
+])
+def test_drive_ui_distinguishes_evaluation_failure_and_filtered_proposals(tmp_path, event, title):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    supervisor._ui_runtime.record_activity(
+        event,
+        scene="idle",
+        summary="diagnostic detail",
+        metadata={"diagnostics": {"proposal_count": 1}},
+    )
+    phase = supervisor._ui_runtime.current_ui_phase()
+    assert phase["title"] == title
+    assert phase["summary"] == "diagnostic detail"
+
+
 @pytest.mark.unit
 def test_supervisor_fastapi_lifespan_starts_and_stops_periodic_runtime(tmp_path):
     supervisor = _make_supervisor(tmp_path)

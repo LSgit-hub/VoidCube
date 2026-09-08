@@ -120,8 +120,11 @@ class ServiceRuntimeState:
     auto_evidence_packet: Dict[str, Any] = field(default_factory=dict)
     last_review_at: Optional[datetime] = None
     next_review_at: Optional[datetime] = None
+    last_review_error: Optional[str] = None
     last_drive_at: Optional[datetime] = None
     next_drive_at: Optional[datetime] = None
+    last_drive_error: Optional[str] = None
+    last_drive_result: Dict[str, Any] = field(default_factory=dict)
     suppress_candidate_refresh: bool = False
     recovery: RecoveryStatus = field(default_factory=RecoveryStatus)
 
@@ -2395,10 +2398,12 @@ class ServiceRuntimeMixin:
                 self._service_runtime.last_review_at = now
                 try:
                     await self._autonomous_task_review_cycle_service.run()
+                    self._service_runtime.last_review_error = None
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    logger.warning(f"Autonomous-chain review loop iteration failed: {exc}")
+                    self._service_runtime.last_review_error = f"{type(exc).__name__}: {exc}"
+                    logger.exception("Autonomous-chain review loop iteration failed")
                 delay = runtime_config.autonomous_chain_review_interval
 
         self._autonomous_chain_review_task = asyncio.create_task(autonomous_chain_review_loop())
@@ -2417,12 +2422,36 @@ class ServiceRuntimeMixin:
                     await asyncio.sleep(delay)
                     now = datetime.now(timezone.utc)
                     self._service_runtime.last_drive_at = now
+                    self._service_runtime.next_drive_at = None
+                    self._service_runtime.last_drive_result = {"status": "running"}
                     try:
-                        await self._autonomous_cycle_service.run_drive_cycle()
+                        self._ui_runtime.record_activity(
+                            "endogenous_drive_started",
+                            scene="planning",
+                            summary="正在读取内生证据、生成提案并检查任务资格。",
+                        )
+                        result = await self._autonomous_cycle_service.run_drive_cycle()
+                        self._service_runtime.last_drive_result = {
+                            key: result[key]
+                            for key in ("status", "planned", "skipped", "diagnostics")
+                            if key in result
+                        }
+                        self._service_runtime.last_drive_error = (
+                            dict(result.get("diagnostics") or {}).get("generation_error")
+                            if result.get("status") == "error" else None
+                        )
                     except asyncio.CancelledError:
+                        self._service_runtime.last_drive_result = {"status": "cancelled"}
                         raise
                     except Exception as exc:
-                        logger.warning(f"Endogenous-drive loop iteration failed: {exc}")
+                        self._service_runtime.last_drive_error = f"{type(exc).__name__}: {exc}"
+                        self._service_runtime.last_drive_result = {"status": "error"}
+                        logger.exception("Endogenous-drive loop iteration failed")
+                        self._ui_runtime.record_activity(
+                            "endogenous_drive_failed",
+                            scene="idle",
+                            summary=f"内生评估失败：{self._service_runtime.last_drive_error}",
+                        )
                     delay = runtime_config.endogenous_drive_interval
 
             self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
@@ -2586,6 +2615,13 @@ class ServiceRuntimeMixin:
                 self._service_runtime.endogenous_drive_task is not None
                 and not self._service_runtime.endogenous_drive_task.done()
             ),
+            "last_review_at": self._iso_timestamp(self._service_runtime.last_review_at),
+            "next_review_at": self._iso_timestamp(self._service_runtime.next_review_at),
+            "last_review_error": self._service_runtime.last_review_error,
+            "last_drive_at": self._iso_timestamp(self._service_runtime.last_drive_at),
+            "next_drive_at": self._iso_timestamp(self._service_runtime.next_drive_at),
+            "last_drive_error": self._service_runtime.last_drive_error,
+            "last_drive_result": dict(self._service_runtime.last_drive_result),
             "endogenous_drive_enabled": self.config.service_runtime.endogenous_drive_enabled,
         }
 

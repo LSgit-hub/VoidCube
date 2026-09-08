@@ -341,11 +341,26 @@ class SupervisorUIRuntime:
             "thinking_text": "",
         }
         if normalized_event == "endogenous_drive_idle":
+            diagnostics = dict(metadata.get("diagnostics") or {})
             phase.update(
                 scene="idle",
                 stage="idle",
-                title="当前没有新的自主动作",
-                thinking_text="本轮内生驱动没有形成新的候选任务。",
+                title="本轮提案未通过筛选" if diagnostics.get("proposal_count") else "当前没有新的自主动作",
+                thinking_text=summary or "本轮内生驱动没有形成新的候选任务。",
+            )
+        elif normalized_event == "endogenous_drive_started":
+            phase.update(
+                scene="planning",
+                stage="candidate",
+                title="正在进行内生评估",
+                thinking_text=summary,
+            )
+        elif normalized_event == "endogenous_drive_failed":
+            phase.update(
+                scene="idle",
+                stage="error",
+                title="内生评估失败",
+                thinking_text=summary,
             )
         elif normalized_event == "endogenous_drive_evaluated":
             candidates = metadata.get("candidates")

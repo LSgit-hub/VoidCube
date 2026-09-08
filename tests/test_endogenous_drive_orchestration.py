@@ -427,6 +427,36 @@ async def test_autonomous_cycle_service_skips_overlapping_drive_cycle():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("generation_status", ["completed", "generation_error", "invalid_response", "llm_unavailable"])
+async def test_empty_drive_cycle_distinguishes_normal_idle_from_generation_failure(generation_status):
+    events = []
+    evaluation = {
+        "candidates": [],
+        "generation_diagnostics": {"status": generation_status, "error": "test error"},
+    }
+    context = EndogenousDriveCycleContext(
+        runtime_config=SimpleNamespace(endogenous_drive_enabled=True, endogenous_drive_interval=900),
+        evaluate_drive=lambda request: asyncio.sleep(0, result=evaluation),
+        drive_input_fields_from_evaluation=lambda evaluation: {},
+        load_drive_history=lambda: {},
+        load_governance_events=lambda: {},
+        load_cognition_state=lambda: {},
+        persist_evaluation=lambda **kwargs: pytest.fail("empty cycle must not persist candidate state"),
+        restore_evaluation_snapshots=lambda **kwargs: None,
+        lm_generation_application_state=lambda: SimpleNamespace(reasoning_state={}),
+        plan_autonomous_chain_task=lambda request: pytest.fail("empty cycle must not plan tasks"),
+        record_ui_activity=lambda event, **kwargs: events.append((event, kwargs)),
+        touch_gateway_activity=lambda *args, **kwargs: asyncio.sleep(0),
+    )
+    result = await run_endogenous_drive_cycle(context=context)
+    failed = generation_status != "completed"
+    assert result["status"] == ("error" if failed else "idle")
+    assert result["diagnostics"]["generation_status"] == generation_status
+    assert events[0][0] == ("endogenous_drive_failed" if failed else "endogenous_drive_idle")
+    assert "900" in events[0][1]["summary"]
+
+
+@pytest.mark.asyncio
 async def test_autonomous_cycle_schedules_candidate_after_drive_without_waiting_for_work():
     calls = []
 

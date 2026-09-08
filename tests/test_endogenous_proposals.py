@@ -219,6 +219,20 @@ def test_lm_generation_application_port_preserves_disabled_and_unavailable_state
     assert unavailable.candidate_repass_proposals is None
 
 
+def test_generation_failure_is_diagnostic_not_valid_cognitive_reasoning():
+    application_state = project_lm_generation_application_state(
+        runtime_config=SimpleNamespace(endogenous_drive_lm_task_generation_enabled=True),
+        state_loader=lambda: {
+            "context": {"status": "generation_error", "error": "request failed", "proposal_count": 0},
+            "proposals": [],
+        },
+    )
+    assert application_state.reasoning_state == {}
+    assert application_state.generation_diagnostics == {
+        "status": "generation_error", "error": "request failed", "proposal_count": 0,
+    }
+
+
 def test_cognition_state_owner_assembles_read_model_from_explicit_snapshots():
     state = build_cognition_state_projection(
         enabled=True,

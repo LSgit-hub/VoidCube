@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
 from .endogenous_proposals import is_lm_task_generation_enabled
@@ -13,6 +13,7 @@ from .endogenous_proposals import is_lm_task_generation_enabled
 class LmGenerationApplicationState:
     reasoning_state: Dict[str, Any]
     candidate_repass_proposals: Optional[List[Dict[str, Any]]]
+    generation_diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
 def project_lm_generation_application_state(
@@ -44,4 +45,8 @@ def project_lm_generation_application_state(
         ]
     except Exception:
         proposals = []
-    return LmGenerationApplicationState(reasoning_state, proposals)
+    return LmGenerationApplicationState(
+        reasoning_state,
+        proposals,
+        {key: context[key] for key in ("status", "model_role", "proposal_count", "error") if key in context},
+    )

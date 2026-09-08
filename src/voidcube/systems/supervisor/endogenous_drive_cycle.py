@@ -135,24 +135,50 @@ async def run_endogenous_drive_cycle(
         candidate_items=raw_candidate_items,
         drive_posture=drive_posture,
     )
+    proposal_trace = dict(
+        dict(dict(evaluation.get("cognition_state") or {}).get("proposal_cognition") or {}).get("lm_trace") or {}
+    )
+    diagnostics = {
+        "proposal_count": int(proposal_trace.get("proposal_count") or 0),
+        "candidate_count": len(raw_candidate_items),
+        "admitted_count": len(candidate_items),
+        "preferred_focus": dict(drive_posture.get("payload") or {}).get("preferred_focus"),
+    }
+    generation_diagnostics = dict(evaluation.get("generation_diagnostics") or {})
+    diagnostics["generation_status"] = generation_diagnostics.get("status")
+    diagnostics["generation_error"] = generation_diagnostics.get("error")
     if not candidate_items:
+        generation_failed = generation_diagnostics.get("status") in {
+            "generation_error", "llm_unavailable", "invalid_response",
+        }
+        summary = (
+            f"内生评估完成：模型提案 {diagnostics['proposal_count']} 个，"
+            f"候选 {len(raw_candidate_items)} 个，可入链 {len(candidate_items)} 个。"
+        )
+        if diagnostics["proposal_count"] or deferred_candidates:
+            summary += "本轮提案未通过资格、去重或治理姿态筛选。"
+        if generation_failed:
+            summary = f"内生提案生成失败：{generation_diagnostics.get('error') or generation_diagnostics['status']}。"
+        interval = int(getattr(context.runtime_config, "endogenous_drive_interval", 0))
+        if interval > 0:
+            summary += f"下一轮评估间隔为 {interval} 秒。"
         context.record_ui_activity(
-            "endogenous_drive_idle",
+            "endogenous_drive_failed" if generation_failed else "endogenous_drive_idle",
             scene="idle",
-            summary="内生驱动本轮未形成新的 API-B 判断在途投影。",
+            summary=summary,
             metadata={
+                "diagnostics": diagnostics,
                 "drive_posture": drive_posture,
                 "governance_channels": governance_channels,
                 "governance_event_stream": governance_event_stream,
                 "deferred_candidates": deferred_candidates,
-            }
-            if drive_posture
-            else None,
+            },
         )
         return {
-            "status": "idle",
+            "status": "error" if generation_failed else "idle",
             "planned": 0,
             "tasks": [],
+            "diagnostics": diagnostics,
             **context.drive_input_fields_from_evaluation(evaluation),
             "drive_posture": drive_posture,
             "governance_channels": governance_channels,
@@ -226,6 +252,7 @@ async def run_endogenous_drive_cycle(
         "status": "planned",
         "planned": len(created_tasks),
         "tasks": created_tasks,
+        "diagnostics": diagnostics,
         **evaluation_fields,
         "drive_posture": drive_posture,
         "governance_channels": governance_channels,

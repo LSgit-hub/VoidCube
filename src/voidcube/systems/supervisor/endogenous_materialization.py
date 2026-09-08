@@ -225,6 +225,12 @@ def build_lm_materialization_context(
         ),
         "body_projection": body_projection,
         "eligible_candidate_kinds": eligible_kinds,
+        "allow_grounded_governance_observation": (
+            adaptive_policy.preferred_focus == "observation"
+            and "governance_hygiene_review" not in active_api_b_judgement_candidate_kinds(
+                list(drive_context.get("api_b_judgement_tasks") or [])
+            )
+        ),
     }
 
 
@@ -292,6 +298,7 @@ def materialize_lm_proposals_for_deliberation(
         adaptive_policy=adaptive_policy,
         body_projection=context["body_projection"],
         eligible_candidate_kinds=context["eligible_candidate_kinds"],
+        allow_grounded_governance_observation=context["allow_grounded_governance_observation"],
         active_sessions=perception.active_sessions,
         backlog_pressure=backlog_pressure,
         drive_judgement=drive_judgement,
@@ -495,18 +502,29 @@ def materialize_lm_proposals(
     active_sessions: int,
     backlog_pressure: BacklogPressure,
     drive_judgement: DriveJudgement,
+    allow_grounded_governance_observation: bool = False,
 ) -> List[EndogenousTaskCandidate]:
     realized: List[EndogenousTaskCandidate] = []
     for item in proposals:
         candidate_kind = str(item.get("candidate_kind") or "").strip()
-        if candidate_kind not in eligible_candidate_kinds:
-            continue
         normalized = normalize_lm_proposal(
             item,
             evidence_graph=evidence_graph,
             agenda_graph=agenda_graph,
         )
         if normalized is None:
+            continue
+        grounded_observation = (
+            allow_grounded_governance_observation
+            and candidate_kind == "governance_hygiene_review"
+            and normalized.task_type == "observation"
+            and normalized.execution_mode == "observe_only"
+            and normalized.risk_level == "low"
+            and not normalized.blocking_factors
+            and bool(normalized.reference_alignment.get("matched_evidence_nodes"))
+            and bool(normalized.reference_alignment.get("matched_agenda_nodes"))
+        )
+        if candidate_kind not in eligible_candidate_kinds and not grounded_observation:
             continue
         candidate = materialize_lm_proposal(
             proposal=normalized,
@@ -521,6 +539,9 @@ def materialize_lm_proposals(
         )
         if candidate is None:
             continue
+        if grounded_observation:
+            candidate.constraints["must_not_modify_active_body"] = True
+            candidate.metadata["eligibility_reason"] = "grounded_governance_observation"
         realized.append(candidate)
         existing_keys.add(candidate.stable_key)
     return realized

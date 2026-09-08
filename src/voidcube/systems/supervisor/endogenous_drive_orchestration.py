@@ -302,4 +302,5 @@ async def evaluate_endogenous_drive(
         "self_regulation": combined_self_regulation,
         "cognitive_self_regulation": cognitive_self_regulation,
         "cognition_state": cognition_state,
+        "generation_diagnostics": dict(getattr(lm_application_state, "generation_diagnostics", {}) or {}),
     }
