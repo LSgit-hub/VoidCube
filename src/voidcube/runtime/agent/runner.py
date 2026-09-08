@@ -4089,6 +4089,17 @@ class AIAgent:
                     _query,
                     session_id=self.session_id,
                 ) or ""
+                # Diagnostic log: track prefetch size and token cost for
+                # evaluating whether a min_score filter would help.
+                if _ext_prefetch_cache and not self.quiet_mode:
+                    _chars = len(_ext_prefetch_cache)
+                    _tokens = _chars // 4
+                    _fenced = build_memory_context_block(_ext_prefetch_cache)
+                    _fenced_chars = len(_fenced) if _fenced else 0
+                    logger.info(
+                        "Memory prefetch: %d chars / ~%d tokens (fenced block: %d chars)",
+                        _chars, _tokens, _fenced_chars,
+                    )
             except Exception:
                 pass
 
