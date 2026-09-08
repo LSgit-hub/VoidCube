@@ -66,6 +66,8 @@ _EVALUATION_MEMORY_MARKERS = (
     "memory store",
     "memory service",
 )
+
+
 _BACKGROUND_REVIEW_MARKER = (
     "review the conversation above and consider saving or updating a skill"
 )
@@ -150,19 +152,21 @@ def _sanitize_memory_context(raw: str) -> str:
     return json.dumps(cleaned, ensure_ascii=False)
 
 
-def build_memory_context_block(raw_context: str) -> str:
+def build_memory_context_block(raw_context: str, *, min_score: float = 0.5) -> str:
     """Wrap prefetched memory in a fenced block with system note.
 
     The fence prevents the model from treating recalled context as user
     discourse.  Injected at API-call time only — never persisted.
     Internal metadata fields (trace IDs, scores, query plans) are stripped
     before wrapping to reduce system prompt noise.
+
+    Results with normalized_score below ``min_score`` are silently dropped.
     """
     if not raw_context or not raw_context.strip():
         return ""
     clean = sanitize_context(raw_context)
-    # Strip internal metadata to reduce context bloat
-    clean = _sanitize_memory_context(clean)
+    # Strip internal metadata and apply score filter
+    clean = _sanitize_and_filter_context(clean, min_score=min_score)
     if not clean:
         return ""
     return (
@@ -175,6 +179,61 @@ def build_memory_context_block(raw_context: str) -> str:
         f"{clean}\n"
         "</memory-context>"
     )
+
+
+def _sanitize_and_filter_context(raw: str, *, min_score: float = 0.5) -> str:
+    """Strip metadata AND filter by min_score in one pass.
+
+    Combines _sanitize_memory_context's JSON cleaning with an optional
+    normalized_score threshold to drop low-relevance recalls.
+    """
+    if not raw or not raw.strip():
+        return ""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON — apply sanitize only (no score field to filter on)
+        return _sanitize_memory_context(raw)
+
+    if not isinstance(data, dict):
+        return _sanitize_memory_context(raw)
+
+    # Unwrap {data: {results: ...}} -> {results: ...}
+    if "data" in data and isinstance(data["data"], dict) and "results" in data["data"]:
+        data = data["data"]
+
+    cleaned: dict[str, Any] = {}
+
+    if "count" in data:
+        cleaned["count"] = data["count"]
+
+    results = data.get("results")
+    if isinstance(results, list):
+        kept_results = []
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            # Apply min_score filter
+            score = entry.get("normalized_score") or entry.get("raw_score")
+            if score is not None:
+                try:
+                    if float(score) < min_score:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            slim: dict[str, Any] = {}
+            for key in ("summary", "title", "timestamp", "speaker", "tier"):
+                if key in entry:
+                    slim[key] = entry[key]
+            if slim:
+                kept_results.append(slim)
+        if kept_results:
+            cleaned["results"] = kept_results
+
+    if not cleaned:
+        return ""
+
+    return json.dumps(cleaned, ensure_ascii=False)
 
 
 class MemoryManager:
