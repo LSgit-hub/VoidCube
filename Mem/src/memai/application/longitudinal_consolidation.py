@@ -486,7 +486,7 @@ def latest_consolidation_run(conn, *, owner_id: str | None = None,
         "cluster_count, eligible_cluster_count, proposals_generated, applied_count, "
         "conflict_count, low_confidence_skipped, undersized_skipped, incohesive_skipped, "
         "idempotent_skip_count, changed_count, duration_ms, created_at "
-        "FROM memory_consolidation_runs" + where + " ORDER BY created_at DESC, run_id DESC LIMIT 1",
+        "FROM memory_consolidation_runs" + where + " ORDER BY created_at DESC, rowid DESC LIMIT 1",
         params,
     ).fetchone()
     if row is None:

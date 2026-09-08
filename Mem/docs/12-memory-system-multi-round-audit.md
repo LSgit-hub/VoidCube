@@ -52,6 +52,15 @@ git diff --check
 
 ## 轮次记录
 
+### R7：交付前反向复核
+
+- 状态：**已完成**。
+- 重点：整合运行指标在同一时间戳下的最新记录选择、HTTP outbox smoke 的运行环境隔离，以及查询、压缩、遗忘和派生索引路径的反向复核。
+- 发现并修复：`latest_consolidation_run` 原先在 `created_at` 相同时用随机 `run_id` 排序，可能返回较早运行而丢失最新幂等指标；现在使用 SQLite 插入顺序 `rowid` 作为同时间戳的确定性 tie-breaker。HTTP outbox smoke 原先会受本机外部 Gateway 自动注册影响，把 Gateway reporter 混入 provider 计数；现在在隔离 smoke 中显式 mock Gateway 注册，避免非确定性环境污染。
+- 证据：整合指标回归、outbox operational 回归、健康信号回归共 62 项通过；Mem 专属测试 132 项通过；Ruff、`compileall` 和 `git diff --check` 通过。
+- 反向结论：召回默认过滤 active/visible、as-of 版本裁剪、scope/domain 隔离、Tier 1 覆盖率门禁、Tier 2 幂等 UPSERT、遗忘候选观察期/逻辑 purge/审计保留/FTS-embedding-entity graph 清理均保持闭合；本轮未发现新的 P0/P1。
+- 适用性：本轮仅修改记忆整合指标查询和隔离 smoke 测试，不涉及模型、鉴权、请求协议、技能发现或 wheel 内容，因此项目规定的对应退役入口扫描不适用；仍执行记忆专属回归、静态检查和编译检查。
+
 ### R0：基线与范围
 
 - 状态：**已完成**。

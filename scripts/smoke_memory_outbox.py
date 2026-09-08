@@ -195,6 +195,7 @@ async def run_http_health_smoke() -> dict[str, Any]:
             )
         )
         memory._check_llm_health = AsyncMock(return_value=None)
+        memory.register_with_gateway = AsyncMock(return_value=None)
         memory_server = memory_task = None
         try:
             memory_server, memory_task = await _start_uvicorn(
