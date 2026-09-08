@@ -2330,6 +2330,16 @@ class ServiceRuntimeMixin:
                 if not self._service_runtime.auto_evidence_packet:
                     self._service_runtime.auto_evidence_packet = self._new_auto_evidence_packet()
                 await self._notify_gateway_autonomous_chain_gate(active=True)
+                review_task = self._autonomous_chain_review_task
+                drive_task = self._endogenous_drive_task
+                if (
+                    review_task is None
+                    or review_task.done()
+                    or (self.config.service_runtime.endogenous_drive_enabled and (
+                        drive_task is None or drive_task.done()
+                    ))
+                ):
+                    await self._start_autonomous_chain_workers()
                 return
             await self._stop_daily_companion_worker()
             self._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION

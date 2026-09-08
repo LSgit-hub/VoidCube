@@ -4618,7 +4618,7 @@ async def test_supervisor_periodic_endogenous_drive_runtime_invokes_cycle(tmp_pa
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_start_autonomous_chain_gate_renotifies_gateway_when_already_active(tmp_path):
+async def test_start_autonomous_chain_gate_repairs_missing_workers_when_already_active(tmp_path):
     supervisor = _make_supervisor(tmp_path)
     supervisor._service_runtime.autonomous_chain_gate_active = True
     supervisor._notify_gateway_autonomous_chain_gate = AsyncMock()  # type: ignore[method-assign]
@@ -4628,8 +4628,14 @@ async def test_start_autonomous_chain_gate_renotifies_gateway_when_already_activ
     await supervisor._start_autonomous_chain_gate()
 
     supervisor._notify_gateway_autonomous_chain_gate.assert_awaited_once_with(active=True)  # type: ignore[attr-defined]
-    assert supervisor._autonomous_chain_review_task is None
-    assert supervisor._endogenous_drive_task is None
+    assert supervisor._autonomous_chain_review_task is not None
+    assert supervisor._endogenous_drive_task is not None
+    supervisor._autonomous_chain_review_task.cancel()
+    supervisor._endogenous_drive_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._autonomous_chain_review_task
+    with pytest.raises(asyncio.CancelledError):
+        await supervisor._endogenous_drive_task
 
 
 @pytest.mark.unit
