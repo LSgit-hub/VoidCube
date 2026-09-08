@@ -390,7 +390,8 @@ def apply_text_response_disposition(
             "final response"
         )
         owner._emit_status(
-            "↻ Empty response after tool calls — using earlier content as final answer"
+            "⚠️ 响应不完整 — 工具调用后流式传输中断，显示之前的消息"
+            "（工具可能未执行）"
         )
         owner._last_content_with_tools = None
         owner._empty_content_retries = 0
@@ -407,7 +408,19 @@ def apply_text_response_disposition(
                 f"Calling the {', '.join(tool_names)} tool{plural}..."
             )
             break
-        state.final_response = strip_thinking_blocks(prior_content).strip()
+        stripped = strip_thinking_blocks(prior_content).strip()
+        # Prepend an explicit incomplete-marker so the user knows the reply
+        # is a leftover from before the stream was interrupted, not a
+        # deliberately crafted final answer.
+        if stripped:
+            state.final_response = (
+                "[响应在工具调用前中断——显示的是尝试调用工具之前的预览内容，"
+                "上方列出的工具可能未执行。]\n\n" + stripped
+            )
+        else:
+            state.final_response = (
+                "[响应在工具调用前中断。上方列出的工具可能未执行。]"
+            )
         owner._response_was_previewed = True
         return ResponseActionExecution(ResponseLoopControl.break_loop)
 

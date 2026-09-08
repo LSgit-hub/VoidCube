@@ -92,15 +92,79 @@ def sanitize_context(text: str) -> str:
     return _FENCE_TAG_RE.sub('', text)
 
 
+def _sanitize_memory_context(raw: str) -> str:
+    """Strip internal metadata fields from raw memory prefetch output.
+
+    The memory service returns JSON-like context containing fields such as
+    ``trace_id``, ``recall_status``, ``query_plan``, ``candidates``, and
+    per-result ``raw_score``/``normalized_score`` that are useful for the
+    service internals but add noise to the agent's system prompt.
+
+    This function keeps only the fields the agent actually needs to act on:
+    ``results[].summary``, ``results[].title``, ``results[].timestamp``, and
+    the top-level ``count``. Everything else is stripped.
+    Handles both top-level {results: [...]} and wrapped {data: {results: [...]}}
+    shapes produced by different service versions.
+    """
+    if not raw or not raw.strip():
+        return ""
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON — return as-is (e.g. plain text fallback)
+        return raw
+
+    if not isinstance(data, dict):
+        return raw
+
+    # Unwrap {data: {results: ...}} -> {results: ...} for uniform processing
+    if "data" in data and isinstance(data["data"], dict) and "results" in data["data"]:
+        data = data["data"]
+
+    cleaned: dict[str, Any] = {}
+
+    # Keep count (useful for the agent to know how many results matched)
+    if "count" in data:
+        cleaned["count"] = data["count"]
+
+    # Keep results but strip internal fields from each entry
+    results = data.get("results")
+    if isinstance(results, list):
+        kept_results = []
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            slim: dict[str, Any] = {}
+            # Keep only the fields the agent needs
+            for key in ("summary", "title", "timestamp", "speaker", "tier"):
+                if key in entry:
+                    slim[key] = entry[key]
+            if slim:
+                kept_results.append(slim)
+        if kept_results:
+            cleaned["results"] = kept_results
+
+    if not cleaned:
+        return ""
+
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
 def build_memory_context_block(raw_context: str) -> str:
     """Wrap prefetched memory in a fenced block with system note.
 
     The fence prevents the model from treating recalled context as user
     discourse.  Injected at API-call time only — never persisted.
+    Internal metadata fields (trace IDs, scores, query plans) are stripped
+    before wrapping to reduce system prompt noise.
     """
     if not raw_context or not raw_context.strip():
         return ""
     clean = sanitize_context(raw_context)
+    # Strip internal metadata to reduce context bloat
+    clean = _sanitize_memory_context(clean)
+    if not clean:
+        return ""
     return (
         "<memory-context>\n"
         "[System note: The following is recalled memory context, "
