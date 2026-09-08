@@ -521,9 +521,52 @@ def _skill_should_show(
     return True
 
 
+def _build_skills_index_line(name: str, desc: str) -> str:
+    """Build one line of the compact skills index.
+
+    Keeps description to first sentence (~80 chars) to keep the index compact.
+    """
+    if not desc:
+        return f"    - {name}"
+    # Truncate to first sentence or ~80 chars
+    first_sentence = desc.split(".")[0] if "." in desc else desc
+    if len(first_sentence) > 80:
+        first_sentence = first_sentence[:77] + "..."
+    return f"    - {name}: {first_sentence}"
+
+
+def _build_skills_index(
+    skills_by_category: dict[str, list[tuple[str, str]]],
+    category_descriptions: dict[str, str],
+) -> str:
+    """Build a compact index-only representation of available skills.
+
+    Returns just the category+name listing without instructions, for use in
+    initial system prompts where full descriptions would bloat context.
+    """
+    if not skills_by_category:
+        return ""
+    index_lines = []
+    for category in sorted(skills_by_category.keys()):
+        cat_desc = category_descriptions.get(category, "")
+        if cat_desc:
+            index_lines.append(f"  {category}: {cat_desc}")
+        else:
+            index_lines.append(f"  {category}:")
+        seen = set()
+        for name, desc in sorted(skills_by_category[category], key=lambda x: x[0]):
+            if name in seen:
+                continue
+            seen.add(name)
+            index_lines.append(_build_skills_index_line(name, desc))
+    return "\n".join(index_lines)
+
+
 def build_skills_system_prompt(
     available_tools: "set[str] | None" = None,
     available_toolsets: "set[str] | None" = None,
+    *,
+    mode: str = "full",
 ) -> str:
     """Build a compact skill index for the system prompt.
 
@@ -535,6 +578,10 @@ def build_skills_system_prompt(
     scanned alongside the local ``~/.VoidCube/skills/`` directory.  External dirs
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
+
+    *mode* controls verbosity:
+      - ``"full"`` (default): includes instructions and full descriptions
+      - ``"index"``: compact listing only, for initial context reduction
     """
     skills_dirs = get_all_skills_dirs()
     if not any(skills_dir.is_dir() for skills_dir in skills_dirs):
@@ -553,6 +600,7 @@ def build_skills_system_prompt(
         tuple(sorted(str(t) for t in (available_tools or set()))),
         tuple(sorted(str(ts) for ts in (available_toolsets or set()))),
         _platform_hint,
+        mode,
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -596,6 +644,9 @@ def build_skills_system_prompt(
 
     if not skills_by_category:
         result = ""
+    elif mode == "index":
+        # Compact mode: just the index lines, no instructions
+        result = _build_skills_index(skills_by_category, category_descriptions)
     else:
         index_lines = []
         for category in sorted(skills_by_category.keys()):
