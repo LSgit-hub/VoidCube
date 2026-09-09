@@ -4671,6 +4671,43 @@ async def test_drive_worker_reports_failure_then_recovers_with_compact_status(tm
             await supervisor._autonomous_chain_review_task
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("healthy_worker", ["review", "drive"])
+async def test_auto_repairs_only_missing_worker_without_cancelling_live_cycle(tmp_path, healthy_worker):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._service_runtime.autonomous_chain_gate_active = True
+    supervisor._notify_gateway_autonomous_chain_gate = AsyncMock()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def active_cycle():
+        entered.set()
+        await release.wait()
+        finished.set()
+
+    live_task = asyncio.create_task(active_cycle())
+    await entered.wait()
+    attribute = "_autonomous_chain_review_task" if healthy_worker == "review" else "_endogenous_drive_task"
+    setattr(supervisor, attribute, live_task)
+    try:
+        await supervisor._start_autonomous_chain_gate()
+        await supervisor._start_autonomous_chain_gate()
+        assert getattr(supervisor, attribute) is live_task
+        assert live_task.cancelling() == 0
+        assert supervisor._autonomous_chain_review_task is not None
+        assert supervisor._endogenous_drive_task is not None
+        release.set()
+        await asyncio.wait_for(live_task, timeout=2)
+        assert finished.is_set()
+    finally:
+        workers = [supervisor._autonomous_chain_review_task, supervisor._endogenous_drive_task, live_task]
+        for task in workers:
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(*(task for task in workers if task is not None), return_exceptions=True)
+
+
 @pytest.mark.parametrize(("event", "title"), [
     ("endogenous_drive_started", "正在进行内生评估"),
     ("endogenous_drive_failed", "内生评估失败"),

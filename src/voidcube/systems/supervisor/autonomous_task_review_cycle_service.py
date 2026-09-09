@@ -91,20 +91,21 @@ class AutonomousTaskReviewCycleService:
             if not self._dispatch_budget_available(dispatched):
                 budget_exhausted += 1
                 continue
-            dispatched.append(
-                {"task_id": task.task_id, **self._dispatch_employee(task)}
-            )
+            assignment = self._dispatch_employee(task)
+            if assignment.get("status") == "dispatched":
+                dispatched.append({"task_id": task.task_id, **assignment})
 
         dispatched_ids = {item["task_id"] for item in dispatched}
         for task in self._list_execution_lane_tasks("approved"):
             if task.task_id in dispatched_ids or task.task_id in considered_ids:
                 continue
+            considered_ids.add(task.task_id)
             if not self._dispatch_budget_available(dispatched):
                 budget_exhausted += 1
                 continue
-            dispatched.append(
-                {"task_id": task.task_id, **self._dispatch_employee(task)}
-            )
+            assignment = self._dispatch_employee(task)
+            if assignment.get("status") == "dispatched":
+                dispatched.append({"task_id": task.task_id, **assignment})
         return dispatched, budget_exhausted
 
     def _normalized_dispatch_limit(self) -> int:

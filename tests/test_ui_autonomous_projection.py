@@ -3,6 +3,7 @@ from voidcube.systems.supervisor.ui_autonomous_projection import (
     project_autonomous_observation,
 )
 from voidcube.systems.supervisor.ui_state_projection import (
+    project_employee_executor_wait_state,
     project_supervisor_scene_state,
 )
 
@@ -26,6 +27,35 @@ def test_autonomous_board_exposes_separate_task_run_and_writeback_collections():
     assert board["planning_tasks"] == []
     assert board["autonomous_history"] == []
     assert observation["read_model_version"] == 15
+
+
+def test_ui_reports_waiting_employee_executor_instead_of_idle_or_generic_handoff():
+    scene = project_employee_executor_wait_state(
+        {"scene": "handoff", "title": "正在派发员工任务", "summary": "等待接手", "stage": "dispatched", "task_id": "old", "mode": "auto_evolution"},
+        employee_context={
+            "employee_executor": {"status": "waiting_for_employee_executor", "queued_count": 3},
+            "items": [{"task_id": "employee-1"}],
+        },
+        mode="auto_evolution",
+    )
+    assert scene["title"] == "等待员工执行器"
+    assert "3 个自主任务" in scene["summary"]
+    assert scene["stage"] == "executor_waiting"
+    assert scene["task_id"] == "employee-1"
+
+
+def test_ui_does_not_override_live_executor_or_daily_mode():
+    scene = {"scene": "handoff", "title": "正在执行", "summary": "run", "stage": "running", "task_id": "run-1", "mode": "auto_evolution"}
+    assert project_employee_executor_wait_state(
+        scene,
+        employee_context={"employee_executor": {"status": "running", "queued_count": 3}},
+        mode="auto_evolution",
+    ) == scene
+    assert project_employee_executor_wait_state(
+        scene,
+        employee_context={"employee_executor": {"status": "waiting_for_employee_executor", "queued_count": 3}},
+        mode="daily_companion",
+    ) == scene
 
 
 def test_completed_employee_run_exposes_writeback_contract_fields():

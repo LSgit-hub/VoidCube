@@ -17,7 +17,11 @@ from .ui_projection import (
     project_observation_board,
     project_recent_autonomous_activity,
 )
-from .ui_state_projection import project_supervisor_scene_state, project_ui_metrics
+from .ui_state_projection import (
+    project_employee_executor_wait_state,
+    project_supervisor_scene_state,
+    project_ui_metrics,
+)
 
 
 JsonDict = Dict[str, Any]
@@ -519,6 +523,11 @@ async def build_supervisor_ui_state(
         employee_context = dict(employee_context or {})
     except Exception:
         employee_context = {}
+    scene_projection = project_employee_executor_wait_state(
+        scene_projection,
+        employee_context=employee_context,
+        mode=str(stellar_mode.get("mode") or ""),
+    )
     employee_runs = [
         item for item in list(employee_context.get("items") or [])
         if isinstance(item, dict) and str(item.get("autonomous_task_id") or "").strip()

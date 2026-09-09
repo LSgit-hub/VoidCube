@@ -2319,7 +2319,7 @@ class ServiceRuntimeMixin:
     async def _start_autonomous_chain_gate(self) -> None:
         """Enable the autonomous chain and start review/drive loops.
 
-        Idempotent — if the autonomous chain is already active this is a no-op.
+        Preserve live workers and repair missing workers on repeated activation.
         """
         async with self._service_runtime.mode_transition_lock:
             voice_manager = getattr(self, "_voice_manager", None)
@@ -2384,9 +2384,6 @@ class ServiceRuntimeMixin:
     async def _start_autonomous_chain_workers(self) -> None:
         runtime_config = self.config.service_runtime
 
-        if self._autonomous_chain_review_task:
-            self._autonomous_chain_review_task.cancel()
-
         async def autonomous_chain_review_loop() -> None:
             delay = min(5, runtime_config.autonomous_chain_review_interval)
             while True:
@@ -2406,11 +2403,9 @@ class ServiceRuntimeMixin:
                     logger.exception("Autonomous-chain review loop iteration failed")
                 delay = runtime_config.autonomous_chain_review_interval
 
-        self._autonomous_chain_review_task = asyncio.create_task(autonomous_chain_review_loop())
-        logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.autonomous_chain_review_interval)
-
-        if self._endogenous_drive_task:
-            self._endogenous_drive_task.cancel()
+        if self._autonomous_chain_review_task is None or self._autonomous_chain_review_task.done():
+            self._autonomous_chain_review_task = asyncio.create_task(autonomous_chain_review_loop())
+            logger.info("Autonomous chain: review loop started (interval=%ds)", runtime_config.autonomous_chain_review_interval)
 
         if runtime_config.endogenous_drive_enabled:
             async def endogenous_drive_loop() -> None:
@@ -2454,11 +2449,19 @@ class ServiceRuntimeMixin:
                         )
                     delay = runtime_config.endogenous_drive_interval
 
-            self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
-            logger.info("Autonomous chain: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
+            if self._endogenous_drive_task is None or self._endogenous_drive_task.done():
+                self._endogenous_drive_task = asyncio.create_task(endogenous_drive_loop())
+                logger.info("Autonomous chain: drive loop started (interval=%ds)", runtime_config.endogenous_drive_interval)
 
         else:
+            if self._endogenous_drive_task is not None:
+                self._endogenous_drive_task.cancel()
+                try:
+                    await self._endogenous_drive_task
+                except asyncio.CancelledError:
+                    pass
             self._endogenous_drive_task = None
+            self._service_runtime.next_drive_at = None
             logger.info("Autonomous chain: drive loop disabled (endogenous_drive_enabled=False)")
 
     async def _stop_autonomous_chain_gate(self, *, restore_companion: bool = True) -> None:

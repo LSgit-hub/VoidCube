@@ -124,6 +124,35 @@ def _scene_projection(
     }
 
 
+def project_employee_executor_wait_state(
+    scene: dict[str, str],
+    *,
+    employee_context: dict[str, Any],
+    mode: str,
+) -> dict[str, str]:
+    """Show the execution boundary when approved work has no CLI executor."""
+    if str(mode or "").strip().lower() != "auto_evolution":
+        return scene
+    executor = dict(employee_context.get("employee_executor") or {})
+    status = str(executor.get("status") or "").strip().lower()
+    queued_count = int(executor.get("queued_count") or 0)
+    if status != "waiting_for_employee_executor" or queued_count <= 0:
+        return scene
+    items = [item for item in employee_context.get("items") or [] if isinstance(item, dict)]
+    focus = items[0] if items else {}
+    return _scene_projection(
+        scene="handoff",
+        title="等待员工执行器",
+        summary=(
+            f"已有 {queued_count} 个自主任务通过 API-B 判断并进入执行队列，"
+            "当前没有 CLI 员工执行器领取；启动或恢复 CLI 后将自动继续。"
+        ),
+        stage="executor_waiting",
+        task_id=str(focus.get("task_id") or ""),
+        mode=mode,
+    )
+
+
 def project_supervisor_scene_state(
     *,
     autonomous_observation: dict[str, Any],
