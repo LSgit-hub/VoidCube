@@ -5577,13 +5577,13 @@ syncCompanionCharacterLaunchers(false);
   setInterval(update, 1000);
 })();
 
-/* 随机眨眼间隔（更自然） */
+/* 随机眨眼间隔（更自然）— 双眼同步，仅 offset 随机化 */
 (function randomBlink() {
   function reroll() {
     var eyes = document.querySelectorAll('.xizi .xz-eye, .xingzi .xs-eye');
+    var delay = (Math.random() * 5).toFixed(2) + 's';
     for (var i = 0; i < eyes.length; i++) {
-      var d = (2.8 + Math.random() * 4.2).toFixed(1) + 's';
-      eyes[i].style.animationDuration = d;
+      eyes[i].style.animationDelay = delay;
     }
   }
   reroll();
