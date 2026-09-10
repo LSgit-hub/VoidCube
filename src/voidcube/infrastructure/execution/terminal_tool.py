@@ -149,31 +149,21 @@ def _check_tirith_security(command: str) -> dict:
     return check_command_security(command)
 
 
-# Allowlist: characters that can legitimately appear in directory paths.
-# Covers alphanumeric, path separators, tilde, dot, hyphen, underscore, space,
-# plus, at, equals, and comma.  Everything else is rejected.
-_WORKDIR_SAFE_RE = re.compile(r'^[A-Za-z0-9/_\-.~ +@=,]+$')
+# Workdir is a path value, not shell source.  Validate control/shell
+# metacharacters while allowing native Windows drive and UNC paths.
+_WORKDIR_UNSAFE_RE = re.compile(r'[;|&$`<>\x00\r\n]')
 
 
 def _validate_workdir(workdir: str) -> str | None:
-    """Reject workdir values that don't look like a filesystem path.
-
-    Uses an allowlist of safe characters rather than a deny-list, so novel
-    shell metacharacters can't slip through.
-
-    Returns None if safe, or an error message string if dangerous.
-    """
+    """Reject shell/control characters without rejecting valid OS paths."""
     if not workdir:
         return None
-    if not _WORKDIR_SAFE_RE.match(workdir):
-        # Find the first offending character for a helpful message.
-        for ch in workdir:
-            if not _WORKDIR_SAFE_RE.match(ch):
-                return (
-                    f"Blocked: workdir contains disallowed character {repr(ch)}. "
-                    "Use a simple filesystem path without shell metacharacters."
-                )
-        return "Blocked: workdir contains disallowed characters."
+    match = _WORKDIR_UNSAFE_RE.search(workdir)
+    if match:
+        return (
+            f"Blocked: workdir contains disallowed character {match.group(0)!r}. "
+            "Use a filesystem path without shell metacharacters."
+        )
     return None
 
 

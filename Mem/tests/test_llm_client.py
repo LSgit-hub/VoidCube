@@ -121,6 +121,47 @@ def test_openai_compatible_client_safe_complete_json_falls_back_on_bad_payload()
     assert payload == {}
 
 
+def test_openai_compatible_client_safe_complete_json_strict_mode_propagates_bad_payload() -> None:
+    def fake_transport(url, headers, payload):
+        return {"choices": [{"message": {"content": "not-json"}}]}
+
+    client = OpenAICompatibleLLMClient(
+        model="test-model",
+        api_key="test-key",
+        transport=fake_transport,
+    )
+
+    try:
+        client.safe_complete_json(
+            system_prompt="Return JSON",
+            user_payload={"turns": []},
+            task="extractor.events",
+            raise_on_error=True,
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    else:
+        raise AssertionError("strict JSON mode must propagate parsing errors")
+
+
+def test_openai_compatible_client_extract_events_does_not_hide_invalid_json() -> None:
+    def fake_transport(url, headers, payload):
+        return {"choices": [{"message": {"content": "not-json"}}]}
+
+    client = OpenAICompatibleLLMClient(
+        model="test-model",
+        api_key="test-key",
+        transport=fake_transport,
+    )
+
+    try:
+        client.extract_events([])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    else:
+        raise AssertionError("event extraction must not turn invalid JSON into empty events")
+
+
 def test_openai_compatible_client_uses_provider_capability_profile() -> None:
     def fake_transport(url, headers, payload):
         assert url.endswith("/custom/chat")

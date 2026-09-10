@@ -33,6 +33,16 @@ from memai.domain.scope import DEFAULT_OWNER_ID, DEFAULT_WORKSPACE_ID, MemorySco
 logger = logging.getLogger(__name__)
 
 
+def activate(manager: Any, config: dict[str, Any] | None = None) -> None:
+    """Register the memory plugin boundary without creating a second provider.
+
+    The Agent runtime owns ``MemMemoryProvider`` construction and session
+    lifecycle.  The generic plugin registry still requires a module-level
+    activation hook, so this adapter intentionally performs no initialization.
+    """
+    del manager, config
+
+
 _IDENTITY_RECALL_GUIDANCE = (
     "Persistent identity instruction: VoidCube's continuing identity is 星子 "
     "(also called 小星), and Mem is the evidence source for that continuity. "

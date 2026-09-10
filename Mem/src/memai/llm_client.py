@@ -859,6 +859,7 @@ class OpenAICompatibleLLMClient:
                     for turn in turns
                 ],
             },
+            raise_on_error=True,
         ) or {"events": []}
         events = parsed.get("events", [])
         if not isinstance(events, list):
@@ -1140,6 +1141,7 @@ class OpenAICompatibleLLMClient:
         user_payload: dict[str, Any],
         task: str | None = None,
         response_schema: str | None = None,
+        raise_on_error: bool = False,
     ) -> dict[str, Any]:
         try:
             return self.complete_json(
@@ -1151,4 +1153,6 @@ class OpenAICompatibleLLMClient:
                 response_schema=response_schema,
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            if raise_on_error:
+                raise
             return {}

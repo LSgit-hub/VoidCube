@@ -87,6 +87,29 @@ def test_llm_backend_normalizes_malformed_event_payloads() -> None:
     assert events[0].confidence == 0.75
 
 
+def test_llm_backend_propagates_client_errors() -> None:
+    class FailingLLMClient:
+        def extract_events(self, turns):
+            raise RuntimeError("provider unavailable")
+
+    turn = TranscriptTurn(
+        turn_id="turn_001",
+        speaker="user",
+        text="A durable decision.",
+        timestamp=datetime(2026, 3, 22, 9, 0, tzinfo=timezone.utc),
+    )
+    extractor = EventExtractor(
+        backend=LLMEventExtractionBackend(FailingLLMClient())
+    )
+
+    try:
+        extractor.extract([turn])
+    except RuntimeError as exc:
+        assert "provider unavailable" in str(exc)
+    else:
+        raise AssertionError("LLM extraction must propagate provider errors")
+
+
 def test_llm_scholar_backend_can_drive_scene_and_arc_text() -> None:
     def fake_transport(url, headers, payload):
         system_prompt = payload["messages"][0]["content"]
