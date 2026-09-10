@@ -56,7 +56,7 @@ def _subprocess_exit() -> dict[str, object]:
         command,
         cwd=Path.cwd(),
         capture_output=True,
-        text=True,
+        text=True, errors="replace",
         timeout=15,
     )
     if (
@@ -88,7 +88,7 @@ def _file_lock() -> dict[str, object]:
                 child = subprocess.run(
                     (sys.executable, "-c", child_code, str(path)),
                     capture_output=True,
-                    text=True,
+                    text=True, errors="replace",
                     timeout=15,
                 )
             finally:
@@ -138,7 +138,7 @@ terminal.onExit(event => {
         ("node", "-e", script),
         cwd=root,
         capture_output=True,
-        text=True,
+        text=True, errors="replace",
         timeout=30,
     )
     if result.returncode != 0:

@@ -220,7 +220,7 @@ async def run_tier2_bridge_cycle(
         "turns_processed": processed,
         "scope_count": len(scope_results),
         "successful_scope_count": sum(
-            item["status"] in {"compressed", "no_candidates"}
+            item["status"] in {"compressed", "partially_compressed", "no_candidates"}
             for item in scope_results
         ),
         "failed_scope_count": sum(

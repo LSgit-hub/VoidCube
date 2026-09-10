@@ -148,7 +148,7 @@ def inspect_image_digest(image: str, *, runtime: str = "podman") -> str:
     result = subprocess.run(
         [executable, "image", "inspect", "--format", "{{.Id}}", normalized_image],
         capture_output=True,
-        text=True,
+        text=True, errors="replace",
         timeout=15,
         check=False,
     )
@@ -245,7 +245,7 @@ def _ensure_container_runtime_available(runtime: str = "docker") -> None:
         result = subprocess.run(
             [runtime_exe, "version"],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=5,
         )
     except FileNotFoundError:
@@ -483,7 +483,7 @@ class DockerEnvironment(BaseEnvironment):
         result = subprocess.run(
             run_cmd,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=120,  # image pull may take a while
             check=True,
         )
@@ -562,7 +562,7 @@ class DockerEnvironment(BaseEnvironment):
             runtime_exe = find_container_executable(runtime) or runtime
             result = subprocess.run(
                 [runtime_exe, "info", "--format", "{{.Driver}}"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, errors="replace", timeout=10,
             )
             driver = result.stdout.strip().lower()
             if driver != "overlay2":
@@ -572,7 +572,7 @@ class DockerEnvironment(BaseEnvironment):
             # Probe by attempting a dry-ish run — the fastest reliable check.
             probe = subprocess.run(
                 [runtime_exe, "create", "--storage-opt", "size=1m", "hello-world"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, errors="replace", timeout=15,
             )
             if probe.returncode == 0:
                 # Clean up the created container

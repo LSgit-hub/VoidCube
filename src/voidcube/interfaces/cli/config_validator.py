@@ -303,7 +303,7 @@ def _run_command(command: list[str], timeout: int = 5) -> tuple[bool, str]:
         result = subprocess.run(
             command,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=timeout,
             check=False,
         )

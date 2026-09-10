@@ -62,7 +62,7 @@ class CliDynamicCommandRuntime:
             result = subprocess.run(
                 shlex.split(executable),
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()

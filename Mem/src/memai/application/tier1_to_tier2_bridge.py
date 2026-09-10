@@ -42,6 +42,16 @@ _RETRY_ELIGIBLE_TURN_SQL = (
     "compression_retry_count < ? AND "
     "(compression_retry_after IS NULL OR julianday(compression_retry_after) <= julianday(?))"
 )
+# 最小信息量阈值：只含 ack/短提示的旧会话不应锚定压缩批次。
+# 实测（2026-09-10）：最旧端堆积了 15 个"短提示 + OK"式会话（最长 23 字符），
+# bridge 每周期只处理一个会话的少量 turn，于是 135 条 ≥200 字符的实质内容长期
+# 排在后面得不到压缩，`MAX(compressed)` 停滞 14 天。
+# 选择时优先要求批次内存在达到该长度的 turn；若无候选再回退到原行为（与
+# low_relevance_fallback 相同的降级模式），避免低信息 turn 变成永久不可达。
+_MIN_INFORMATIVE_CHARS = 40
+_INFORMATIVE_TURN_SQL = (
+    "length(trim(coalesce(text, ''))) >= %d" % _MIN_INFORMATIVE_CHARS
+)
 
 
 def _parse_utc_timestamp(value: Any) -> datetime | None:
@@ -386,6 +396,7 @@ class BridgeResult:
     cutoff: str = ""
     force_oldest: bool = False
     low_relevance_fallback: bool = False
+    low_information_fallback: bool = False
     owner_id: str = DEFAULT_OWNER_ID
     workspace_id: str = DEFAULT_WORKSPACE_ID
     memory_domain: str = "agent_interaction"
@@ -414,6 +425,7 @@ class BridgeResult:
             "cutoff": self.cutoff,
             "force_oldest": self.force_oldest,
             "low_relevance_fallback": self.low_relevance_fallback,
+            "low_information_fallback": self.low_information_fallback,
             "owner_id": self.owner_id,
             "workspace_id": self.workspace_id,
             "memory_domain": self.memory_domain,
@@ -434,6 +446,7 @@ class CandidateBatch:
     workspace_id: str
     memory_domain: str
     session_id: str | None = None
+    low_information_fallback: bool = False
 
 
 class Tier1ToTier2Bridge:
@@ -546,14 +559,33 @@ class Tier1ToTier2Bridge:
             eligible_conditions = [*time_clause, *base_conditions, "relevance_score >= ?"]
             eligible_params = [*time_params, *base_params, self.min_relevance]
 
-            def fetch_one_session(conditions, params):
-                """Keep a bridge transaction bounded to one conversation session."""
+            def fetch_one_session(
+                conditions,
+                params,
+                *,
+                anchor_conditions=None,
+                anchor_params=None,
+            ):
+                """Keep a bridge transaction bounded to one conversation session.
+
+                ``anchor_conditions`` 只影响"锚定哪个会话"（信息量优先），
+                批次内容仍按 ``conditions`` 取该会话的全部合格 turn，避免
+                因批次里存在短 turn 而整批被排除。
+                """
                 where = " AND ".join(conditions)
+                anchor_where = (
+                    " AND ".join(anchor_conditions)
+                    if anchor_conditions is not None
+                    else where
+                )
+                effective_anchor_params = (
+                    params if anchor_params is None else anchor_params
+                )
                 anchor = conn.execute(
                     "SELECT session_id FROM turns WHERE "
-                    + where
+                    + anchor_where
                     + " ORDER BY julianday(timestamp) ASC, turn_id ASC LIMIT 1",
-                    params,
+                    effective_anchor_params,
                 ).fetchone()
                 if not anchor:
                     return []
@@ -567,8 +599,16 @@ class Tier1ToTier2Bridge:
                     [*params, session_id, self.batch_size],
                 ).fetchall()
 
-            rows = fetch_one_session(eligible_conditions, eligible_params)
+            rows = fetch_one_session(
+                eligible_conditions,
+                eligible_params,
+                anchor_conditions=[*eligible_conditions, _INFORMATIVE_TURN_SQL],
+            )
+            low_information_fallback = False
             low_relevance_fallback = False
+            if not rows:
+                rows = fetch_one_session(eligible_conditions, eligible_params)
+                low_information_fallback = bool(rows)
             if not rows:
                 rows = fetch_one_session(
                     [*time_clause, *base_conditions],
@@ -579,9 +619,25 @@ class Tier1ToTier2Bridge:
             workspace_id = str(rows[0][7]) if rows else DEFAULT_WORKSPACE_ID
             memory_domain = str(rows[0][8]) if rows else self.memory_domain
             session_id = str(rows[0][1]) if rows else None
-            return rows, low_relevance_fallback, owner_id, workspace_id, memory_domain, session_id
+            return (
+                rows,
+                low_relevance_fallback,
+                low_information_fallback,
+                owner_id,
+                workspace_id,
+                memory_domain,
+                session_id,
+            )
 
-        rows, low_relevance_fallback, owner_id, workspace_id, memory_domain, session_id = self._execute_read(read)
+        (
+            rows,
+            low_relevance_fallback,
+            low_information_fallback,
+            owner_id,
+            workspace_id,
+            memory_domain,
+            session_id,
+        ) = self._execute_read(read)
         turns = [
             {
                 "turn_id": r[0],
@@ -605,6 +661,7 @@ class Tier1ToTier2Bridge:
             workspace_id=workspace_id,
             memory_domain=memory_domain,
             session_id=session_id,
+            low_information_fallback=low_information_fallback,
         )
 
     def find_candidate_turns(self) -> List[Dict[str, Any]]:
@@ -982,6 +1039,8 @@ class Tier1ToTier2Bridge:
             "candidate_count": candidate_count,
             "event_count": event_count,
             "covered_turn_count": len(covered_turn_ids),
+            "covered_turn_ids": sorted(covered_turn_ids),
+            "validated_covered_turn_ids": sorted(validated_covered_turn_ids),
             "event_coverage": round(event_coverage, 6),
             "validated_event_coverage": round(validated_event_coverage, 6),
             "valid_event_count": len(accepted_event_ids),
@@ -1177,8 +1236,14 @@ class Tier1ToTier2Bridge:
         turns: List[Dict[str, Any]],
         tier2_output: Dict[str, Any],
         quality_evidence: Dict[str, Any],
+        *,
+        audit_status: str = "passed",
     ) -> None:
-        """Move processed turns to archive with Tier 2 back-references."""
+        """Move processed turns to archive with Tier 2 back-references.
+
+        ``audit_status`` 记录本次审计结论；部分提交时传 ``"partial"``，避免把
+        未通过覆盖度门禁的批次记成 ``passed``。
+        """
         result = tier2_output.get("_pipeline_result")
         if result is None:
             return
@@ -1243,12 +1308,49 @@ class Tier1ToTier2Bridge:
 
             # ── Write compressed memories back to SQLite ─────────────
             _write_compressed_memories_to_db(conn, result, now, scope=scope)
-            self._write_quality_audit(conn, quality_evidence, "passed")
+            self._write_quality_audit(conn, quality_evidence, audit_status)
 
         self._execute_write(write)
         logger.info("Archived %d turns with Tier 2 back-references + compressed memories", len(turns))
 
     # ── Full cycle ────────────────────────────────────────────────
+
+    _COVERAGE_ONLY_CHECKS = frozenset({"event_coverage", "validated_event_coverage"})
+
+    def _plan_partial_compression(
+        self,
+        turns: List[Dict[str, Any]],
+        quality_evidence: Dict[str, Any],
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]] | None:
+        """为"仅覆盖度不达标"的批次规划部分提交。
+
+        质量问题：门禁要求批次内**每个** turn 都被事件覆盖（``min_event_coverage``
+        默认 1.0）。实测实质批次常含少量天然无事件的 turn（确认、寒暄、纯工具
+        往返），100% 覆盖不可能达成，于是整批被拒——**连已验证的 event 一起丢弃**，
+        压缩链路无法推进。
+
+        部分提交语义：只落库"已验证事件"及**被这些事件覆盖**的 turn，其余 turn
+        留在 pending 由下一轮重新组批。落库内容仍须通过除覆盖度外的全部检查，
+        因此不降低质量门槛，也不丢数据。
+
+        返回 ``(已覆盖 turn, 未覆盖 turn)``；不适用部分提交时返回 ``None``。
+        """
+        if not quality_evidence.get("accepted_event_ids"):
+            return None
+        failed = set(quality_evidence.get("failed_checks") or [])
+        if not failed or not failed <= self._COVERAGE_ONLY_CHECKS:
+            return None
+        covered_ids = {
+            str(item)
+            for item in (quality_evidence.get("validated_covered_turn_ids") or [])
+        }
+        if not covered_ids:
+            return None
+        covered = [turn for turn in turns if str(turn["turn_id"]) in covered_ids]
+        remaining = [turn for turn in turns if str(turn["turn_id"]) not in covered_ids]
+        if not covered or not remaining:
+            return None
+        return covered, remaining
 
     def run_cycle(
         self,
@@ -1266,6 +1368,7 @@ class Tier1ToTier2Bridge:
             "cutoff": batch.cutoff,
             "force_oldest": batch.force_oldest,
             "low_relevance_fallback": batch.low_relevance_fallback,
+            "low_information_fallback": batch.low_information_fallback,
             "sample_turn_ids": [item["turn_id"] for item in candidates[:5]],
             "owner_id": batch.owner_id,
             "workspace_id": batch.workspace_id,
@@ -1324,6 +1427,57 @@ class Tier1ToTier2Bridge:
             )
 
         if not quality_evidence["passed"]:
+            partial = self._plan_partial_compression(candidates, quality_evidence)
+            if partial is not None:
+                covered, remaining = partial
+                logger.warning(
+                    "Tier 2 quality gate rejected %d turns on coverage only (%s); "
+                    "committing %d validated events for %d covered turns, leaving "
+                    "%d turns pending.",
+                    len(candidates),
+                    ", ".join(quality_evidence["failed_checks"]),
+                    len(quality_evidence["accepted_event_ids"]),
+                    len(covered),
+                    len(remaining),
+                )
+                self._filter_invalid_events(
+                    tier2_output,
+                    quality_evidence["accepted_event_ids"],
+                )
+                try:
+                    self._commit_tier2_output(
+                        covered,
+                        tier2_output,
+                        quality_evidence,
+                        audit_status="partial",
+                    )
+                except Exception as exc:
+                    logger.exception("Partial archive failed")
+                    errors.append(str(exc))
+                    self._persist_quality_audit(quality_evidence, "commit_failed")
+                    return BridgeResult(
+                        turns_processed=0,
+                        events_generated=0,
+                        scenes_generated=0,
+                        arcs_generated=0,
+                        epochs_generated=0,
+                        profiles_generated=0,
+                        status="failed",
+                        errors=errors,
+                        quality_evidence=quality_evidence,
+                        **metadata,
+                    )
+                return BridgeResult(
+                    turns_processed=len(covered),
+                    events_generated=len(tier2_output.get("events", [])),
+                    scenes_generated=len(tier2_output.get("scenes", [])),
+                    arcs_generated=len(tier2_output.get("arcs", [])),
+                    epochs_generated=len(tier2_output.get("epochs", [])),
+                    profiles_generated=len(tier2_output.get("profile_memories", [])),
+                    status="partially_compressed",
+                    quality_evidence=quality_evidence,
+                    **metadata,
+                )
             logger.warning(
                 "Tier 2 compression quality gate rejected %d turns: %s",
                 len(candidates),

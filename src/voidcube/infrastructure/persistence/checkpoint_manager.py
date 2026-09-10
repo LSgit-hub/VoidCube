@@ -168,13 +168,19 @@ def _run_git(
             cmd,
             capture_output=True,
             text=True,
+            # 固定 UTF-8 且容错解码：Windows 下 text=True 默认按 locale（如 cp936）解码，
+            # 当 git 输出含该编码无法表示的字节时，解码异常会在读取线程内被吞掉，
+            # run() 仍正常返回但对应流为 None，.strip() 随即抛 AttributeError，
+            # 真实 git 错误信息同时丢失（曾导致 checkpoint 静默失败）。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=env,
             cwd=str(normalized_working_dir),
         )
         ok = result.returncode == 0
-        stdout = result.stdout.strip()
-        stderr = result.stderr.strip()
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
         if not ok and result.returncode not in allowed_returncodes:
             logger.error(
                 "Git command failed: %s (rc=%d) stderr=%s",

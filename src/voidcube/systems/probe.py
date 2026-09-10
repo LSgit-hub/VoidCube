@@ -358,7 +358,7 @@ class ProbeExecutor:
                 command,
                 cwd=str(cwd),
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=20,
             )
             return {

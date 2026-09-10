@@ -64,7 +64,7 @@ def _git_repo_root() -> Optional[str]:
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, errors="replace", timeout=5,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -81,7 +81,7 @@ def _git_head_commit(worktree_path: str) -> str:
         result = subprocess.run(
             ["git", "-C", worktree_path, "rev-parse", "HEAD"],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=5,
         )
         if result.returncode == 0:
@@ -105,7 +105,7 @@ def _git_improvement_diff(
         names = subprocess.run(
             ["git", "-C", worktree_path, "diff", "--name-only", f"{baseline_head}..{head_now}"],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=10,
         )
         changed_files = [
@@ -116,7 +116,7 @@ def _git_improvement_diff(
         stat = subprocess.run(
             ["git", "-C", worktree_path, "diff", "--stat", f"{baseline_head}..{head_now}"],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=10,
         )
         return {
@@ -175,7 +175,7 @@ def _setup_worktree(repo_root: str = None) -> Optional[Dict[str, str]]:
     try:
         result = subprocess.run(
             ["git", "worktree", "add", str(wt_path), "-b", branch_name, "HEAD"],
-            capture_output=True, text=True, timeout=30, cwd=repo_root,
+            capture_output=True, text=True, errors="replace", timeout=30, cwd=repo_root,
         )
         if result.returncode != 0:
             print(f"\033[31m✗ {t('prompts.worktree_failed_to_create', error=result.stderr.strip())}\033[0m")
@@ -252,7 +252,7 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
     try:
         result = subprocess.run(
             ["git", "log", "--oneline", "HEAD", "--not", "--remotes"],
-            capture_output=True, text=True, timeout=10, cwd=wt_path,
+            capture_output=True, text=True, errors="replace", timeout=10, cwd=wt_path,
         )
         has_unpushed = bool(result.stdout.strip())
     except Exception:
@@ -266,7 +266,7 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
     try:
         subprocess.run(
             ["git", "worktree", "remove", wt_path, "--force"],
-            capture_output=True, text=True, timeout=15, cwd=repo_root,
+            capture_output=True, text=True, errors="replace", timeout=15, cwd=repo_root,
         )
     except Exception as e:
         logger.debug("Failed to remove worktree: %s", e)
@@ -274,7 +274,7 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
     try:
         subprocess.run(
             ["git", "branch", "-D", branch],
-            capture_output=True, text=True, timeout=10, cwd=repo_root,
+            capture_output=True, text=True, errors="replace", timeout=10, cwd=repo_root,
         )
     except Exception as e:
         logger.debug("Failed to delete branch %s: %s", branch, e)
@@ -318,7 +318,7 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
             try:
                 result = subprocess.run(
                     ["git", "log", "--oneline", "HEAD", "--not", "--remotes"],
-                    capture_output=True, text=True, timeout=5, cwd=str(entry),
+                    capture_output=True, text=True, errors="replace", timeout=5, cwd=str(entry),
                 )
                 if result.stdout.strip():
                     continue
@@ -328,18 +328,18 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
         try:
             branch_result = subprocess.run(
                 ["git", "branch", "--show-current"],
-                capture_output=True, text=True, timeout=5, cwd=str(entry),
+                capture_output=True, text=True, errors="replace", timeout=5, cwd=str(entry),
             )
             branch = branch_result.stdout.strip()
 
             subprocess.run(
                 ["git", "worktree", "remove", str(entry), "--force"],
-                capture_output=True, text=True, timeout=15, cwd=repo_root,
+                capture_output=True, text=True, errors="replace", timeout=15, cwd=repo_root,
             )
             if branch:
                 subprocess.run(
                     ["git", "branch", "-D", branch],
-                    capture_output=True, text=True, timeout=10, cwd=repo_root,
+                    capture_output=True, text=True, errors="replace", timeout=10, cwd=repo_root,
                 )
             logger.debug("Pruned stale worktree: %s (force=%s)", entry.name, force)
         except Exception as e:
@@ -353,7 +353,7 @@ def _prune_orphaned_branches(repo_root: str) -> None:
     try:
         result = subprocess.run(
             ["git", "branch", "--format=%(refname:short)"],
-            capture_output=True, text=True, timeout=10, cwd=repo_root,
+            capture_output=True, text=True, errors="replace", timeout=10, cwd=repo_root,
         )
         if result.returncode != 0:
             return
@@ -365,7 +365,7 @@ def _prune_orphaned_branches(repo_root: str) -> None:
     try:
         wt_result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            capture_output=True, text=True, timeout=10, cwd=repo_root,
+            capture_output=True, text=True, errors="replace", timeout=10, cwd=repo_root,
         )
         for line in wt_result.stdout.split("\n"):
             if line.startswith("branch refs/heads/"):
@@ -376,7 +376,7 @@ def _prune_orphaned_branches(repo_root: str) -> None:
     try:
         head_result = subprocess.run(
             ["git", "branch", "--show-current"],
-            capture_output=True, text=True, timeout=5, cwd=repo_root,
+            capture_output=True, text=True, errors="replace", timeout=5, cwd=repo_root,
         )
         current = head_result.stdout.strip()
         if current:
@@ -399,7 +399,7 @@ def _prune_orphaned_branches(repo_root: str) -> None:
         try:
             subprocess.run(
                 ["git", "branch", "-D"] + batch,
-                capture_output=True, text=True, timeout=30, cwd=repo_root,
+                capture_output=True, text=True, errors="replace", timeout=30, cwd=repo_root,
             )
         except Exception as e:
             logger.debug("Failed to prune orphaned branches: %s", e)

@@ -2649,7 +2649,7 @@ class VoidcubeCLI:
                         frame_pattern,
                     ],
                     capture_output=True,
-                    text=True,
+                    text=True, errors="replace",
                     timeout=60,
                     check=False,
                 )

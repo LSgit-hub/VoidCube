@@ -186,15 +186,15 @@ class ScheduledTaskExecutorRuntime:
             try:
                 root = subprocess.run(
                     ["git", "rev-parse", "--show-toplevel"],
-                    cwd=canonical_path, capture_output=True, text=True, timeout=10,
+                    cwd=canonical_path, capture_output=True, text=True, errors="replace", timeout=10,
                 )
                 head = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
-                    cwd=canonical_path, capture_output=True, text=True, timeout=10,
+                    cwd=canonical_path, capture_output=True, text=True, errors="replace", timeout=10,
                 )
                 status = subprocess.run(
                     ["git", "status", "--porcelain", "--untracked-files=all"],
-                    cwd=canonical_path, capture_output=True, text=True, timeout=10,
+                    cwd=canonical_path, capture_output=True, text=True, errors="replace", timeout=10,
                 )
             except (OSError, subprocess.SubprocessError) as exc:
                 return False, f"body worktree verification failed: {exc}"

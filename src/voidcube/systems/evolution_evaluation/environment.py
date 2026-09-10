@@ -165,7 +165,7 @@ def _host_command_identity(
             (executable, *command[1:]),
             cwd=cwd,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
@@ -221,7 +221,7 @@ def _command_version(command: tuple[str, ...], *, cwd: Path) -> str | None:
             command,
             cwd=cwd,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
@@ -251,7 +251,7 @@ def _git_head(root: Path) -> str:
         result = subprocess.run(
             ("git", "-C", str(root), "rev-parse", "HEAD"),
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError) as exc:

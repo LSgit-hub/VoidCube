@@ -112,14 +112,14 @@ class BodyImprovementReviewService:
                 ["git", "rev-parse", "--verify", f"{commit_hash}^{{commit}}"],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             baseline = subprocess.run(
                 ["git", "rev-parse", "--verify", f"{baseline_commit}^{{commit}}"],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             if resolved.returncode != 0:
@@ -131,7 +131,7 @@ class BodyImprovementReviewService:
                 ["git", "rev-parse", "--verify", "HEAD"],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             resolved_commit = resolved.stdout.strip().lower()
@@ -143,7 +143,7 @@ class BodyImprovementReviewService:
                 ["git", "status", "--porcelain", "--untracked-files=all"],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             if worktree_status.returncode != 0:
@@ -158,7 +158,7 @@ class BodyImprovementReviewService:
                 ["git", "merge-base", "--is-ancestor", resolved_baseline, resolved_commit],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             if ancestry.returncode != 0:
@@ -174,7 +174,7 @@ class BodyImprovementReviewService:
                 ],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             if changed.returncode != 0:
@@ -191,7 +191,7 @@ class BodyImprovementReviewService:
                 ["git", "diff", "--stat", f"{resolved_baseline}..{resolved_commit}", "--"],
                 cwd=worktree_path,
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
             return {

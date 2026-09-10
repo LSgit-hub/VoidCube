@@ -22,7 +22,7 @@ def _load_worktree_root_nodes(worktree_path: str) -> List[str]:
             ["git", "-C", str(path), "ls-tree", "--name-only", "HEAD"],
             check=True,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=5,
         )
         roots = [line.strip() for line in result.stdout.splitlines() if line.strip()]

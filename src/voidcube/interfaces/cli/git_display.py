@@ -118,14 +118,14 @@ class GitRunner:
             if git_cmd:
                 r = subprocess.run(
                     git_cmd + args,
-                    capture_output=True, text=True,
+                    capture_output=True, text=True, errors="replace",
                     cwd=str(self.cwd), timeout=timeout,
                 )
             else:
                 # Shell fallback for environments where git PATH is shell-specific
                 r = subprocess.run(
                     "git " + " ".join(args),
-                    capture_output=True, text=True, shell=True,
+                    capture_output=True, text=True, errors="replace", shell=True,
                     cwd=str(self.cwd), timeout=timeout,
                 )
             return r.returncode, r.stdout.strip(), r.stderr.strip()

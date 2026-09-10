@@ -296,7 +296,7 @@ class WindowsHostExecutor:
             subprocess.run(
                 ("taskkill", "/PID", str(process.pid), "/T", "/F"),
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=10,
             )
         else:

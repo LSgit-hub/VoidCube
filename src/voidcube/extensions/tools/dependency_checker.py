@@ -134,7 +134,7 @@ def _check_command(cmd: str) -> Tuple[bool, Optional[Tuple[int, ...]], Optional[
                         check_cmd,
                         shell=True,
                         capture_output=True,
-                        text=True,
+                        text=True, errors="replace",
                         timeout=15,
                     )
                     combined = (result.stdout + "\n" + result.stderr).strip()

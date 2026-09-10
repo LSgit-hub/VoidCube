@@ -1443,7 +1443,7 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
 @pytest.mark.asyncio
 @pytest.mark.operational
-async def test_compression_quality_gate_rejects_incomplete_turn_coverage(tmp_path):
+async def test_compression_quality_gate_partially_commits_on_incomplete_coverage(tmp_path):
     svc = _make_service(tmp_path)
     svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="quality-reject", metadata={}))
@@ -1500,18 +1500,86 @@ async def test_compression_quality_gate_rejects_incomplete_turn_coverage(tmp_pat
     finally:
         conn.close()
 
-    assert result["status"] == "quality_rejected"
-    assert result["turns_processed"] == 0
+    # 部分提交：只落库"已验证事件"及其覆盖的 turn，未覆盖 turn 留在 pending
+    # 由下轮重新组批。既不降低质量门槛，也不丢弃已验证的事件。
+    assert result["status"] == "partially_compressed"
+    assert result["turns_processed"] == 1
     assert result["quality_evidence"]["event_coverage"] == pytest.approx(0.5)
     assert result["quality_evidence"]["validated_event_coverage"] == pytest.approx(0.5)
     assert result["quality_evidence"]["failed_checks"] == [
         "event_coverage", "validated_event_coverage"
     ]
+    assert active_count == 1
+    assert archive_count == 1
+    assert audit_status == "partial"
+    assert event_coverage == pytest.approx(0.5)
+    assert json.loads(failed_checks) == ["event_coverage", "validated_event_coverage"]
+
+
+@pytest.mark.asyncio
+async def test_non_coverage_quality_failure_still_rejects_the_whole_batch(tmp_path):
+    """非覆盖度失败（如 compression_ratio）仍必须整批拒绝，门禁不被削弱。"""
+    svc = _make_service(tmp_path)
+    svc._llm_healthy = True
+    await svc.create_session(SessionCreate(session_id="ratio-reject", metadata={}))
+    first = await svc.add_turn(
+        "ratio-reject",
+        TurnCreate(speaker="user", text="这是一个用于验证压缩比门禁的较长用户输入内容示例。", metadata={}),
+    )
+    second = await svc.add_turn(
+        "ratio-reject",
+        TurnCreate(speaker="agent", text="这是对应的代理回复内容，同样保持足够的信息量长度。", metadata={}),
+    )
+    now_dt = datetime(2026, 7, 2, tzinfo=timezone.utc)
+    event = SimpleNamespace(
+        id="ratio-event",
+        parent_ids=[],
+        event_kind="decision",
+        title="Ratio check",
+        summary="很长的事件摘要" * 40,
+        timespan_start=now_dt,
+        timespan_end=now_dt,
+        importance=0.8,
+        confidence=0.9,
+        topics=["memory"],
+        entities=["VoidCube"],
+        source_turns=[first["turn_id"], second["turn_id"]],
+    )
+    event.to_dict = lambda: {
+        "id": event.id,
+        "summary": event.summary,
+        "source_turns": list(event.source_turns),
+    }
+
+    class _VerbosePipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[event], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    svc._build_compression_pipeline = lambda: _VerbosePipeline()  # type: ignore[method-assign]
+
+    result = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        active_count = conn.execute(
+            "SELECT COUNT(*) FROM turns WHERE compression_status != 'compressed'"
+        ).fetchone()[0]
+        archive_count = conn.execute("SELECT COUNT(*) FROM turns_archive").fetchone()[0]
+        audit_status = conn.execute(
+            "SELECT status FROM compression_quality_audit"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert result["status"] == "quality_rejected"
+    assert "compression_ratio" in result["quality_evidence"]["failed_checks"]
     assert active_count == 2
     assert archive_count == 0
     assert audit_status == "rejected"
-    assert event_coverage == pytest.approx(0.5)
-    assert json.loads(failed_checks) == ["event_coverage", "validated_event_coverage"]
 
 
 def test_quality_rejection_stops_retrying_after_three_attempts(tmp_path):
@@ -1593,6 +1661,92 @@ async def test_zero_event_cycle_advances_bounded_retry_accounting(tmp_path):
     assert state[0] == 1
     assert state[1] is not None
     assert state[2] == "retry_wait"
+
+
+def test_low_information_sessions_do_not_block_substantive_candidates(tmp_path):
+    """低信息旧会话不得锚定压缩批次，但也不能被永久隔离。"""
+    from memai.application.tier1_to_tier2_bridge import (
+        DEFAULT_OWNER_ID,
+        DEFAULT_WORKSPACE_ID,
+    )
+
+    svc = _make_service(tmp_path)
+    older = "2026-07-01T00:00:00+08:00"
+    newer = "2026-07-20T00:00:00+08:00"
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        for session_id, stamp in (("trivial", older), ("substantive", newer)):
+            conn.execute(
+                "INSERT INTO sessions (session_id, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, '{}')",
+                (session_id, stamp, stamp),
+            )
+        rows = [
+            ("t1", "trivial", "user", "OK", older),
+            ("t2", "trivial", "agent", "请分析当前项目中最值得优先修复的代码质量问题。", older),
+            (
+                "s1",
+                "substantive",
+                "user",
+                "我们决定把记忆压缩的候选选择改为信息量优先，并在没有实质内容时回退到原行为，"
+                "避免低信息会话长期占用压缩周期。",
+                newer,
+            ),
+            (
+                "s2",
+                "substantive",
+                "agent",
+                "确认：该改动需要保证低信息 turn 不会被永久隔离，同时让压缩指标重新前移。",
+                newer,
+            ),
+        ]
+        for turn_id, session_id, speaker, text, stamp in rows:
+            conn.execute(
+                "INSERT INTO turns (turn_id, session_id, speaker, text, timestamp, "
+                "relevance_score, compression_status, owner_id, workspace_id, memory_domain) "
+                "VALUES (?, ?, ?, ?, ?, 1.0, 'pending', ?, ?, 'agent_interaction')",
+                (
+                    turn_id,
+                    session_id,
+                    speaker,
+                    text,
+                    stamp,
+                    DEFAULT_OWNER_ID,
+                    DEFAULT_WORKSPACE_ID,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    bridge = Tier1ToTier2Bridge(
+        svc._db_path,
+        retention_days=30,
+        batch_size=10,
+        min_relevance=0.0,
+        max_turns=1,
+    )
+
+    preferred = bridge.select_candidate_turns(force_oldest=True)
+
+    assert preferred.session_id == "substantive"
+    assert preferred.low_information_fallback is False
+    assert {turn["turn_id"] for turn in preferred.turns} == {"s1", "s2"}
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        conn.execute(
+            "UPDATE turns SET compression_status = 'compressed' "
+            "WHERE session_id = 'substantive'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    fallback = bridge.select_candidate_turns(force_oldest=True)
+
+    assert fallback.session_id == "trivial"
+    assert fallback.low_information_fallback is True
 
 
 @pytest.mark.asyncio

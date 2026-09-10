@@ -156,7 +156,7 @@ def ping_tool(args):
         result = subprocess.run(
             ['ping', param, str(count), host],
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=30
         )
         

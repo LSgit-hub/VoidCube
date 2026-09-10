@@ -26,7 +26,7 @@ def image_exists(image: str = DEFAULT_IMAGE, *, executable: str | None = None) -
     result = subprocess.run(
         [podman, "image", "exists", image],
         capture_output=True,
-        text=True,
+        text=True, errors="replace",
         check=False,
     )
     return result.returncode == 0

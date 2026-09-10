@@ -600,14 +600,19 @@ def _git_path(worktree: Path, argument: str) -> Path:
         ["git", "-C", str(worktree), "rev-parse", argument],
         capture_output=True,
         text=True,
+        # 与 checkpoint/body_registry 一致：固定 UTF-8 + 容错解码，避免
+        # locale（cp936）解码失败时流变为 None 并触发 AttributeError。
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
-    if result.returncode != 0 or not result.stdout.strip():
+    stdout = (result.stdout or "").strip()
+    if result.returncode != 0 or not stdout:
         raise RuntimeError(
             f"Cannot resolve {argument} for autonomous worktree: "
-            f"{(result.stderr or result.stdout).strip()}"
+            f"{((result.stderr or result.stdout) or '').strip()}"
         )
-    path = Path(result.stdout.strip())
+    path = Path(stdout)
     if not path.is_absolute():
         path = worktree / path
     return path.resolve()
@@ -724,9 +729,11 @@ def prepare_task_git_worktree(
         ["git", "-C", str(worktree), "rev-parse", "HEAD"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
-    host_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+    host_head = (head_result.stdout or "").strip() if head_result.returncode == 0 else ""
     if not expected_head or host_head != expected_head:
         raise ValueError("Container validation HEAD does not match the requested commit")
 
@@ -913,9 +920,11 @@ def prepare_task_native_git_worktree(
         ("git", "-C", str(worktree), "rev-parse", "HEAD"),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
-    host_head = head_result.stdout.strip() if head_result.returncode == 0 else ""
+    host_head = (head_result.stdout or "").strip() if head_result.returncode == 0 else ""
     if not expected_head or host_head != expected_head:
         raise ValueError("Native authoring HEAD does not match the requested commit")
 

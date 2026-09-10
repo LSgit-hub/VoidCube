@@ -434,7 +434,7 @@ def show_status(args):
                 result = subprocess.run(
                     ["systemctl", "--user", "is-active", _gw_svc],
                     capture_output=True,
-                    text=True,
+                    text=True, errors="replace",
                     timeout=5
                 )
                 is_active = result.stdout.strip() == "active"
@@ -449,7 +449,7 @@ def show_status(args):
             result = subprocess.run(
                 ["launchctl", "list", get_launchd_label()],
                 capture_output=True,
-                text=True,
+                text=True, errors="replace",
                 timeout=5
             )
             is_loaded = result.returncode == 0

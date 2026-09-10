@@ -445,7 +445,7 @@ def _install_chrome() -> bool:
                 "install", "chrome@stable",
                 "--path", str(chrome_dir.parent),
             ],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, errors="replace", timeout=300,
         )
         if result.returncode != 0:
             stderr_tail = (result.stderr or "")[-300:]

@@ -305,7 +305,7 @@ def _expand_git_reference(
             ["git", *args],
             cwd=cwd,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=30,
         )
     except subprocess.TimeoutExpired:
@@ -497,7 +497,7 @@ def _rg_files(path: Path, cwd: Path, limit: int) -> list[Path] | None:
             ["rg", "--files", str(path.relative_to(cwd))],
             cwd=cwd,
             capture_output=True,
-            text=True,
+            text=True, errors="replace",
             timeout=10,
         )
     except FileNotFoundError:
