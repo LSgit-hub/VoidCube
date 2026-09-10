@@ -232,3 +232,46 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
   提交信息写清"新增 N 个 + 对齐 M 个"
 - 改完 bundled 技能后 manifest 必须同步更新，保持 **repo == runtime == manifest** 三者一致，
   否则下次 sync 会把该技能判为 user-modified 并永久停止下发
+
+## 交付路径：技能**不**随 wheel 交付（实测，极易误判）
+
+- `sync.py::_bundled_dir()` = `Path(__file__).resolve().parents[4] / "skills"`。
+  - 源码 / `pip install -e`（README 推荐的可编辑安装）：parents[4] 就是仓库根 → 仓库 `skills/` 生效，成立。
+  - **非 editable 的 wheel 安装**：sync.py 位于 `site-packages/voidcube/extensions/skills/`，
+    parents[4] = `Lib/`，其下没有 skills → `sync_skills()` 直接返回空，
+    **新机器零技能且无任何报错（静默降级）**。
+- 唯一可信的验证方式：构建并检查 wheel 内容，**不要只看测试**：
+  ```bash
+  .venv/Scripts/python.exe scripts/build_wheel.py --outdir <临时目录>
+  # 再用 zipfile 统计 namelist() 里的 SKILL.md 数量
+  ```
+  实测：731 个条目、`SKILL.md` **0 个**（只有 `voidcube/extensions/skills/*.py` 代码）。
+- **陷阱**：`tests/test_packaging_contract.py` 通过 ≠ 打包验证——该测试对 skills **零断言**。
+  拿它支撑"技能会随包交付"是过度解读。
+- 副作用：构建 wheel 会重新生成 `build/`、`dist/`、`voidcube_agent.egg-info/`
+  （都被 .gitignore 忽略，`git status` 看不到），验证完必须手动清理。
+
+## 元数据存放位置（grep 文件会误判）
+
+- `deprecated` / `supersedes` **不在 SKILL.md frontmatter 里**，而在活注册表
+  `~/.VoidCube/.skills_registry.sqlite3`（`REGISTRY_FILENAME = ".skills_registry.sqlite3"`）的
+  `skills` 表：列含 `frontmatter_name, directory_name, category, source, content_hash,
+  deprecated, supersedes, updated_at`。验证弃用是否生效要**查库**，不是 grep 技能文件。
+- 索引会**同时收录仓库与运行时两个根**：行数 ≈ repo 技能数 + runtime 技能数
+  （实测 113 = 55 + 58），同一 bundled 技能有两条同名记录。展示层去重（`skills_list` 无重复），
+  但按行计数/排序的下游代码要留意这个冗余。
+- 孤儿文件：`~/.VoidCube/skills/registry.sqlite3` 是旧版命名的遗留，**无任何代码引用**，
+  与活注册表不是同一个文件，可清理。
+
+## 自审清单：改完技能后逐项验证（每项都要有命令证据）
+
+1. 提交范围纯净：`git show --name-only --format="" <sha>` 里非 `skills/` 的文件数必须为 0
+2. EOL 真的落盘：`git cat-file -p HEAD:<path>` 统计 `\r\n`，应为 0
+   （否则未来 checkout 变 LF 时会重新制造两侧分叉）
+3. 没夹带垃圾：扫描 `skills/` 下 `__pycache__` / `*.pyc` / `*.bak` / `.DS_Store`。**特别注意**：不要对整个 `skills/` 跑 `compileall` 或任何会生成产物的命令——生成的 `__pycache__` 会被计入目录 hash 并污染同步基线（实测踩过）
+4. 没泄漏操作者私有路径：扫用户目录特征（`C:\Users\<用户名>`、仓库盘符路径等）
+   （实测 7 个技能文件命中，含 `src = r"C:/Users/<用户名>/.VoidCube/..."` 这类可直接执行的行）
+5. 三侧一致：repo hash == runtime hash == manifest 条目
+6. **有没有外部并发写入者**：把技能文件 mtime 与 `git log -1 --format=%ci` 对比。
+   实测过：提交 `21:56:12` 之后，`21:57:09` 有外部进程改了仓库+运行时+manifest 却**不提交**，
+   于是"工作区干净"只是瞬时结论——收尾必须再查一次 `git status --short`。

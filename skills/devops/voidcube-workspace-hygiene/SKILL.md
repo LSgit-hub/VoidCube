@@ -287,3 +287,21 @@ for n,u in [('gateway','http://localhost:6000/'),('memory','http://localhost:600
   第 1 步报"无所有权"时，必须在**管理员** shell 里执行，普通提权无效。
 - 影响面：仓库 `.gitignore` 已含 `.test-tmp/`，残留不影响提交、打包与运行；可留待重启/提权后处理。
 - 判据提醒：`psutil` 无命中**不能**得出"无进程占用"的结论——所有权/ACL 同样会产生 WinError 5。
+
+## 自审补充：三个易漏点（2026-09-10 复查实测）
+
+1. **"工作区干净"是瞬时结论**：外部进程会在你提交之后继续改仓库文件。判据是把技能文件 mtime 与
+   `git log -1 --format=%ci` 对比（实测：提交 `21:56:12` 之后，`21:57:09` 有外部写入者改了
+   仓库+运行时+manifest 却**不提交**）。所以收尾必须**再查一次** `git status --short`。
+2. **构建 wheel 会重新生成构建残留**：`scripts/build_wheel.py` 会创建 `build/`、`dist/`、
+   `voidcube_agent.egg-info/`，三者都被 .gitignore 忽略，所以 `git status` 看不见。
+   做过打包验证后必须手动删除，否则又回到"构建产物堆积"状态。
+3. **私有绝对路径泄漏扫描**：入库/回填技能前扫用户目录特征（`C:\Users\<用户名>`、
+   仓库所在盘符路径等）。实测 7 个技能文件命中，其中含
+   `src = r"C:/Users/<用户名>/.VoidCube/runtime/memory/memory.db"` 这类**可直接执行**的行，
+   在别的机器上会指向错误路径；建议参数化为 `~/.VoidCube` / `%USERPROFILE%\.VoidCube`。
+   本技能文档本身也避免写死真实用户名，只写通用占位。
+4. **别对 `skills/` 跑 `compileall`**：技能目录里的 `scripts/*.py` 会生成 `__pycache__/*.pyc`，
+   被计入 bundled 目录 hash → repo 与 runtime 立刻不符（且 .gitignore 让 `git status` 看不见）。
+   实测就这样自伤过一次：`compileall skills` 之后两个技能目录出现 pyc，同步基线被污染。
+   要校验脚本语法，请针对单个文件或用 `python -m py_compile` 后立即删除产物。
