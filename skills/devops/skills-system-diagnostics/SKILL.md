@@ -177,3 +177,58 @@ hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` 
 - 修复前：1 处真损坏（`mlops/vector-databases` 运行时缺 SKILL.md，同步永不恢复）
   + 3 处漂移（1 处纯 EOL 假象、2 处真实内容差异）
 - 修复后：分叉 0；仓库 55 / 运行时 58（运行时多出的是未入库的个人/Agent 使用约定技能）
+
+## 对账与入库操作流程（2026-09-10 P7-B 实证，可复用）
+
+适用场景：运行时技能与仓库 `skills/` 交付不一致——技能只在运行时、仓库有而运行时缺、
+或两侧 hash 漂移。
+
+### 0. 分类：先定边界，再动手（这是产品决策）
+把运行时独有技能分三类，**分类结果必须让用户拍板**，不要自行决定哪些"值得"入库：
+- 产品能力技能 → 入库仓库（随仓库/轮子交付）
+- 个人工作流 / Agent 使用约定 → 留运行时，**不入库**
+- 与既有技能重复 → 不重复入库；用
+  `skill_manage(action='lifecycle', deprecated=True, supersedes=<保留的技能名>)`
+  让旧技能指向新技能
+本次实测：23 个运行时独有 → 20 入库 / 2 留运行时 / 1 弃用
+（agent-context-optimization 是 context-optimization 的子集）。
+判定重复**必须先 diff 两份 SKILL.md**：子集关系常是同一主题的早期版本，
+且旧版本往往带着已过时的流程章节（本次旧版还留着"手工复制到 worktree"的废弃流程）。
+
+### 1. 入库前做只读审计（不要凭目录名猜）
+审计脚本输出三段（缺一不可）：
+- A. manifest ↔ 仓库集合差 → bundled 是否齐全
+- B. 逐项比对 repo hash / runtime hash vs manifest → `DIVERGED` / `NOT_IN_RUNTIME`
+- C. 运行时独有（不在 manifest）→ 就是候选清单
+hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路径字节、再文件字节），
+否则全部结论无效。
+
+### 2. 复制入库：三重防护
+- **name 冲突断言**：先算 `{frontmatter name}` 集合，与仓库现有技能重名则立即中止
+  （重名会让 manifest / index 互相覆盖）
+- **逐字节复制**（`shutil.copytree`），不做任何改写，保证 repo 与 runtime 初始 hash 相同
+- 目标已存在则报 `ALREADY_EXISTS` 退出，绝不覆盖
+
+### 3. EOL 归一化（本轮踩坑点：必须在提交前做）
+`git add` 会提示 `CRLF will be replaced by LF`。这**不是无害提醒**：
+`.gitattributes` 的 `*.md/*.py eol=lf` 会在后续 checkout 把仓库副本变成 LF，
+而运行时副本仍是 CRLF → 两侧 hash 永久不符 → 之后仓库更新再也不会下发。
+做法：入库后**立刻把 repo 与 runtime 两侧都归一化为 LF**（只处理
+`.md/.py/.yaml/.yml/.json/.sh`），再断言两侧 hash 相等。
+
+### 4. 漂移对齐：先判别假象还是真实差异
+对 `DIVERGED` 项，用同一 hash 算法分别算 **raw** 与 **LF 归一化后**的值，与 manifest 比对：
+- LF 归一化后 == manifest → 纯 EOL 假象，归一化即收敛，不要当成内容改动
+- 否则是真实内容差异 → diff 两侧，**以运行时为准**对齐仓库（运行时的才是实际加载、
+  并被 Agent 持续改进的版本），同步更新 manifest 条目
+本次实测：1 处 EOL 假象（self-learning）+ 2 处真实差异
+（其中 workspace-hygiene 运行时多 17 行后补章节，属应上游化的改进）。
+
+### 5. 收尾验证与提交
+- 重跑审计，**分叉数必须为 0**——这是唯一合格判据
+- `pytest tests/test_skill_registry.py tests/test_skills_sync_contract.py tests/test_packaging_contract.py`
+  （AGENTS.md 规则 5：改动技能发现/索引必须跑固定自检）
+- 提交**仅含 skills/**（`git add -- skills`）；pre-commit 守卫拒绝 skills × src 混提；
+  提交信息写清"新增 N 个 + 对齐 M 个"
+- 改完 bundled 技能后 manifest 必须同步更新，保持 **repo == runtime == manifest** 三者一致，
+  否则下次 sync 会把该技能判为 user-modified 并永久停止下发
