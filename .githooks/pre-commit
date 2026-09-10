@@ -1,0 +1,39 @@
+#!/bin/sh
+# VoidCube pre-commit 守卫（AGENTS.md 第 6 条提交纪律的可强制执行部分）。
+#
+# 目的：阻止把「技能改动」与「产品代码改动」混入同一个提交。
+# 背景：2026-09-10 两次真实事故（7b655e3、58f1bca）都是提交信息只描述其中一类，
+# 实际却裹进技能 + 多个产品代码修复，导致 review 按提交信息审阅时会整批漏掉代码改动。
+#
+# 只做确定性判断（不做关键词猜测）：
+#   暂存集合同时包含 skills/ 与 (src/ 或 Mem/) → 拒绝提交，要求拆分。
+#
+# 需要一次性合并提交时可用 git 的显式逃生口：git commit --no-verify
+set -u
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+has_skills=0
+has_code=0
+for path in $staged; do
+    case "$path" in
+        skills/*) has_skills=1 ;;
+        src/*|Mem/src/*) has_code=1 ;;
+    esac
+done
+
+if [ "$has_skills" = "1" ] && [ "$has_code" = "1" ]; then
+    echo "✗ pre-commit 已拒绝：本次提交同时包含「技能改动」与「产品代码改动」。" >&2
+    echo "  请拆分为两个提交，并按路径限定暂存，例如：" >&2
+    echo "    git reset" >&2
+    echo "    git add -- src Mem/src" >&2
+    echo "    git commit -m \"修复：<描述实际代码改动>\"" >&2
+    echo "    git add -- skills" >&2
+    echo "    git commit -m \"技能：<描述技能改动>\"" >&2
+    echo "  受影响路径：" >&2
+    echo "$staged" | grep -E '^(skills/|src/|Mem/src/)' | sed 's/^/    /' >&2 || true
+    echo "  确需合并提交时请显式使用：git commit --no-verify" >&2
+    exit 1
+fi
+
+exit 0
