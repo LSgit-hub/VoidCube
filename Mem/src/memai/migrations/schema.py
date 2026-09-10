@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 _MEMORY_RUNTIME_STATE_KEY = "memory_commit_revision"
 _EXTRACTION_V2_REQUEUE_STATE_KEY = "compression_extraction_v2_requeued"
 
+# 自审/诊断类 Tier2 记忆的标题特征词（模块级：MemoryDatabaseBootstrap 是
+# dataclass(slots=True)，带注解的类级常量会退化成 slot 描述符）。
+# 背景：Agent 自审产生的"系统健康审计""记忆系统自检""技能库审计"等报告会被当作
+# 持久记忆写入 Tier2，并在无关提问时被召回、污染上下文。这些记忆的 source_turns
+# 要么为空（agent 直接写入），要么指向**未打** evaluation 标签的普通 turn，因此
+# `_quarantine_evaluation_memories` 覆盖不到。
+# 在补齐写侧标签（compressed_memories.tags + 写路径传播）之前，这里按标题特征做
+# 一次可审计的隔离兜底：hidden=1，可逆、不删除数据。
+_DIAGNOSTIC_TITLE_MARKERS: tuple[str, ...] = ("审计", "自检")
+
 # 需要时区归一化的时间戳列（表名, 列名）。
 # 历史数据混入 +08:00 等非 UTC 偏移，而当前写入路径统一使用
 # ``datetime.now(timezone.utc).isoformat()``。混用会让所有**字符串比较**式
@@ -153,6 +163,7 @@ class MemoryDatabaseBootstrap:
             tagged = self._tag_known_evaluation_turns(cursor)
             quarantined = self._quarantine_evaluation_memories(cursor)
             normalized_timestamps = self._normalize_timestamp_timezones(cursor)
+            quarantined_diagnostics = self._quarantine_diagnostic_memories(cursor)
             self._setup_subsystem_schema(connection)
             self._create_indexes(cursor)
             connection.commit()
@@ -175,6 +186,11 @@ class MemoryDatabaseBootstrap:
                 logger.warning(
                     "Normalized %d legacy timestamps to canonical UTC",
                     normalized_timestamps,
+                )
+            if quarantined_diagnostics:
+                logger.warning(
+                    "Quarantined %d self-audit diagnostic Tier2 memories from recall",
+                    quarantined_diagnostics,
                 )
         finally:
             connection.close()
@@ -857,6 +873,59 @@ class MemoryDatabaseBootstrap:
                     str(memory_domain),
                     hashlib.sha256(str(memory_id).encode("utf-8")).hexdigest(),
                     "Excluded compressed memory sourced from evaluation turns",
+                    json.dumps({"compressed_memories_hidden": 1}, sort_keys=True),
+                    str(owner_id),
+                    str(workspace_id),
+                    now,
+                ),
+            )
+        return len(rows)
+
+    @staticmethod
+    def _quarantine_diagnostic_memories(cursor: sqlite3.Cursor) -> int:
+        """隔离自审/诊断类 Tier2 记忆，避免其进入召回。
+
+        判据只用**标题特征词**（``_DIAGNOSTIC_TITLE_MARKERS``），因为这类记忆的
+        source_turns 无法结构化识别（为空或指向未打标签的普通 turn）。属于在补齐
+        写侧标签之前的可审计兜底：置 hidden=1（不删除），并写入 memory_deletion_audit。
+        """
+        title_filter = " OR ".join(
+            "cm.title LIKE ?" for _ in _DIAGNOSTIC_TITLE_MARKERS
+        )
+        rows = cursor.execute(
+            "SELECT cm.memory_id, cm.owner_id, cm.workspace_id, cm.memory_domain "
+            "FROM compressed_memories AS cm "
+            f"WHERE cm.hidden = 0 AND ({title_filter})",
+            [f"%{marker}%" for marker in _DIAGNOSTIC_TITLE_MARKERS],
+        ).fetchall()
+        if not rows:
+            return 0
+
+        now = datetime.now(timezone.utc).isoformat()
+        for memory_id, owner_id, workspace_id, memory_domain in rows:
+            cursor.execute(
+                "UPDATE compressed_memories SET hidden = 1 WHERE memory_id = ?",
+                (memory_id,),
+            )
+            audit_identity = "\0".join(
+                (
+                    str(owner_id),
+                    str(workspace_id),
+                    str(memory_domain),
+                    str(memory_id),
+                )
+            )
+            digest = hashlib.sha256(audit_identity.encode("utf-8")).hexdigest()
+            cursor.execute(
+                "INSERT OR IGNORE INTO memory_deletion_audit "
+                "(audit_id, memory_domain, target_kind, target_hash, reason, "
+                "deleted_counts, owner_id, workspace_id, created_at) "
+                "VALUES (?, ?, 'compressed_memory_quarantine', ?, ?, ?, ?, ?, ?)",
+                (
+                    f"diagnostic-quarantine-{digest[:24]}",
+                    str(memory_domain),
+                    hashlib.sha256(str(memory_id).encode("utf-8")).hexdigest(),
+                    "Excluded self-audit diagnostic memory from recall",
                     json.dumps({"compressed_memories_hidden": 1}, sort_keys=True),
                     str(owner_id),
                     str(workspace_id),
