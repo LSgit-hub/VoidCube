@@ -30,6 +30,23 @@ logger = logging.getLogger(__name__)
 _MEMORY_RUNTIME_STATE_KEY = "memory_commit_revision"
 _EXTRACTION_V2_REQUEUE_STATE_KEY = "compression_extraction_v2_requeued"
 
+# 需要时区归一化的时间戳列（表名, 列名）。
+# 历史数据混入 +08:00 等非 UTC 偏移，而当前写入路径统一使用
+# ``datetime.now(timezone.utc).isoformat()``。混用会让所有**字符串比较**式
+# 时间查询（`timestamp < datetime('now','-7 days')`、`MAX(timestamp)`）
+# 产生最多 8 小时偏差。
+_TIMESTAMP_COLUMN_TARGETS: tuple[tuple[str, str], ...] = (
+    ("turns", "timestamp"),
+    ("turns", "last_decay_at"),
+    ("turns_archive", "timestamp"),
+    ("sessions", "created_at"),
+    ("sessions", "updated_at"),
+    ("session_summary_sources", "turn_timestamp"),
+    ("recall_traces", "created_at"),
+    ("recall_traces", "completed_at"),
+    ("identity_revision_proposals", "released_at"),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryDatabaseBootstrap:
@@ -135,6 +152,7 @@ class MemoryDatabaseBootstrap:
             self._migrate_domain_schema(cursor)
             tagged = self._tag_known_evaluation_turns(cursor)
             quarantined = self._quarantine_evaluation_memories(cursor)
+            normalized_timestamps = self._normalize_timestamp_timezones(cursor)
             self._setup_subsystem_schema(connection)
             self._create_indexes(cursor)
             connection.commit()
@@ -153,8 +171,50 @@ class MemoryDatabaseBootstrap:
                     "Requeued %d turns rejected by the retired extraction contract",
                     requeued,
                 )
+            if normalized_timestamps:
+                logger.warning(
+                    "Normalized %d legacy timestamps to canonical UTC",
+                    normalized_timestamps,
+                )
         finally:
             connection.close()
+
+    @staticmethod
+    def _normalize_timestamp_timezones(cursor: sqlite3.Cursor) -> int:
+        """把带非 UTC 偏移的遗留时间戳改写为规范 UTC ISO 字符串。
+
+        原则是**保持时刻不变**：``2026-08-27T18:26:14.993915+08:00`` 与其等价的
+        ``2026-08-27T10:26:14.993915+00:00`` 表示同一时刻；改写后字符串比较重新
+        可靠，而对偏移敏感的解析结果不变。
+
+        - 无偏移（naive）的值**不做猜测**，原样保留。
+        - 函数幂等：已是规范形态的值不会再次写入。
+        """
+        normalized = 0
+        for table, column in _TIMESTAMP_COLUMN_TARGETS:
+            try:
+                rows = cursor.execute(
+                    f"SELECT rowid, {column} FROM {table} WHERE {column} IS NOT NULL"  # noqa: S608 - 名称来自固定白名单
+                ).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for rowid, raw in rows:
+                text = str(raw)
+                try:
+                    parsed = datetime.fromisoformat(text)
+                except ValueError:
+                    continue
+                if parsed.tzinfo is None:
+                    continue
+                canonical = parsed.astimezone(timezone.utc).isoformat()
+                if canonical == text:
+                    continue
+                cursor.execute(
+                    f"UPDATE {table} SET {column} = ? WHERE rowid = ?",  # noqa: S608 - 同上
+                    (canonical, rowid),
+                )
+                normalized += 1
+        return normalized
 
     @staticmethod
     def _drop_empty_obsolete_memories_table(cursor: sqlite3.Cursor) -> None:
