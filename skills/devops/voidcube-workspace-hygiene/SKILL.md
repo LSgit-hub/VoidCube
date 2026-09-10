@@ -203,6 +203,23 @@ for stem in ['gateway','supervisor','memory']:
 3. **轮转 ≠ 释放磁盘**：日志移到 `run/archive/` 只是切分，空间仍被占用；真正释放要靠归档淘汰策略。报告时必须说清，别宣称"回收了 309 MB"。
 4. **别用终端里的 PowerShell 内联 `$_`**：harness 会把 `$_` 替换成工作目录，导致语法错误。改用 `write_file` 写 `.ps1` 再 `powershell -File`。
 5. **`python -c` 里 rglob 整个仓库输出会爆炸**（本轮打印了几万行 SKILL.md）。先限定目录，或先只统计数量。
+6. **`git status` 突然变干净 ≠ 改动丢失**：先怀疑"被别的进程/agent 提交了"，不要当成工作丢失而慌乱重做。
+   本轮实测：28 个未提交改动 + 新增技能被一个 agent 驱动的 `git add -A && git commit` 扫进了
+   `7b655e3`，且提交信息只提"新增技能"。
+
+```bash
+git log --oneline -6
+git show --stat --format="%H%n%an <%ae>%n%ci%n%s" HEAD   # 核对是否真的包含你的改动
+# 逐文件确认改动仍在（标记串比 mtime 可靠）
+python -c "
+import pathlib
+for f,needle in {'<file>':'<改动标记串>'}.items():
+    p=pathlib.Path(f); print(f, p.exists() and needle in p.read_text(encoding='utf-8',errors='replace'))"
+```
+
+   **提交纪律（避免自己制造这种提交）**：agent 提交一律路径限定
+   （`git add -- <paths>`），不要裸 `git add -A`；提交信息必须描述**实际**暂存内容，
+   否则后续按提交信息 review 会整批漏掉产品代码改动。
 
 ## 判定「既有失败」而不是自己改坏的
 
