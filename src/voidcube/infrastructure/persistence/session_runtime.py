@@ -13,6 +13,7 @@ from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect
 from .session_db import (
     SessionDB,
     SessionSequenceConflictError,
+    SessionTranscriptDivergenceError,
 )
 from .file_store import atomic_json_write, interprocess_file_lock
 
@@ -62,6 +63,7 @@ class SessionPersistence:
         tools: Callable[[], Sequence[Mapping[str, Any]] | None],
         user_message_override: Callable[[], tuple[int | None, Any]],
         verbose_logging: bool = False,
+        allow_divergence_recovery: bool = True,
     ) -> None:
         self.enabled = enabled
         self.logs_dir = Path(logs_dir)
@@ -76,6 +78,7 @@ class SessionPersistence:
         self._tools = tools
         self._user_message_override = user_message_override
         self.verbose_logging = verbose_logging
+        self.allow_divergence_recovery = allow_divergence_recovery
         self.messages: list[Message] = []
 
     def set_session_id(self, session_id: str) -> None:
@@ -209,9 +212,34 @@ class SessionPersistence:
                     persisted_messages[:flush_from]
                 )
                 if local_prefix_hash != snapshot["transcript_hash"]:
-                    raise SessionSequenceConflictError(
+                    recovery = self._recover_transcript_divergence(
+                        snapshot=snapshot,
+                        persisted_messages=persisted_messages,
+                        local_prefix_hash=local_prefix_hash,
+                    )
+                    if recovery is not None:
+                        return EffectOutcome(
+                            status="succeeded",
+                            details={"divergence_recovery": recovery},
+                        )
+                    raise SessionTranscriptDivergenceError(
                         f"local transcript diverges from committed prefix for "
-                        f"{self._session_id()}"
+                        f"{self._session_id()}",
+                        diagnostics={
+                            "session_id": self._session_id(),
+                            "flush_sequence": flush_from,
+                            "committed_messages": len(
+                                snapshot.get("messages") or []
+                            ),
+                            "local_messages": len(persisted_messages),
+                            "committed_transcript_revision": snapshot.get(
+                                "transcript_revision"
+                            ),
+                            "committed_transcript_hash": snapshot.get(
+                                "transcript_hash"
+                            ),
+                            "local_prefix_hash": local_prefix_hash,
+                        },
                     )
                 batch = persisted_messages[flush_from:]
                 try:
@@ -231,9 +259,113 @@ class SessionPersistence:
                 status="failed",
                 error="Session database conflict retries were exhausted",
             )
+        except SessionTranscriptDivergenceError as exc:
+            logger.error(
+                "Session transcript divergence is unresolvable for %s: diagnostics=%s",
+                self._session_id(),
+                exc.diagnostics,
+            )
+            return failed_effect(exc)
         except Exception as exc:
             logger.warning("Session DB batch append failed: %s", exc)
             return failed_effect(exc)
+
+    def _recover_transcript_divergence(
+        self,
+        *,
+        snapshot: Mapping[str, Any],
+        persisted_messages: list[Message],
+        local_prefix_hash: str,
+    ) -> dict[str, Any] | None:
+        """在内存历史与已提交前缀分叉时重建会话基线。
+
+        行为契约：
+
+        - 默认（``allow_divergence_recovery=True``）把内存 transcript 作为新的
+          权威基线写回，使该会话重新可持久化；重写前必须先把已提交的
+          transcript 落盘为恢复快照，保证原始数据不丢失。
+        - 若期间发生并发写入（revision/hash 变化），本次重写放弃并返回
+          ``None``，由调用方抛出 ``SessionTranscriptDivergenceError``，
+          让上层区分“可重试竞态”与“需要重建基线的分叉”。
+        - 关闭恢复时不改写历史，同样返回 ``None``。
+        """
+        session_id = self._session_id()
+        committed_messages = list(snapshot.get("messages") or [])
+        diagnostics: dict[str, Any] = {
+            "session_id": session_id,
+            "flush_sequence": snapshot.get("flush_sequence"),
+            "committed_messages": len(committed_messages),
+            "local_messages": len(persisted_messages),
+            "committed_transcript_revision": snapshot.get("transcript_revision"),
+            "committed_transcript_hash": snapshot.get("transcript_hash"),
+            "local_prefix_hash": local_prefix_hash,
+        }
+        logger.error(
+            "Session transcript diverged from committed prefix: %s", diagnostics
+        )
+        if not self.allow_divergence_recovery:
+            logger.error(
+                "Divergence recovery disabled; session %s stays unwritable",
+                session_id,
+            )
+            return None
+        backup_path = self._write_divergence_snapshot(
+            session_id, snapshot, diagnostics
+        )
+        try:
+            self.session_db.replace_messages(
+                session_id,
+                persisted_messages,
+                expected_revision=int(snapshot.get("transcript_revision") or 0),
+                expected_transcript_hash=str(snapshot.get("transcript_hash") or ""),
+            )
+        except SessionSequenceConflictError as exc:
+            logger.error(
+                "Divergence recovery abandoned after concurrent write for %s: %s",
+                session_id,
+                exc,
+            )
+            return None
+        logger.warning(
+            "Session transcript rebaselined for %s: committed=%d local=%d backup=%s",
+            session_id,
+            len(committed_messages),
+            len(persisted_messages),
+            backup_path,
+        )
+        return {
+            "status": "rebaselined",
+            "backup_path": str(backup_path) if backup_path else None,
+            **diagnostics,
+        }
+
+    def _write_divergence_snapshot(
+        self,
+        session_id: str,
+        snapshot: Mapping[str, Any],
+        diagnostics: Mapping[str, Any],
+    ) -> Path | None:
+        """在重写前把已提交的 transcript 落盘，作为可回溯的恢复点。"""
+        revision = int(snapshot.get("transcript_revision") or 0)
+        path = self.logs_dir / f"session_{session_id}.divergence-rev{revision}.json"
+        try:
+            atomic_json_write(
+                path,
+                {
+                    "session_id": session_id,
+                    "model": self._model(),
+                    "captured_at": datetime.now().isoformat(),
+                    "reason": "transcript_divergence_recovery",
+                    "diagnostics": dict(diagnostics),
+                    "messages": list(snapshot.get("messages") or []),
+                },
+                indent=2,
+                default=str,
+            )
+            return path
+        except Exception as exc:
+            logger.warning("Failed to snapshot diverged transcript: %s", exc)
+            return None
 
     def replace_transcript(self, messages: list[Message]) -> None:
         """Commit an explicit compression/history rewrite as one SQLite fact."""

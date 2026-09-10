@@ -36,6 +36,19 @@ class SessionSequenceConflictError(RuntimeError):
     """A transcript writer used a stale committed sequence cursor."""
 
 
+class SessionTranscriptDivergenceError(SessionSequenceConflictError):
+    """本地 transcript 不再与已提交前缀一致，且未进行恢复重写。
+
+    与普通的序列游标冲突不同，这类错误意味着内存中的会话历史与 SQLite
+    权威记录发生了结构性分叉；调用方需要据此区分“可重试的竞态”与
+    “需要重建基线的分叉”。
+    """
+
+    def __init__(self, message: str, *, diagnostics: dict | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics = dict(diagnostics or {})
+
+
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
 SCHEMA_VERSION = 12

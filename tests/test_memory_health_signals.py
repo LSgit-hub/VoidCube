@@ -1397,7 +1397,9 @@ async def test_tier2_compress_keeps_turns_uncompressed_when_no_events_generated(
     assert result["turns_processed"] == 0
     assert result["compression_degraded"] is True
     assert result["compression_method"] == "heuristic"
-    assert compressed == "pending"
+    # 仍未压缩（turn 保留在 Tier1，且未写入 archive）；零事件现在推进有界
+    # 退避，而不是留在 pending 被无限重选。
+    assert compressed == "retry_wait"
     assert archive_count == 0
 
 
@@ -1434,7 +1436,8 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
     assert result.turns_processed == 0
     assert result.candidate_count == 1
-    assert compressed == "pending"
+    # 未压缩且未归档；零事件进入有界退避，避免被无限重选。
+    assert compressed == "retry_wait"
     assert archive_count == 0
 
 
@@ -1545,6 +1548,51 @@ def test_quality_rejection_stops_retrying_after_three_attempts(tmp_path):
     finally:
         conn.close()
     assert state == (3, None, "quality_quarantined")
+
+
+@pytest.mark.asyncio
+@pytest.mark.operational
+async def test_zero_event_cycle_advances_bounded_retry_accounting(tmp_path):
+    """零事件批次必须推进有界重试，否则会被反复选中且失败信号不收敛。"""
+    svc = _make_service(tmp_path)
+    svc._llm_healthy = True
+    await svc.create_session(SessionCreate(session_id="no-events", metadata={}))
+    await svc.add_turn(
+        "no-events",
+        TurnCreate(speaker="user", text="OK", metadata={}),
+    )
+
+    class _EmptyPipeline:
+        def ingest(self, turns):
+            return SimpleNamespace(
+                events=[], scenes=[], arcs=[], epochs=[], profile_memories=[]
+            )
+
+    svc._build_compression_pipeline = lambda: _EmptyPipeline()  # type: ignore[method-assign]
+
+    first = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+    assert first["status"] == "no_events_generated"
+
+    # 退避生效后同一批 turn 不应被立刻再次选中。
+    again = await svc.tier2_compress(
+        Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
+    )
+    assert again["status"] == "no_candidates"
+
+    conn = open_memory_sqlite(svc._db_path)
+    try:
+        state = conn.execute(
+            "SELECT compression_retry_count, compression_retry_after, "
+            "compression_status FROM turns WHERE session_id = 'no-events'"
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert state[0] == 1
+    assert state[1] is not None
+    assert state[2] == "retry_wait"
 
 
 @pytest.mark.asyncio

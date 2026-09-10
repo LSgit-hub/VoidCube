@@ -1306,6 +1306,11 @@ class Tier1ToTier2Bridge:
                 len(candidates),
             )
             self._persist_quality_audit(quality_evidence, "rejected")
+            # 零事件同样要推进有界重试计数：否则这批 turn 会永远停留在
+            # pending 并被反复选中，bridge 的失败信号无法收敛。此处复用与
+            # 质量门禁失败完全相同的退避/隔离机制（retry_wait → 3 次后
+            # quality_quarantined），语义都是“已评估但未被接受”。
+            self._record_quality_rejection(candidates)
             return BridgeResult(
                 turns_processed=0,
                 events_generated=0,

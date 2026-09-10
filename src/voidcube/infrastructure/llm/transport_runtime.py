@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
@@ -129,6 +130,8 @@ class ChatTransport:
         delivered_visible = {"value": False}
         first_delta_fired = {"value": False}
         monitor_rebuilt_pool = {"value": False}
+        attempt_index = {"value": 0}
+        stale_timeout = self.stream_stale_timeout(api_kwargs)
 
         def emit_update(update: StreamChunkUpdate) -> None:
             if update.starts_delivery and not first_delta_fired["value"]:
@@ -146,6 +149,7 @@ class ChatTransport:
                 delivered_visible["value"] = True
 
         def stream_once() -> Any:
+            attempt_index["value"] += 1
             base_timeout = self._request_timeout(api_kwargs)
             read_timeout = self._env_float("VOIDCUBE_STREAM_READ_TIMEOUT", 120.0)
             base_url = self._base_url()
@@ -161,6 +165,9 @@ class ChatTransport:
                     read_timeout,
                 )
             read_timeout = min(read_timeout, base_timeout)
+            read_timeout = self._align_stream_read_timeout(
+                read_timeout, stale_timeout, base_timeout
+            )
             stream_kwargs = {
                 **api_kwargs,
                 "stream": True,
@@ -290,40 +297,52 @@ class ChatTransport:
             finally:
                 self._close_slot(slot, reason="stream_request_complete")
 
-        stale_timeout = self.stream_stale_timeout(api_kwargs)
-        stale_abort_requested = False
+        stale_kill_attempt = {"value": 0}
+        stale_kills = 0
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
         while thread.is_alive():
             thread.join(timeout=self._poll_interval)
-            stale_elapsed = self._clock() - last_chunk_time["value"]
-            if stale_elapsed > stale_timeout and not stale_abort_requested:
-                stale_abort_requested = True
-                estimated_tokens = self.estimate_context_tokens(api_kwargs)
-                logger.warning(
-                    "Stream stale for %.0fs (threshold %.0fs); model=%s "
-                    "context=~%s tokens. Closing request client.",
-                    stale_elapsed,
-                    stale_timeout,
-                    api_kwargs.get("model", "unknown"),
-                    f"{estimated_tokens:,}",
-                )
-                self._notify(
-                    self._emit_status,
-                    f"No response from provider for {int(stale_elapsed)}s "
-                    f"(model: {api_kwargs.get('model', 'unknown')}, "
-                    f"context: ~{estimated_tokens:,} tokens). Reconnecting.",
-                    label="status",
-                )
-                self._close_slot(slot, reason="stale_stream_kill")
-                monitor_rebuilt_pool["value"] = self._replace_primary(
-                    reason="stale_stream_pool_cleanup"
-                )
-                last_chunk_time["value"] = self._clock()
+            attempted = attempt_index["value"]
+            if attempted > 0 and stale_kill_attempt["value"] != attempted:
+                stale_elapsed = self._clock() - last_chunk_time["value"]
+                if stale_elapsed > stale_timeout:
+                    stale_kill_attempt["value"] = attempted
+                    stale_kills += 1
+                    estimated_tokens = self.estimate_context_tokens(api_kwargs)
+                    logger.warning(
+                        "Stream stale for %.0fs (threshold %.0fs); model=%s "
+                        "context=~%s tokens; attempt=%d. Closing request client.",
+                        stale_elapsed,
+                        stale_timeout,
+                        api_kwargs.get("model", "unknown"),
+                        f"{estimated_tokens:,}",
+                        stale_kills,
+                    )
+                    self._notify(
+                        self._emit_status,
+                        f"No response from provider for {int(stale_elapsed)}s "
+                        f"(model: {api_kwargs.get('model', 'unknown')}, "
+                        f"context: ~{estimated_tokens:,} tokens). Reconnecting.",
+                        label="status",
+                    )
+                    self._close_slot(slot, reason="stale_stream_kill")
+                    monitor_rebuilt_pool["value"] = self._replace_primary(
+                        reason="stale_stream_pool_cleanup"
+                    )
+                    last_chunk_time["value"] = self._clock()
 
             if self._interrupted():
                 self._close_slot(slot, reason="stream_interrupt_abort")
                 raise InterruptedError("Agent interrupted during streaming API call")
+
+        if stale_kills > 1:
+            logger.warning(
+                "Stream stale watchdog fired %d times before the request resolved; "
+                "model=%s",
+                stale_kills,
+                api_kwargs.get("model", "unknown"),
+            )
 
         if result["error"] is not None:
             if delivered_visible["value"] and not isinstance(
@@ -350,6 +369,26 @@ class ChatTransport:
         if estimated_tokens > 50_000:
             return max(base_timeout, 240.0)
         return base_timeout
+
+    @staticmethod
+    def _align_stream_read_timeout(
+        read_timeout: float,
+        stale_timeout: float,
+        base_timeout: float,
+    ) -> float:
+        """让 stale 看门狗先于 httpx 读超时生效。
+
+        stale 阈值随上下文规模自适应（180/240/300s），是判定“流已死”的权威
+        机制，触发时会主动关闭客户端并重建连接池。httpx 的 per-read 超时若
+        低于该阈值，会让大上下文下正常的长停顿（例如模型长时间思考后才出
+        第一个 token）被误判为读超时，并绕过看门狗的诊断与重建。
+
+        因此把读超时抬到 stale 阈值之上留出余量，同时仍以 base_timeout 为
+        上限，避免出现超过整体请求预算的读超时。
+        """
+        if not math.isfinite(stale_timeout):
+            return read_timeout
+        return max(read_timeout, min(base_timeout, stale_timeout + 30.0))
 
     @staticmethod
     def estimate_context_tokens(api_kwargs: dict[str, Any]) -> int:

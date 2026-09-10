@@ -304,9 +304,55 @@ def test_stale_stream_closes_request_and_retries(monkeypatch):
     )
 
     assert response.choices[0].message.content == "ok"
+    # stale 看门狗按“每次尝试”重新武装：阈值为 0 时第一次尝试和重试都会
+    # 被判定为 stale，因此至少发生一次击杀与连接池重建。
     assert any(reason == "stale_stream_kill" for _, reason in lifecycle.closed)
-    assert lifecycle.replaced == ["stale_stream_pool_cleanup"]
+    assert "stale_stream_pool_cleanup" in lifecycle.replaced
     assert any("No response" in status for status in statuses)
+
+
+def test_stream_read_timeout_is_raised_above_the_stale_watchdog(monkeypatch):
+    """httpx 读超时必须晚于 stale 看门狗，避免大上下文长停顿被误判。"""
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return [_chunk(content="ok", finish_reason="stop")]
+
+    lifecycle = _Lifecycle([_Client(create)])
+    monkeypatch.setenv("VOIDCUBE_STREAM_STALE_TIMEOUT", "180")
+    monkeypatch.delenv("VOIDCUBE_STREAM_READ_TIMEOUT", raising=False)
+
+    transport = _transport(lifecycle)
+    transport.stream(
+        {"model": "safe-model", "messages": []},
+        on_update=lambda _update: None,
+    )
+
+    timeout = captured["timeout"]
+    marker = {"model": "safe-model", "messages": []}
+    assert timeout.read == 210.0
+    assert timeout.read > transport.stream_stale_timeout(marker)
+
+
+def test_stream_read_timeout_keeps_explicit_budget_upper_bound(monkeypatch):
+    """显式请求预算小于 stale 阈值时，读超时不得突破该预算。"""
+    captured = {}
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return [_chunk(content="ok", finish_reason="stop")]
+
+    lifecycle = _Lifecycle([_Client(create)])
+    monkeypatch.setenv("VOIDCUBE_STREAM_STALE_TIMEOUT", "180")
+    monkeypatch.delenv("VOIDCUBE_STREAM_READ_TIMEOUT", raising=False)
+
+    _transport(lifecycle).stream(
+        {"model": "safe-model", "messages": [], "timeout": 7.0},
+        on_update=lambda _update: None,
+    )
+
+    assert captured["timeout"].read == 7.0
 
 
 def test_invalid_transport_environment_values_use_defaults(monkeypatch):

@@ -16,5 +16,7 @@ def load_supervisor_ui_html() -> str:
     payload = files(__package__).joinpath(_SUPERVISOR_UI_RESOURCE).read_bytes()
     if _cached_ui_html is None or payload != _cached_ui_bytes:
         _cached_ui_bytes = payload
-        _cached_ui_html = payload.decode("utf-8").replace("\r\n", "\n")
+        # 用 utf-8-sig 解码：剥离可能存在的 BOM，避免 BOM 出现在
+        # <!doctype html> 之前（部分浏览器会因此进入 quirks 模式）。
+        _cached_ui_html = payload.decode("utf-8-sig").replace("\r\n", "\n")
     return _cached_ui_html
