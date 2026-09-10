@@ -257,3 +257,33 @@ for n,u in [('gateway','http://localhost:6000/'),('memory','http://localhost:600
 - 槽位元数据/重启相关坑：`devops/voidcube-supervisor-fix`
 - 全栈健康自检：`devops/system-health-audit`
 - 技能注册表机制：`devops/skills-system-diagnostics`
+
+## `~/.VoidCube/run/archive/` 的淘汰策略（实测 2026-09-10）
+
+- 活跃日志由 `RotatingFileHandler` 自我约束：`logging.max_log_size`（config 默认 10，代码兜底 5 MB）
+  × `logging.backup_count`（默认 3），**不会无限增长**。
+- `run/archive/` 只在**手动轮转**（`vc serve stop` → 改名 → `vc serve start`）时增长，没有自动淘汰，
+  所以淘汰策略要靠这个流程本身保证：
+  1. 保留最新 3 份（每服务各一份）
+  2. 其余 gzip 压缩为 `.log.gz`（数据保留，实测压缩比约 20:1）
+  3. 超过 30 天的 `.log.gz` 删除
+- 实测：3 份活跃日志 308.74 MB → gzip 后 15.38 MB，回收 293.35 MB。
+- 压缩写法坑：`shutil.copyfileobj` 的参数名是 `length` 而非 `chunk_size`（Python 3.14 直接 TypeError）；
+  稳妥写法是按块 `read(1MB)` 再 `write`，并在失败时先清理半成品 `.gz`。
+
+## `.test-tmp/` 删不掉：是所有权问题，不是"句柄占用"（实测）
+
+- 现象：`shutil.rmtree` 报 `PermissionError [WinError 5] 拒绝访问`，`icacls` 也被拒，
+  但 `psutil` 查不到任何进程的 cwd / open_files 命中。
+- 真因：该目录树**不属于当前登录用户**——`takeown` 明确返回
+  `The current logged on user does not have ownership privileges on the file (or folder)`。
+  常见来源：以其他账户/服务身份运行的进程创建（本机是外部 agent / pytest 进程）。
+- 处置顺序（先诊断再动手）：
+  ```bash
+  takeown /f <dir> /r /d y
+  icacls <dir> /grant %USERNAME%:F /t /c
+  rmdir /s /q <dir>
+  ```
+  第 1 步报"无所有权"时，必须在**管理员** shell 里执行，普通提权无效。
+- 影响面：仓库 `.gitignore` 已含 `.test-tmp/`，残留不影响提交、打包与运行；可留待重启/提权后处理。
+- 判据提醒：`psutil` 无命中**不能**得出"无进程占用"的结论——所有权/ACL 同样会产生 WinError 5。

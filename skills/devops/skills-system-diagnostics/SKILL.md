@@ -142,3 +142,38 @@ for i in range(7): print(f'parents[{i}]:', f.parents[i])
 - 探针 import 路径：必须 `sys.path.insert(0, 'src')`，用 `.venv/Scripts/python.exe` 跑（Windows git-bash）
 - `search_files` 在仓库根目录会超时（60s），用 terminal 的 `grep -n` 代替
 - 测试用项目虚拟环境 `.venv/Scripts/python.exe`（AGENTS.md 规则 4）
+
+## bundled 技能同步机制与漂移排查（实测 2026-09-10）
+
+同步入口：`src/voidcube/extensions/skills/sync.py::sync_skills`，每次 CLI 启动执行
+（调用点 `interfaces/cli/entrypoints/session.py`，约 460 行）。
+
+- 真源：**仓库 `skills/`**（`_bundled_dir()`，可用环境变量 `VOIDCUBE_BUNDLED_SKILLS` 覆盖）
+- 目标：`~/.VoidCube/skills/`
+- 状态文件：`~/.VoidCube/skills/.bundled_manifest`，格式 `name:md5(dir)`；
+  `name` 取 SKILL.md frontmatter 的 `name`（**不是目录名**，例如目录 `mlops/inference/vllm` 的 name 是 `serving-llms-vllm`）
+
+### 同步分支（必须理解，否则会误判"技能没同步"）
+1. `name` 不在 manifest：目标不存在 → 复制；目标已存在 → 跳过（不改动），随后登记 source hash
+2. `name` 在 manifest 且**目标目录不存在** → 只 `skipped += 1`，**永不恢复**（静默丢失，实锤缺口）
+3. `name` 在 manifest 且 `hash(目标) != origin` → 判定 `user-modified`，**永远跳过**（此后仓库更新不再下发）
+4. 其余：`source_hash != origin` 才更新（先备份 `.bak` 再覆盖）
+
+### EOL 陷阱（本机实测，最容易被忽略）
+`.gitattributes` 规定 `*.md` / `*.py` 为 `eol=lf`，但 Agent 在 Windows 上写文件常落 CRLF。
+`_hash()` 读的是**原始字节** → CRLF 副本与 LF 基线 hash 必然不同 → 被永久误判为 `user-modified`。
+修法：两侧统一归一化为 LF，并让 manifest 与之一致。
+
+### Agent 自改 bundled 技能的副作用
+用 `skill_manage` 改的是运行时副本，改完 hash 与 manifest 不符 → 之后仓库侧的更新**再也不会同步到运行时**。
+正确做法：改完**同时**把仓库副本一起更新，并重算 manifest 条目（保持 repo == runtime == manifest 三者一致）。
+
+### 漂移审计（只读，应长期分叉数为 0）
+逐项比对 manifest 中每个 name 的 repo hash / runtime hash，输出 `NOT_IN_RUNTIME` / `DIVERGED` / `MISSING_IN_REPO`；
+hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` → 先相对路径字节、再文件字节）。
+另需单独统计 manifest 与仓库的集合差，确认 bundled 齐全。
+
+### 实测结果（2026-09-10）
+- 修复前：1 处真损坏（`mlops/vector-databases` 运行时缺 SKILL.md，同步永不恢复）
+  + 3 处漂移（1 处纯 EOL 假象、2 处真实内容差异）
+- 修复后：分叉 0；仓库 55 / 运行时 58（运行时多出的是未入库的个人/Agent 使用约定技能）
