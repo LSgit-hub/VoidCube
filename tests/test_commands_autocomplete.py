@@ -145,6 +145,7 @@ def test_model_completion_reads_configured_provider_catalog_and_override(monkeyp
     monkeypatch.setattr(
         "voidcube.infrastructure.config.configuration.load_config",
         lambda: {
+            "runtime": {"active_provider": "deepseek-v"},
             "providers": {
                 "deepseek-v": {
                     "label": "DeepSeek Vision",

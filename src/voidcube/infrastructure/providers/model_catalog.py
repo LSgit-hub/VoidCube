@@ -634,56 +634,6 @@ def curated_models_for_provider(
     return [(model_id, "") for model_id in provider_model_ids(normalized)]
 
 
-def detect_provider_for_model(
-    model_name: str,
-    current_provider: str,
-) -> Optional[tuple[str, str]]:
-    """Resolve a model only when it matches the live OpenRouter catalog."""
-    name = (model_name or "").strip()
-    if not name:
-        return None
-
-    # Model names are not assigned to direct providers from static heuristics.
-    # The only automatic remapping is an exact match from the live OpenRouter
-    # catalog, which is safe because it carries the provider/model identifier.
-    or_slug = _find_openrouter_slug(name)
-    if or_slug:
-        if current_provider != "openrouter":
-            return ("openrouter", or_slug)
-        # Already on openrouter, just return the resolved slug
-        if or_slug != name:
-            return ("openrouter", or_slug)
-        return None  # already on openrouter with matching name
-
-    return None
-
-
-def _find_openrouter_slug(model_name: str) -> Optional[str]:
-    """Find the full OpenRouter model slug for a bare or partial model name.
-
-    Handles:
-    - Exact match: ``deepseek/deepseek-chat`` → as-is
-    - Bare name: ``deepseek-chat`` → ``deepseek/deepseek-chat``
-    """
-    name_lower = model_name.strip().lower()
-    if not name_lower:
-        return None
-
-    # Exact match (already has provider/ prefix)
-    for mid in model_ids():
-        if name_lower == mid.lower():
-            return mid
-
-    # Try matching just the model part (after the /)
-    for mid in model_ids():
-        if "/" in mid:
-            _, model_part = mid.split("/", 1)
-            if name_lower == model_part.lower():
-                return mid
-
-    return None
-
-
 def normalize_provider(provider: Optional[str]) -> str:
     """Normalize provider aliases to Voidcube' canonical provider ids.
 

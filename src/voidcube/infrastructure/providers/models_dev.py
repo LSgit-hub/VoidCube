@@ -84,8 +84,3 @@ def get_provider_info(provider_id: str) -> Optional[ProviderInfo]:
         id=provider_id,
         name=provider_id,
     )
-
-
-def search_models_dev(query: str) -> List[str]:
-    """Search models."""
-    return []

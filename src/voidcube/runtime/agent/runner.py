@@ -4105,7 +4105,6 @@ class AIAgent:
             except Exception as exc:
                 # Recall is an auxiliary side effect: keep the turn running,
                 # but expose the failure for diagnostics and lifecycle logs.
-                self._last_memory_prefetch_error = str(exc)
                 logger.warning(
                     "Memory prefetch failed; continuing without recalled context: %s",
                     exc,
