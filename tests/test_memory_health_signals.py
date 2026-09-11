@@ -1254,6 +1254,68 @@ async def test_tier2_bridge_repeated_failures_degrade_health(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_partial_rejection_warns_before_degrading(tmp_path, monkeypatch):
+    """部分成功（含被拒 scope）也走连续阈值：单次只记 warning，连续 N 次才 degraded。"""
+    from memai.application import memory_service as ms
+
+    config = MemoryServiceConfig(
+        db_path=str(tmp_path / "mem.db"),
+        tier2_bridge_failure_degraded_after=2,
+    )
+    service = MemoryService(config)
+    service._gateway_registration_healthy = True
+    await service.create_session(SessionCreate(session_id="partial", metadata={}))
+    await service.add_turn(
+        "partial", TurnCreate(speaker="user", text="durable turn", metadata={})
+    )
+
+    async def partial_cycle(*args, **kwargs):
+        return {
+            "turns_processed": 1,
+            "scope_count": 2,
+            "successful_scope_count": 1,
+            "skipped_scope_count": 0,
+            "failed_scope_count": 1,
+            "scopes": [
+                {
+                    "memory_domain": "agent_interaction",
+                    "workspace_id": "VoidCube",
+                    "status": "quality_rejected",
+                    "turns_processed": 0,
+                    "events_generated": 1,
+                    "errors": [],
+                    "quality_evidence": {"failed_checks": ["compression_ratio"]},
+                },
+                {
+                    "memory_domain": "companion",
+                    "workspace_id": "default",
+                    "status": "compressed",
+                    "turns_processed": 1,
+                    "events_generated": 1,
+                    "errors": [],
+                },
+            ],
+        }
+
+    monkeypatch.setattr(ms, "run_tier2_bridge_cycle", partial_cycle)
+
+    await service._tier2_bridge_cycle()
+    first = await service.health_check()
+    bridge_health = first["maintenance"]["tier2_bridge"]
+    assert bridge_health["state"] == "warning"
+    assert bridge_health["consecutive_rejections"] == 1
+    assert bridge_health["consecutive_failures"] == 0
+    assert first["status"] == "healthy"
+
+    await service._tier2_bridge_cycle()
+    second = await service.health_check()
+    bridge_health = second["maintenance"]["tier2_bridge"]
+    assert bridge_health["state"] == "degraded"
+    assert bridge_health["consecutive_rejections"] == 2
+    assert second["status"] == "degraded"
+
+
+@pytest.mark.asyncio
 async def test_low_information_skip_does_not_degrade_health(tmp_path):
     """低信息批次（无有效事件但属预期跳过）不得把整体健康拉成 degraded。"""
     config = MemoryServiceConfig(

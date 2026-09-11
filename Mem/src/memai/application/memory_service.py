@@ -948,6 +948,7 @@ class MemoryApplicationService:
         self._last_tier2_bridge_result: Dict[str, Any] | None = None
         self._tier2_bridge_state = "idle"
         self._tier2_bridge_consecutive_failures = 0
+        self._tier2_bridge_consecutive_rejections = 0
         self._tier2_bridge_last_failure_reason: str | None = None
         self._tier2_bridge_last_succeeded_at: str | None = None
         self._tier2_bridge_last_trigger_reason: str | None = None
@@ -2889,17 +2890,27 @@ class MemoryApplicationService:
             if successful_scopes:
                 # 保留拒绝 scope 的可见性，但不要把部分成功记成全局连续失败。
                 self._tier2_bridge_consecutive_failures = 0
+                self._tier2_bridge_consecutive_rejections += 1
                 self._tier2_bridge_last_failure_reason = (
                     errors[0] if errors else str(failed_scopes[0].get("status"))
                 )
                 self._tier2_bridge_last_succeeded_at = datetime.now(timezone.utc).isoformat()
-                self._tier2_bridge_state = "degraded"
+                # 单次拒绝不再立即判 degraded：与"全部 scope 失败"共用同一个连续
+                # 阈值。未达阈值只记 warning —— 保留拒绝可见性，但健康状态仍为
+                # healthy，避免一个被拒批次就把整个服务拉红（信号过敏）。
+                self._tier2_bridge_state = (
+                    "degraded"
+                    if self._tier2_bridge_consecutive_rejections
+                    >= self.config.tier2_bridge_failure_degraded_after
+                    else "warning"
+                )
             else:
                 self._record_tier2_bridge_failure(
                     errors[0] if errors else str(failed_scopes[0].get("status"))
                 )
         else:
             self._tier2_bridge_consecutive_failures = 0
+            self._tier2_bridge_consecutive_rejections = 0
             self._tier2_bridge_last_failure_reason = None
             self._tier2_bridge_last_succeeded_at = datetime.now(timezone.utc).isoformat()
             self._tier2_bridge_state = "idle"
@@ -2907,10 +2918,14 @@ class MemoryApplicationService:
 
     def _record_tier2_bridge_failure(self, reason: str) -> None:
         self._tier2_bridge_consecutive_failures += 1
+        # 拒绝计数与"全失败连续次数"分开统计：前者覆盖部分成功（含拒绝 scope）
+        # 的周期，是判定 degraded 的唯一依据；后者只表示"本轮无任何 scope 成功"，
+        # 用于报告可见性（部分成功时不会累加）。
+        self._tier2_bridge_consecutive_rejections += 1
         self._tier2_bridge_last_failure_reason = reason
         self._tier2_bridge_state = (
             "degraded"
-            if self._tier2_bridge_consecutive_failures
+            if self._tier2_bridge_consecutive_rejections
             >= self.config.tier2_bridge_failure_degraded_after
             else "failed"
         )
@@ -3048,6 +3063,7 @@ class MemoryApplicationService:
                 **tier2_candidates,
                 "state": self._tier2_bridge_state,
                 "consecutive_failures": self._tier2_bridge_consecutive_failures,
+                "consecutive_rejections": self._tier2_bridge_consecutive_rejections,
                 "last_failure_reason": self._tier2_bridge_last_failure_reason,
                 "last_succeeded_at": self._tier2_bridge_last_succeeded_at,
                 "last_trigger_reason": self._tier2_bridge_last_trigger_reason,
