@@ -871,3 +871,56 @@ profile_memories 是用户偏好和事实的单独存储层，与 compressed_mem
 | identity_layer | 无 | 有（self_foundation 等） |
 | 召回方式 | 不直接进入 recall，需 mem_search 关键词命中 | 直接参与 recall 检索 |
 | 典型状态 | active 少，superseded/quarantined 多 | 大部分 active |
+
+## `status=degraded` 但根因是"本批无事件"（2026-09-11 实测新增，先读这条）
+
+`/health` 报 `degraded` 时**不要直接按"压缩链停摆"上线排查**——先走下面的判读链。
+实测该服务会因**单个 scope 的 `no_events_generated`** 就把整体拉成 `degraded`
+（`failed_scope_count=1` 即可），而同时其它 scope 压缩正常。
+
+判读链（按顺序，每步都能否证）：
+
+1. `/health` → `maintenance.last_tier2_bridge_result`，读：
+   - `scope_count` / `successful_scope_count` / `failed_scope_count`
+   - 每个 `scopes[].status`、`scopes[].errors`、`quality_evidence.failed_checks`
+2. 若失败 scope 的 `status == "no_events_generated"`，且 `failed_checks` 含
+   `event_coverage` / `no_valid_events`，同时 `candidate_count > 0 而 event_count == 0`
+   → 这是"本批没有可抽取事件"，**不是进程/配置故障**。
+3. 用 DB 确认这批 turn 长什么样：
+   ```sql
+   SELECT turn_id, length(trim(text)) L, compression_status, compression_retry_count, tags
+   FROM turns
+   WHERE memory_domain='agent_interaction' AND workspace_id='VoidCube'
+     AND compression_status IN ('pending','retry_wait','quality_quarantined')
+   ORDER BY timestamp LIMIT 20;
+   ```
+   实测样本：`'OK'`（2 字符）与 23 字的提问反复出现，`compression_retry_count=2`、
+   状态 `retry_wait` → 走**有界重试**，第 3 次后转 `quality_quarantined`
+   （当时全库 `quality_quarantined=11`）。即：这是**设计内可跳过的批次**，会自限。
+4. 两点采样（间隔 ≥60s）判断是否自愈：
+   ```python
+   for tag in ('T0','T+60s'):
+       d = json.load(urllib.request.urlopen('http://localhost:6001/health'))
+       m = d['maintenance']; lr = m['last_tier2_bridge_result']
+       print(tag, d['status'], m['last_effective_activity_at'], m['last_rule_runs']['tier2_bridge'],
+             [(s['memory_domain'], s['status']) for s in lr['scopes']],
+             lr['successful_scope_count'], lr['failed_scope_count'])
+       time.sleep(60)
+   ```
+   若两点完全一致且 `last_effective_activity_at` 未前移 → 只是还没到下一个维护周期，
+   **不是卡死**（先确认服务启动时间：`run/*.pid` 的 mtime）。
+
+要点与定性：
+
+- 这是**信号过敏**：`no_events_generated` 与"真故障"共用 `failed_scope_count`，
+  把"本批没东西可压缩"等同于"服务不健康"。长期后果是**告警疲劳**——用户开始习惯性
+  忽略 `degraded`，真故障反而被淹没。
+- 与另一条 degraded 路径区分：`agent_outbox` 死信导致的 degraded 要看
+  `agent_outbox.healthy / dead_letter_count / issues`（见"注意事项"节），不要混淆。
+- 批次为何会含极短 turn：锚点是**会话级**选择（会话内存在 ≥40 字 turn 即可入选），
+  锚定后按时间取该会话的旧 turn 入批 → `'OK'` 这类极短 turn 仍会骑进批次并拖低
+  `event_coverage`。所以"锚点信息量优先"并不能让批次内容全为实质内容。
+- 设计层建议（**未实施**，供定调）：`run_cycle` 在 `low_information_fallback` 为真时，
+  可把该 scope 记为中性状态（如 `skipped_low_information`）而不计入 `failed_scope_count`。
+  这样既不掩盖真实抽取失败，也不产生假 degraded。改动前先确认该状态是否被
+  `maintenance.successful_scope_count` 统计逻辑接纳（否则会反向拉低成功率）。
