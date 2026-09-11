@@ -418,7 +418,7 @@
       "migrating_run_auth": "Run `VoidCube auth` to create a fully independent session.",
       "login_removed": "The 'VoidCube login' command has been removed.",
       "use_auth_instead": "Use 'VoidCube auth' to manage credentials,",
-      "use_model_or_setup": "Run `/model` to select a provider, or `/api` for full setup.",
+      "use_model_or_setup": "Run `/model` to switch models, or `/api` to configure a provider.",
       "VoidCube_will_continue": "Voidcube will keep working independently with its own session.",
       "whatsapp_paired": "WhatsApp paired successfully!",
       "next_steps": "Next steps:"
