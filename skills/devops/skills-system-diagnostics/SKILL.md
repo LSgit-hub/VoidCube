@@ -143,6 +143,26 @@ for i in range(7): print(f'parents[{i}]:', f.parents[i])
 - `search_files` 在仓库根目录会超时（60s），用 terminal 的 `grep -n` 代替
 - 测试用项目虚拟环境 `.venv/Scripts/python.exe`（AGENTS.md 规则 4）
 
+
+## 交付路径：技能**不**随 wheel 交付（实测，极易误判）
+
+- `sync.py::_bundled_dir()` = `Path(__file__).resolve().parents[4] / "skills"`。
+  - 源码 / `pip install -e`（README 推荐的可编辑安装）：parents[4] 就是仓库根 → 仓库 `skills/` 生效，成立。
+  - **非 editable 的 wheel 安装**：sync.py 位于 `site-packages/voidcube/extensions/skills/`，
+    parents[4] = `Lib/`，其下没有 skills → `sync_skills()` 直接返回空，
+    **新机器零技能且无任何报错（静默降级）**。
+- 唯一可信的验证方式：构建并检查 wheel 内容，**不要只看测试**：
+  ```bash
+  .venv/Scripts/python.exe scripts/build_wheel.py --outdir <临时目录>
+  # 再用 zipfile 统计 namelist() 里的 SKILL.md 数量
+  ```
+  实测：731 个条目、`SKILL.md` **0 个**（只有 `voidcube/extensions/skills/*.py` 代码）。
+- **陷阱**：`tests/test_packaging_contract.py` 通过 ≠ 打包验证——该测试对 skills **零断言**。
+  拿它支撑"技能会随包交付"是过度解读。
+- 副作用：构建 wheel 会重新生成 `build/`、`dist/`、`voidcube_agent.egg-info/`
+  （都被 .gitignore 忽略，`git status` 看不到），验证完必须手动清理。
+
+
 ## bundled 技能同步机制与漂移排查（实测 2026-09-10）
 
 同步入口：`src/voidcube/extensions/skills/sync.py::sync_skills`，每次 CLI 启动执行
@@ -177,6 +197,48 @@ hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` 
 - 修复前：1 处真损坏（`mlops/vector-databases` 运行时缺 SKILL.md，同步永不恢复）
   + 3 处漂移（1 处纯 EOL 假象、2 处真实内容差异）
 - 修复后：分叉 0；仓库 55 / 运行时 58（运行时多出的是未入库的个人/Agent 使用约定技能）
+
+
+## 注册表：元数据位置、去重与优先级、孤儿文件（2026-09-11 实测，含一处误判修正）
+
+- `deprecated` / `supersedes` **不在 SKILL.md frontmatter 里**，而在活注册表
+  `~/.VoidCube/.skills_registry.sqlite3`（`REGISTRY_FILENAME = ".skills_registry.sqlite3"`）的 `skills` 表
+  （列含 `frontmatter_name, directory_name, category, source, content_hash, deprecated, supersedes, updated_at`）。
+  验证"弃用是否生效"要**查库**，不是 grep 技能文件。
+- 索引**同时收录仓库与运行时两个根**：行数 ≈ repo 技能数 + runtime 技能数（实测 113 = 55 + 58），
+  同一 bundled 技能有两条同名记录。这**不是缺陷**，是"双根索引 + 优先级"的有意设计：
+  - `registry.discovery_roots()` 按调用顺序赋 `priority`（`home`=0、`repo`=1、`external`=2）；
+    `query_skills` 为 `ORDER BY priority, directory_name, file_path` → **运行时副本排在仓库副本之前**。
+  - `prompt_builder._skills_from_registry` 用 `seen_skill_names`（键 = `directory_name`）先到者胜去重，
+    输出层还有二次 `seen` 去重 → 实测 `skills_list` 只输出 57 条、无重复。
+  - **不要按"重复索引 bug"去修它**（本会话曾误报为缺陷，已修正）。
+- **重要副作用**：既然运行时副本在索引中胜出，**只改仓库对 bundled 技能在本机不生效**
+  （除非 sync 覆盖运行时）。这从另一侧解释了为什么必须维持 repo == runtime == manifest：
+  只改仓库等于无效改动；只改运行时会永久阻断仓库下发。
+- 低危隐患（发现即记录，暂未改）：
+  - 去重键是 `directory_name`，而工具侧（`tool.py`）用 `frontmatter_name` 标识技能名；
+    若某技能"目录名不同但 frontmatter name 相同"，去重会失效并真的列出两条。
+  - `_skills_from_registry` 的 `skill_entries`（含重复行）被赋值后**从未被消费**（死变量）。
+- 孤儿文件 `~/.VoidCube/skills/registry.sqlite3`（旧版命名，75 行，mtime 2026-08-26）：
+  无任何代码/配置引用（全仓库搜索只剩测试里的同名临时文件），与活注册表不是同一个文件。
+  处置：Online Backup API 备份到
+  `~/.VoidCube/runtime/backups/skills-registry/registry-orphan-<stamp>.sqlite3`（integrity ok、75 行）
+  后删除；刷新后未再生，skills 目录只剩 `.bundled_manifest` + 技能目录。
+
+
+## 安全扫描：Agent 自建技能的告警是噪音还是阻塞（2026-09-11 核查）
+
+- 签名：`voidcube.extensions.skills.manager: Agent-created skill has security findings:
+  Requires confirmation (agent-created source + dangerous verdict, N findings)`。
+- 实测规模：`~/.VoidCube/logs/errors.log` 里从 2026-08-19 到 09-10 累计 **100+ 条**，
+  几乎每次 Agent 写技能都触发，N 随技能体量增长（最大见过 11）。
+- 是否阻塞？**不阻塞**：`manager._security_scan_skill()` 只有 "blocked" 分支才返回错误并回滚
+  （`write_skill`/`update_skill` 会检查 `scan_error`），这类 findings 走的是 `logger.warning` 分支
+  → 技能照常创建、照常进索引（`skills_list` 可见）。`"Requires confirmation"` 只是 `guard.py`
+  给出的 reason 字符串，**不是待确认队列**。
+- 结论与建议：属**告警噪音**，会加剧告警疲劳（与 memory `/health` 的 degraded 过敏同因）。
+  治理方向：把该 warning 降级为 info，或按技能聚合计数（现状是每个技能写入都重复打印）。
+
 
 ## 对账与入库操作流程（2026-09-10 P7-B 实证，可复用）
 
@@ -233,38 +295,8 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
 - 改完 bundled 技能后 manifest 必须同步更新，保持 **repo == runtime == manifest** 三者一致，
   否则下次 sync 会把该技能判为 user-modified 并永久停止下发
 
-## 交付路径：技能**不**随 wheel 交付（实测，极易误判）
-
-- `sync.py::_bundled_dir()` = `Path(__file__).resolve().parents[4] / "skills"`。
-  - 源码 / `pip install -e`（README 推荐的可编辑安装）：parents[4] 就是仓库根 → 仓库 `skills/` 生效，成立。
-  - **非 editable 的 wheel 安装**：sync.py 位于 `site-packages/voidcube/extensions/skills/`，
-    parents[4] = `Lib/`，其下没有 skills → `sync_skills()` 直接返回空，
-    **新机器零技能且无任何报错（静默降级）**。
-- 唯一可信的验证方式：构建并检查 wheel 内容，**不要只看测试**：
-  ```bash
-  .venv/Scripts/python.exe scripts/build_wheel.py --outdir <临时目录>
-  # 再用 zipfile 统计 namelist() 里的 SKILL.md 数量
-  ```
-  实测：731 个条目、`SKILL.md` **0 个**（只有 `voidcube/extensions/skills/*.py` 代码）。
-- **陷阱**：`tests/test_packaging_contract.py` 通过 ≠ 打包验证——该测试对 skills **零断言**。
-  拿它支撑"技能会随包交付"是过度解读。
-- 副作用：构建 wheel 会重新生成 `build/`、`dist/`、`voidcube_agent.egg-info/`
-  （都被 .gitignore 忽略，`git status` 看不到），验证完必须手动清理。
-
-## 元数据存放位置（grep 文件会误判）
-
-- `deprecated` / `supersedes` **不在 SKILL.md frontmatter 里**，而在活注册表
-  `~/.VoidCube/.skills_registry.sqlite3`（`REGISTRY_FILENAME = ".skills_registry.sqlite3"`）的
-  `skills` 表：列含 `frontmatter_name, directory_name, category, source, content_hash,
-  deprecated, supersedes, updated_at`。验证弃用是否生效要**查库**，不是 grep 技能文件。
-- 索引会**同时收录仓库与运行时两个根**：行数 ≈ repo 技能数 + runtime 技能数
-  （实测 113 = 55 + 58），同一 bundled 技能有两条同名记录。展示层去重（`skills_list` 无重复），
-  但按行计数/排序的下游代码要留意这个冗余。
-- 孤儿文件：`~/.VoidCube/skills/registry.sqlite3` 是旧版命名的遗留，**无任何代码引用**，
-  与活注册表不是同一个文件，可清理。
 
 ## 自审清单：改完技能后逐项验证（每项都要有命令证据）
-
 1. 提交范围纯净：`git show --name-only --format="" <sha>` 里非 `skills/` 的文件数必须为 0
 2. EOL 真的落盘：`git cat-file -p HEAD:<path>` 统计 `\r\n`，应为 0
    （否则未来 checkout 变 LF 时会重新制造两侧分叉）
@@ -273,36 +305,6 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
    （实测 7 个技能文件命中，含 `src = r"C:/Users/<用户名>/.VoidCube/..."` 这类可直接执行的行）
 5. 三侧一致：repo hash == runtime hash == manifest 条目
 6. **有没有外部并发写入者**：把技能文件 mtime 与 `git log -1 --format=%ci` 对比。
+   同一环境实测**反复出现**：外部 agent（同一 git 身份）会追加技能章节，有的提交（50d9904/66bcfa8）、有的不提交（130e041 的内容），因此收尾必须再查一次 `git status --short`，把"干净"当成瞬时结论。
    实测过：提交 `21:56:12` 之后，`21:57:09` 有外部进程改了仓库+运行时+manifest 却**不提交**，
    于是"工作区干净"只是瞬时结论——收尾必须再查一次 `git status --short`。
-
-## 索引去重与优先级（实测 2026-09-11，修正一处误判）
-
-- `registry.discovery_roots()` 按调用顺序给 root 赋 `priority`（`home`=0、`repo`=1、`external`=2），
-  `query_skills` 为 `ORDER BY priority, directory_name, file_path`
-  → **同一技能的运行时副本排在仓库副本之前**。
-- `prompt_builder._skills_from_registry` 用 `seen_skill_names` 去重，键是 `directory_name`，
-  **先到者胜** → prompt 索引里显示的是**运行时副本**。
-  - 实测：仓库 55 + 运行时 58 = 注册表 113 行，但 `skills_list` 只输出 57 条，无重复。
-- **修正**：注册表里"同名两行"**不是缺陷**，是"双根索引 + 优先级"的有意设计，
-  且重复不会泄漏到 prompt（`skills_by_category` 已去重，且输出层还二次 `seen` 去重）。
-  不要按"重复索引 bug"去修它。
-- **重要副作用**：既然运行时副本在索引中胜出，**只改仓库对 bundled 技能在本机不生效**
-  （除非 sync 覆盖运行时）。这从另一侧解释了为什么必须维持 repo == runtime == manifest：
-  只改仓库等于无效改动；只改运行时会永久阻断仓库下发。
-- 低危隐患（发现即记录，暂未改）：
-  - 去重键是 `directory_name`，而工具侧（`tool.py`）用 `frontmatter_name` 标识技能名；
-    若某技能"目录名不同但 frontmatter name 相同"，去重会失效并真的列出两条。
-  - `_skills_from_registry` 的 `skill_entries`（含重复行）被赋值后**从未被消费**（死变量）；
-    当前不影响输出，但若有人改用它做计数就会踩坑。
-
-## 旧版孤儿注册表 registry.sqlite3（已清理）
-
-- 位置：`~/.VoidCube/skills/registry.sqlite3`（75 行，mtime 2026-08-26）。
-- 判据：当前 `REGISTRY_FILENAME = ".skills_registry.sqlite3"`，活注册表在
-  `~/.VoidCube/.skills_registry.sqlite3`；全仓库（代码/配置/文档）搜索只剩测试里的同名**临时**文件
-  （tmp_path），无任何对旧路径的引用 → 属旧版命名遗留。
-- 处置：用 SQLite Online Backup API 备份到
-  `~/.VoidCube/runtime/backups/skills-registry/registry-orphan-<stamp>.sqlite3`
-  （integrity ok、75 行）后删除；刷新注册表后未再生成。
-- 复核：删除后 skills 目录只剩 `.bundled_manifest` + 技能目录；`skills_list` 正常（57 条）。

@@ -924,3 +924,22 @@ profile_memories 是用户偏好和事实的单独存储层，与 compressed_mem
   可把该 scope 记为中性状态（如 `skipped_low_information`）而不计入 `failed_scope_count`。
   这样既不掩盖真实抽取失败，也不产生假 degraded。改动前先确认该状态是否被
   `maintenance.successful_scope_count` 统计逻辑接纳（否则会反向拉低成功率）。
+
+## 修复后的新语义：低信息批次与真故障已分离（2026-09-11，先读这条）
+
+上面的判读链解决"怎么读"，这里说明**语义已经变化**（代码已修，勿再按旧行为判断）：
+
+- 整批 turn 都低于信息量阈值（`_MIN_INFORMATIVE_CHARS = 40`）且抽不出事件时，
+  scope `status = "skipped_low_information"`（此前一律记 `no_events_generated`），
+  聚合里计入新字段 `skipped_scope_count`，**既不计成功也不计失败**。
+- 因此 `status=degraded` 现在只反映"**有实质内容**的批次失败"
+  （`failed` / `quality_rejected` / `no_events_generated`），不再被低信息批次触发。
+  但跳过仍推进有界重试（`retry_wait` → 3 次后 `quality_quarantined`），
+  所以低信息 turn 不会停在 pending 被无限重选。
+- 判读链第 2/3 步仍适用于 `no_events_generated`：**有实质内容却抽不出事件 = 真失败**。
+- 快捷证据：`/health` → `maintenance.last_tier2_bridge_result` 里出现 `skipped_scope_count`
+  即说明运行的是新代码（旧版本没有这个键）。
+- **仍未修的相邻问题（待定调）**：只要有一个 scope `quality_rejected`
+  （例如 `failed_checks=['compression_ratio']`），bridge 的"部分成功"分支会**立即**把
+  `_tier2_bridge_state` 置为 `degraded`；而全部 scope 失败时反而要连续 3 次
+  （`tier2_bridge_failure_degraded_after`）才 degraded —— 严重度判定疑似反了。
