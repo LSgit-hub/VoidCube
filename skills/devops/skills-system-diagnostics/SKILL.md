@@ -275,3 +275,34 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
 6. **有没有外部并发写入者**：把技能文件 mtime 与 `git log -1 --format=%ci` 对比。
    实测过：提交 `21:56:12` 之后，`21:57:09` 有外部进程改了仓库+运行时+manifest 却**不提交**，
    于是"工作区干净"只是瞬时结论——收尾必须再查一次 `git status --short`。
+
+## 索引去重与优先级（实测 2026-09-11，修正一处误判）
+
+- `registry.discovery_roots()` 按调用顺序给 root 赋 `priority`（`home`=0、`repo`=1、`external`=2），
+  `query_skills` 为 `ORDER BY priority, directory_name, file_path`
+  → **同一技能的运行时副本排在仓库副本之前**。
+- `prompt_builder._skills_from_registry` 用 `seen_skill_names` 去重，键是 `directory_name`，
+  **先到者胜** → prompt 索引里显示的是**运行时副本**。
+  - 实测：仓库 55 + 运行时 58 = 注册表 113 行，但 `skills_list` 只输出 57 条，无重复。
+- **修正**：注册表里"同名两行"**不是缺陷**，是"双根索引 + 优先级"的有意设计，
+  且重复不会泄漏到 prompt（`skills_by_category` 已去重，且输出层还二次 `seen` 去重）。
+  不要按"重复索引 bug"去修它。
+- **重要副作用**：既然运行时副本在索引中胜出，**只改仓库对 bundled 技能在本机不生效**
+  （除非 sync 覆盖运行时）。这从另一侧解释了为什么必须维持 repo == runtime == manifest：
+  只改仓库等于无效改动；只改运行时会永久阻断仓库下发。
+- 低危隐患（发现即记录，暂未改）：
+  - 去重键是 `directory_name`，而工具侧（`tool.py`）用 `frontmatter_name` 标识技能名；
+    若某技能"目录名不同但 frontmatter name 相同"，去重会失效并真的列出两条。
+  - `_skills_from_registry` 的 `skill_entries`（含重复行）被赋值后**从未被消费**（死变量）；
+    当前不影响输出，但若有人改用它做计数就会踩坑。
+
+## 旧版孤儿注册表 registry.sqlite3（已清理）
+
+- 位置：`~/.VoidCube/skills/registry.sqlite3`（75 行，mtime 2026-08-26）。
+- 判据：当前 `REGISTRY_FILENAME = ".skills_registry.sqlite3"`，活注册表在
+  `~/.VoidCube/.skills_registry.sqlite3`；全仓库（代码/配置/文档）搜索只剩测试里的同名**临时**文件
+  （tmp_path），无任何对旧路径的引用 → 属旧版命名遗留。
+- 处置：用 SQLite Online Backup API 备份到
+  `~/.VoidCube/runtime/backups/skills-registry/registry-orphan-<stamp>.sqlite3`
+  （integrity ok、75 行）后删除；刷新注册表后未再生成。
+- 复核：删除后 skills 目录只剩 `.bundled_manifest` + 技能目录；`skills_list` 正常（57 条）。
