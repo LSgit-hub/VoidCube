@@ -93,6 +93,7 @@ def get_active_env(task_id: str):
 
 # Agent internals extracted to agent/ package for modularity
 from ...application.memory_manager import build_memory_context_block
+from ...application.ports import CallbackPersistencePort, RuntimePorts
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
 from ...infrastructure.llm.retry_policy import (
     RetryKind,
@@ -672,6 +673,9 @@ class AIAgent:
 
         # Canonical Memory Service provider.
         self._memory_manager = None
+        self.runtime_ports = RuntimePorts(
+            persistence=CallbackPersistencePort(self._session_persistence.persist)
+        )
         if not skip_memory:
             try:
                 from ...application.memory_manager import MemoryManager as _MemoryManager
@@ -696,14 +700,21 @@ class AIAgent:
                 except Exception as exc:
                     logger.debug("Active profile lookup skipped: %s", exc, exc_info=True)
                 self._memory_manager.initialize_all(**_init_kwargs)
+                self.runtime_ports = RuntimePorts(
+                    memory=self._memory_manager,
+                    persistence=self.runtime_ports.persistence,
+                )
                 logger.info("Canonical Mem provider activated")
             except Exception as _mpe:
                 logger.warning("Canonical Mem provider init failed: %s", _mpe)
                 self._memory_manager = None
+                self.runtime_ports = RuntimePorts(
+                    persistence=self.runtime_ports.persistence,
+                )
 
         # Inject memory provider tool schemas into the tool surface
-        if self._memory_manager and self.tools is not None:
-            for _schema in self._memory_manager.get_all_tool_schemas():
+        if self.runtime_ports.memory and self.tools is not None:
+            for _schema in self.runtime_ports.memory.get_all_tool_schemas():
                 _wrapped = {"type": "function", "function": _schema}
                 self.tools.append(normalize_tool_definitions([_wrapped])[0])
                 _tname = _schema.get("name", "")
@@ -1068,9 +1079,9 @@ class AIAgent:
         self.session_start = session_start
         self._session_persistence.set_session_id(session_id)
         self._session_persistence.session_start = session_start
-        memory_manager = getattr(self, "_memory_manager", None)
-        if memory_manager:
-            memory_manager.bind_session(session_id)
+        memory_port = self.runtime_ports.memory
+        if memory_port:
+            memory_port.bind_session(session_id)
         if hasattr(self, "context_compressor") and self.context_compressor:
             self.context_compressor.on_session_start(
                 session_id,
@@ -2057,15 +2068,15 @@ class AIAgent:
         NOT called per-turn — only at CLI exit, /reset, gateway
         session expiry, etc.
         """
-        if self._memory_manager:
+        if self.runtime_ports.memory:
             try:
-                self._memory_manager.on_session_end(messages or [])
-            except Exception:
-                pass
+                self.runtime_ports.memory.on_session_end(messages or [])
+            except Exception as exc:
+                logger.warning("Memory session-end hook failed: %s", exc, exc_info=True)
             try:
-                self._memory_manager.shutdown_all()
-            except Exception:
-                pass
+                self.runtime_ports.memory.shutdown_all()
+            except Exception as exc:
+                logger.warning("Memory provider shutdown failed: %s", exc, exc_info=True)
         # Notify context engine of session end (flush DAG, close DBs, etc.)
         if hasattr(self, "context_compressor") and self.context_compressor:
             try:
@@ -2259,13 +2270,13 @@ class AIAgent:
             prompt_parts.append(system_message)
 
         # Canonical Mem provider system prompt block.
-        if self._memory_manager:
+        if self.runtime_ports.memory:
             try:
-                _ext_mem_block = self._memory_manager.build_system_prompt()
+                _ext_mem_block = self.runtime_ports.memory.build_system_prompt()
                 if _ext_mem_block:
                     prompt_parts.append(_ext_mem_block)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Memory system prompt assembly failed: %s", exc, exc_info=True)
 
         has_skills_tools = any(name in self.valid_tool_names for name in ['skills_list', 'skill_view', 'skill_manage'])
         if has_skills_tools:
@@ -2999,11 +3010,11 @@ class AIAgent:
             focus_topic,
         )
         # Notify canonical Mem before compression discards context.
-        if self._memory_manager:
+        if self.runtime_ports.memory:
             try:
-                self._memory_manager.on_pre_compress(messages)
-            except Exception:
-                pass
+                self.runtime_ports.memory.on_pre_compress(messages)
+            except Exception as exc:
+                logger.warning("Memory pre-compress hook failed: %s", exc, exc_info=True)
 
         compressed = self.context_compressor.compress(
             messages,
@@ -3386,7 +3397,7 @@ class AIAgent:
                 return json.dumps(
                     {"error": f"Context engine tool '{function_name}' failed: {exc}"}
                 )
-        elif self._memory_manager and self._memory_manager.has_tool(function_name):
+        elif self.runtime_ports.memory and self.runtime_ports.memory.has_tool(function_name):
             return handle_function_call(
                 function_name,
                 function_args,
@@ -3394,7 +3405,7 @@ class AIAgent:
                 tool_call_id=call.call_id,
                 session_id=self.session_id or "",
                 main_runtime=self._current_main_runtime(),
-                dynamic_handler=self._memory_manager.handle_tool_call,
+                dynamic_handler=self.runtime_ports.memory.handle_tool_call,
                 dynamic_effect=(
                     "read_only"
                     if function_name in {"mem_search", "mem_timeline"}
@@ -4084,10 +4095,10 @@ class AIAgent:
         # Use original_user_message (clean input) — user_message may contain
         # injected skill content that bloats / breaks provider queries.
         _ext_prefetch_cache = ""
-        if self._memory_manager:
+        if self.runtime_ports.memory:
             try:
                 _query = original_user_message if isinstance(original_user_message, str) else ""
-                _ext_prefetch_cache = self._memory_manager.prefetch_all(
+                _ext_prefetch_cache = self.runtime_ports.memory.prefetch(
                     _query,
                     session_id=self.session_id,
                 ) or ""
@@ -5441,14 +5452,14 @@ class AIAgent:
             )
 
         sync_memory_fn: Callable[[Any, str, str], EffectOutcome] | None = None
-        memory_manager = self._memory_manager
-        if memory_manager is not None:
+        memory_port = self.runtime_ports.memory
+        if memory_port is not None:
             def _sync_memory(
                 user_message: Any,
                 response: str,
                 session_id: str,
             ) -> EffectOutcome:
-                return memory_manager.sync_turn(
+                return memory_port.sync_turn(
                     user_message,
                     response,
                     session_id=session_id,
@@ -5459,7 +5470,9 @@ class AIAgent:
         return finalize_conversation_turn(
             TurnFinalizationPorts(
                 cleanup_task_resources=self._cleanup_task_resources,
-                persist_session=self._conversation_turn_runtime.persist,
+                persist_session=self.runtime_ports.persistence.persist
+                if self.runtime_ports.persistence is not None
+                else self._session_persistence.persist,
                 model=self.model,
                 provider=self.provider,
                 base_url=self.base_url,

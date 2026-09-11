@@ -51,6 +51,7 @@ from .sessions import (
     set_session_title as _set_session_title,
     start_new_session as _start_new_session,
 )
+from .ports import CallbackEventPort
 from ..domain.contracts.tool_events import ToolEvent
 from ..domain.contracts.turn_queue import TurnInputRoute
 from ..domain.contracts.turn import (
@@ -92,6 +93,7 @@ class ApplicationRuntime:
     ) -> None:
         self.state = state
         self._event_sink = event_sink
+        self._event_port = CallbackEventPort(event_sink)
         self._uuid_factory = uuid_factory
 
         self._emit(
@@ -488,11 +490,8 @@ class ApplicationRuntime:
         return self._uuid_factory().hex
 
     def _emit(self, event: ApplicationEvent) -> None:
-        if self._event_sink is None:
-            return
-        try:
-            self._event_sink(event)
-        except Exception:
+        outcome = self._event_port.emit(event)
+        if outcome.status == "failed":
             # Adapter event failures must not change the turn state machine.
             return
 

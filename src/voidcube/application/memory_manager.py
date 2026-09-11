@@ -341,6 +341,10 @@ class MemoryManager:
                 )
         return "\n\n".join(parts)
 
+    def prefetch(self, query: str, *, session_id: str = "") -> str:
+        """MemoryPort-compatible alias for the canonical prefetch operation."""
+        return self.prefetch_all(query, session_id=session_id)
+
     # -- Sync ----------------------------------------------------------------
 
     def sync_turn(

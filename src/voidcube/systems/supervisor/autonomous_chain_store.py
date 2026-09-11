@@ -16,6 +16,9 @@ from ...domain.tasks.runtime_profile import (
     derive_runtime_task_profile,
     normalize_runtime_task_type,
 )
+from ...domain.state.autonomous_task import (
+    validate_autonomous_task_transition,
+)
 
 # `approved` means API-B has authorized employee dispatch, not that execution
 # has started or completed.
@@ -452,27 +455,6 @@ class AutonomousChainStore:
         before_commit: Optional[Callable[[AutonomousChainTask], None]] = None,
     ) -> AutonomousChainTask:
         # ── Validate state transition ──
-        _LEGAL_TRANSITIONS: dict[str, set[str]] = {
-            "planned": {"approved", "paused", "cancelled", "deferred", "awaiting_review"},
-            "awaiting_review": {"approved", "planned", "deferred", "paused", "cancelled"},
-            "approved": {"running", "cancelled", "deferred", "paused"},
-            "running": {
-                "reconciling",
-                "awaiting_user_consent",
-                "completed",
-                "failed",
-                "paused",
-                "retry",
-            },
-            "reconciling": {"approved", "completed", "failed", "paused"},
-            "awaiting_user_consent": {"completed", "failed", "cancelled"},
-            "paused": {"planned", "approved", "cancelled", "deferred"},
-            "deferred": {"planned", "approved", "cancelled", "paused", "awaiting_review"},
-            "retry": {"approved", "planned", "deferred", "paused", "cancelled"},
-            "completed": set(),   # terminal
-            "failed": set(),      # terminal
-            "cancelled": set(),   # terminal
-        }
         target = status.value if hasattr(status, 'value') else str(status)
 
         with self._lock, interprocess_file_lock(self._storage_lock_path):
@@ -494,16 +476,7 @@ class AutonomousChainStore:
                         before_commit(task)
                     self._write_snapshot(snapshot)
                     return task
-                if current not in _LEGAL_TRANSITIONS:
-                    raise ValueError(f"Unknown task state: {current}")
-                if target not in _LEGAL_TRANSITIONS:
-                    raise ValueError(f"Unknown task target state: {target}")
-                legal = _LEGAL_TRANSITIONS[current]
-                if target not in legal:
-                    raise ValueError(
-                        f"Illegal task state transition: {current} → {target} "
-                        f"(legal: {', '.join(sorted(legal)) if legal else 'terminal'})"
-                    )
+                validate_autonomous_task_transition(current, target)
                 task.status = status
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason
