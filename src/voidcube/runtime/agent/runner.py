@@ -93,7 +93,7 @@ def get_active_env(task_id: str):
 
 # Agent internals extracted to agent/ package for modularity
 from ...application.memory_manager import build_memory_context_block
-from ...application.ports import CallbackPersistencePort, RuntimePorts
+from ...application.ports import CallbackEventPort, CallbackPersistencePort, RuntimePorts
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
 from ...infrastructure.llm.retry_policy import (
     RetryKind,
@@ -313,6 +313,7 @@ class AIAgent:
         autonomous_task_provider=None,
         validate_execution_lease=None,
         working_dir: str | None = None,
+        event_sink: Callable[[Any], Any] | None = None,
     ):
         """
         Initialize the AI Agent.
@@ -408,6 +409,7 @@ class AIAgent:
             ).start()
 
         self.tool_event_sink = tool_event_sink
+        self._event_port = CallbackEventPort(event_sink)
         self.suppress_status_output = False
         self.thinking_callback = thinking_callback
         self.reasoning_callback = reasoning_callback
@@ -674,7 +676,8 @@ class AIAgent:
         # Canonical Memory Service provider.
         self._memory_manager = None
         self.runtime_ports = RuntimePorts(
-            persistence=CallbackPersistencePort(self._session_persistence.persist)
+            persistence=CallbackPersistencePort(self._session_persistence.persist),
+            events=self._event_port,
         )
         if not skip_memory:
             try:
@@ -703,6 +706,7 @@ class AIAgent:
                 self.runtime_ports = RuntimePorts(
                     memory=self._memory_manager,
                     persistence=self.runtime_ports.persistence,
+                    events=self._event_port,
                 )
                 logger.info("Canonical Mem provider activated")
             except Exception as _mpe:
@@ -710,6 +714,7 @@ class AIAgent:
                 self._memory_manager = None
                 self.runtime_ports = RuntimePorts(
                     persistence=self.runtime_ports.persistence,
+                    events=self._event_port,
                 )
 
         # Inject memory provider tool schemas into the tool surface
@@ -5508,6 +5513,7 @@ class AIAgent:
                 iterations_since_skill=lambda: self._iters_since_skill,
                 clear_skill_nudge=lambda: setattr(self, "_iters_since_skill", 0),
                 sync_memory=sync_memory_fn,
+                event_port=self.runtime_ports.events,
                 spawn_background_review=self._spawn_background_review,
             ),
             state=turn_state,

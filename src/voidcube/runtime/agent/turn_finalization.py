@@ -14,6 +14,8 @@ from ...domain.agent.effect_outcomes import (
     finalization_status,
     require_effect_outcome,
 )
+from ...domain.events import MemorySyncFailed, MemorySyncQueued, TurnCompleted
+from ...application.ports import EventPort
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,7 @@ class TurnFinalizationPorts:
     clear_skill_nudge: Callable[[], None]
     sync_memory: Callable[[Any, str, str], EffectOutcome] | None
     spawn_background_review: Callable[..., None]
+    event_port: EventPort | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +300,24 @@ def finalize_conversation_turn(
             logger.warning("Memory sync enqueue failed: %s", exc)
             memory_outcome = failed_effect(exc)
 
+        if ports.event_port is not None:
+            event = (
+                MemorySyncQueued(
+                    session_id=ports.session_id or "",
+                    status=memory_outcome.status,
+                    details=dict(memory_outcome.details),
+                )
+                if memory_outcome.status in {"queued", "succeeded"}
+                else MemorySyncFailed(
+                    session_id=ports.session_id or "",
+                    error=memory_outcome.error or "memory sync failed",
+                    details=dict(memory_outcome.details),
+                )
+            )
+            event_outcome = ports.event_port.emit(event)
+            if event_outcome.status == "failed":
+                logger.warning("Memory lifecycle event publish failed: %s", event_outcome.error)
+
     if (
         state.final_response
         and not state.interrupted
@@ -348,5 +369,16 @@ def finalize_conversation_turn(
         "persistence": persistence_outcome.as_dict(),
         "memory_sync": memory_outcome.as_dict(),
     }
+
+    if ports.event_port is not None and state.final_response:
+        event_outcome = ports.event_port.emit(
+            TurnCompleted(
+                session_id=ports.session_id or "",
+                response_length=len(state.final_response),
+                details={"finalization_status": result["finalization"]["status"]},
+            )
+        )
+        if event_outcome.status == "failed":
+            logger.warning("Turn completion event publish failed: %s", event_outcome.error)
 
     return result

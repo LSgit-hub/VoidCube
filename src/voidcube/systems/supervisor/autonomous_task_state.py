@@ -16,6 +16,7 @@ from .autonomous_chain_store import (
     AutonomousChainStore,
     AutonomousChainTask,
 )
+from ...domain.state.autonomous_task import AutonomousTaskTransition
 
 
 class GovernanceEventRepository(Protocol):
@@ -194,6 +195,52 @@ class AutonomousTaskStateService:
             "failed": GovernanceDecision.FAILED,
         }.get(status, GovernanceDecision.RECORD_ONLY)
         latest_decision = task.decision_history[-1] if task.decision_history else None
+        previous_decision = (
+            task.decision_history[-2] if len(task.decision_history) > 1 else None
+        )
+        cycle_id = str(
+            task.metadata.get("cycle_id")
+            or task.evidence.get("cycle_id")
+            or ""
+        )
+        lease_id = str(
+            task.execution_lease.attempt_id
+            or task.metadata.get("lease_id")
+            or ""
+        )
+        attempt = int(
+            task.metadata.get("attempt")
+            or task.metadata.get("attempt_number")
+            or task.execution_lease.generation
+            or 0
+        )
+        evidence_refs = tuple(
+            dict.fromkeys(
+                str(reference).strip()
+                for reference in (
+                    list(task.evidence.get("evidence_refs") or [])
+                    + list(task.metadata.get("evidence_refs") or [])
+                )
+                if str(reference).strip()
+            )
+        )
+        memory_write_status = str(
+            task.metadata.get("memory_write_status")
+            or task.evidence.get("memory_write_status")
+            or "unknown"
+        )
+        transition = AutonomousTaskTransition(
+            task_id=task.task_id,
+            from_status=str(previous_decision.status if previous_decision else ""),
+            to_status=status,
+            reason=str(task.decision_reason or ""),
+            cycle_id=cycle_id,
+            lease_id=lease_id,
+            attempt=attempt,
+            evidence_refs=evidence_refs,
+            memory_write_status=memory_write_status,
+            context=(latest_decision.context if latest_decision is not None else {}),
+        )
         execution_request = task.execution_request
         lineage_payload = (
             execution_request.git_lineage.model_dump(mode="json")
@@ -223,6 +270,18 @@ class AutonomousTaskStateService:
                 git_lineage=GovernanceGitLineage.from_dict(lineage_payload),
                 execution_result={
                     "transition_kind": transition_kind,
+                    "transition_evidence": {
+                        "task_id": transition.task_id,
+                        "from_status": transition.from_status,
+                        "to_status": transition.to_status,
+                        "reason": transition.reason,
+                        "cycle_id": transition.cycle_id,
+                        "lease_id": transition.lease_id,
+                        "attempt": transition.attempt,
+                        "evidence_refs": list(transition.evidence_refs),
+                        "memory_write_status": transition.memory_write_status,
+                        "context": dict(transition.context),
+                    },
                     "autonomous_task_projection": task.model_dump(mode="json"),
                     "runtime_task_profile": {
                         "governance_task_type": task.governance_task_type,

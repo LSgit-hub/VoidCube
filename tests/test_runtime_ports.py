@@ -1,6 +1,7 @@
 import pytest
 
 from voidcube.application.ports import CallbackEventPort, CallbackPersistencePort, RuntimePorts
+from voidcube.domain.events import MemorySyncFailed, TurnCompleted
 
 
 def test_callback_event_port_returns_structured_success():
@@ -29,3 +30,10 @@ def test_callback_persistence_port_requires_structured_outcome():
     outcome = CallbackPersistencePort(lambda *_args: None).persist([])
     assert outcome.status == "failed"
     assert "must return EffectOutcome" in (outcome.error or "")
+
+
+def test_domain_events_are_typed_and_immutable():
+    event = TurnCompleted(session_id="s1", response_length=12)
+    assert event.response_length == 12
+    failure = MemorySyncFailed(session_id="s1", error="outbox down")
+    assert failure.error == "outbox down"

@@ -22,7 +22,15 @@ def test_state_service_owns_mutations_and_governance_events(tmp_path) -> None:
         ),
     )
 
-    task = service.create_task(title="state owner")
+    task = service.create_task(
+        title="state owner",
+        metadata={
+            "cycle_id": "cycle-1",
+            "attempt": 2,
+            "evidence_refs": ["probe-1"],
+            "memory_write_status": "queued",
+        },
+    )
     service.update_priority(
         task.task_id,
         priority="high",
@@ -46,6 +54,13 @@ def test_state_service_owns_mutations_and_governance_events(tmp_path) -> None:
     ]
     assert observed == [(task.task_id, "review", "approved")]
     assert store.get_task(task.task_id).metadata["source"] == "test"
+    evidence = repository.events[-1].execution_result["transition_evidence"]
+    assert evidence["task_id"] == task.task_id
+    assert evidence["to_status"] == "approved"
+    assert evidence["cycle_id"] == "cycle-1"
+    assert evidence["attempt"] == 2
+    assert evidence["evidence_refs"] == ["probe-1"]
+    assert evidence["memory_write_status"] == "queued"
 
     service.clear_tasks([store.get_task(task.task_id)])
 
