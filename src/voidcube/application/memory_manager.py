@@ -217,7 +217,9 @@ def _sanitize_and_filter_context(raw: str, *, min_score: float = 0.5) -> str:
             if not isinstance(entry, dict):
                 continue
             # Apply min_score filter
-            score = entry.get("normalized_score") or entry.get("raw_score")
+            score = entry.get("normalized_score")
+            if score is None:
+                score = entry.get("raw_score")
             if score is not None:
                 try:
                     if float(score) < min_score:

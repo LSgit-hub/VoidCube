@@ -5,7 +5,11 @@ from types import SimpleNamespace
 import pytest
 
 from voidcube.domain.agent.effect_outcomes import EffectOutcome
-from voidcube.application.memory_manager import MemoryManager, infer_sync_tags
+from voidcube.application.memory_manager import (
+    MemoryManager,
+    build_memory_context_block,
+    infer_sync_tags,
+)
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
@@ -133,3 +137,8 @@ def test_memory_manager_normalizes_non_string_turn_content():
 
     assert outcome.status == "queued"
     assert received == {"user": "", "assistant": "{'text': '完成'}", "tags": []}
+
+
+def test_memory_context_zero_normalized_score_is_not_replaced_by_raw_score():
+    raw = '{"results":[{"summary":"irrelevant","normalized_score":0,"raw_score":1}]}'
+    assert build_memory_context_block(raw, min_score=0.5) == ""
