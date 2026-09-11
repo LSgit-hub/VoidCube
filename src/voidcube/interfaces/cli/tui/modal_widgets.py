@@ -261,29 +261,15 @@ def _simple_panel(*, title: str, content: list[str]) -> list[tuple[str, str]]:
 
 
 def _model_picker_content(state: ModalState) -> tuple[str, str, list[str]]:
-    if state.get("stage", "provider") == "provider":
-        choices = []
-        for provider in _mapping_sequence(state.get("providers")):
-            models = _string_sequence(provider.get("models"))
-            count = _as_int(provider.get("total_models", len(models)))
-            label = f"{provider['name']} ({count} model{'s' if count != 1 else ''})"
-            if provider.get("is_current"):
-                label += "  ← current"
-            choices.append(label)
-        choices.append("Cancel")
-        return (
-            "> Model Picker — Select Provider",
-            f"Current: {state.get('current_model', 'unknown')} on {state.get('current_provider', 'unknown')}",
-            choices,
-        )
-
-    provider_data = state.get("provider_data")
-    provider = provider_data if isinstance(provider_data, Mapping) else {}
     models = _string_sequence(state.get("model_list"))
-    title = f"> Model Picker — {provider.get('name', provider.get('slug', 'Provider'))}"
-    choices = models + ["← Back", "Cancel"]
-    hint = f"Select a model ({len(models)} available)" if models else "No models listed for this provider. Use Back or Cancel."
-    return title, hint, choices
+    provider = state.get("current_provider", "unknown")
+    current_model = state.get("current_model", "unknown")
+    title = f"> Model Picker — {provider}"
+    if models:
+        hint = f"Current: {current_model}  ·  select a model ({len(models)} available)"
+    else:
+        hint = "No models listed for this provider. Cancel to close."
+    return title, hint, list(models) + ["Cancel"]
 
 
 def _append_scroll_indicator(
@@ -406,9 +392,3 @@ def _string_sequence(value: object) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str):
         return []
     return [str(item) for item in value]
-
-
-def _mapping_sequence(value: object) -> list[Mapping[str, object]]:
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        return []
-    return [item for item in value if isinstance(item, Mapping)]

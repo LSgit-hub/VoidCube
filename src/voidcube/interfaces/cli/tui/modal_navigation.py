@@ -138,6 +138,5 @@ def _last_choice_index(state: ModalState, key: str) -> int:
 
 
 def _model_picker_maximum(state: ModalState) -> int:
-    if state.get("stage") == "provider":
-        return _choice_count(state, "providers")
-    return _choice_count(state, "model_list") + 1
+    # Models are rows 0..n-1 and the "Cancel" row sits at index n.
+    return _choice_count(state, "model_list")

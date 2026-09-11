@@ -392,8 +392,10 @@ class AIAgent:
 
             if self.provider not in AGGREGATOR_PROVIDERS:
                 self.model = normalize_model_for_provider(self.model, self.provider)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Model normalization is a compatibility aid; retain the caller's
+            # model when unavailable, but leave an actionable diagnostic.
+            logger.debug("Model normalization skipped: %s", exc, exc_info=True)
 
         # Pre-warm OpenRouter model metadata cache in a background thread.
         # fetch_model_metadata() is cached for 1 hour; this avoids a blocking
@@ -691,8 +693,8 @@ class AIAgent:
                     from ...infrastructure.config.profiles import get_active_profile_name
                     _profile = get_active_profile_name()
                     _init_kwargs["agent_identity"] = _profile
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Active profile lookup skipped: %s", exc, exc_info=True)
                 self._memory_manager.initialize_all(**_init_kwargs)
                 logger.info("Canonical Mem provider activated")
             except Exception as _mpe:
@@ -4100,8 +4102,15 @@ class AIAgent:
                         "Memory prefetch: %d chars / ~%d tokens (fenced block: %d chars)",
                         _chars, _tokens, _fenced_chars,
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                # Recall is an auxiliary side effect: keep the turn running,
+                # but expose the failure for diagnostics and lifecycle logs.
+                self._last_memory_prefetch_error = str(exc)
+                logger.warning(
+                    "Memory prefetch failed; continuing without recalled context: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         while turn_state.can_continue(
             max_iterations=self.max_iterations,

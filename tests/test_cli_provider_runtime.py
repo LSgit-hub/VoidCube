@@ -59,16 +59,13 @@ def _runtime(
 def test_open_and_close_picker_own_modal_lifecycle() -> None:
     host = _Host()
     runtime = _runtime(host)
-    providers = [
-        {"slug": "provider-a", "is_current": False},
-        {"slug": "provider-b", "is_current": True},
-    ]
+    models = ["model-x", "old-model"]
 
-    runtime.open_picker(providers, "old-model", "Provider B", {"provider-b": {}})
+    runtime.open_picker(models, "old-model", "Provider B", {"provider-b": {}})
 
     assert host._model_picker_state == {
-        "stage": "provider",
-        "providers": providers,
+        "stage": "model",
+        "model_list": ["model-x", "old-model"],
         "selected": 1,
         "current_model": "old-model",
         "current_provider": "Provider B",
@@ -89,8 +86,6 @@ def test_submit_picker_delegates_state_machine_and_preserves_session_scope(monke
     host._model_picker_state = {
         "stage": "model",
         "selected": 0,
-        "providers": [{"slug": "provider-b"}],
-        "provider_data": {"slug": "provider-b"},
         "model_list": ["next-model"],
         "user_provs": {"provider-b": {}},
     }
@@ -103,7 +98,7 @@ def test_submit_picker_delegates_state_machine_and_preserves_session_scope(monke
         lambda **kwargs: SimpleNamespace(
             success=True,
             new_model=kwargs["raw_input"],
-            target_provider=kwargs["explicit_provider"],
+            target_provider="provider-b",
         ),
     )
 
@@ -124,8 +119,6 @@ def test_submit_picker_confirms_native_modalities_before_apply(monkeypatch) -> N
     host._model_picker_state = {
         "stage": "model",
         "selected": 0,
-        "providers": [{"slug": "provider-b"}],
-        "provider_data": {"slug": "provider-b"},
         "model_list": ["vision-model"],
         "user_provs": {"provider-b": {}},
     }
@@ -146,7 +139,7 @@ def test_submit_picker_confirms_native_modalities_before_apply(monkeypatch) -> N
         lambda **kwargs: SimpleNamespace(
             success=True,
             new_model=kwargs["raw_input"],
-            target_provider=kwargs["explicit_provider"],
+            target_provider="provider-b",
         ),
     )
 

@@ -306,8 +306,10 @@ def finalize_conversation_turn(
             ports.spawn_background_review(
                 messages_snapshot=list(messages),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Skill review is auxiliary work; preserve the completed turn but
+            # expose scheduling failures so autonomous maintenance is visible.
+            logger.warning("Background skill review scheduling failed: %s", exc, exc_info=True)
 
     try:
         hook(

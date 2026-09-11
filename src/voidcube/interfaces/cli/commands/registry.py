@@ -1754,7 +1754,7 @@ def _model_command_ports(
 ) -> ModelCommandPorts:
     from ....infrastructure.config.configuration import load_config
     from ..model_switch import (
-        list_configured_providers,
+        list_current_provider_models,
         parse_model_flags,
         switch_model,
     )
@@ -1776,7 +1776,7 @@ def _model_command_ports(
         base_url=lambda: str(getattr(host, "base_url", "") or ""),
         api_key=lambda: str(getattr(host, "api_key", "") or ""),
         provider_label=get_label,
-        list_configured_providers=list_configured_providers,
+        list_current_models=list_current_provider_models,
         switch_model=switch_model,
         open_picker=host._open_model_picker,
         apply_result=host._apply_model_switch_result,

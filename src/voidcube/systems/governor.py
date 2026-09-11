@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, Iterable, Literal, Optional
 
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from .body_registry import BodySlotMeta
 from ..domain.tasks.runtime_profile import derive_runtime_task_profile
+
+logger = logging.getLogger(__name__)
 
 GovernorMode = Literal["governor"]
 GovernorEventType = Literal[
@@ -838,7 +841,9 @@ class LLMGovernorReasoner:
                         str(e) for e in (result.get("suggested_evidence") or []) if e
                     ][:5],
                 }
-        except Exception:
-            pass
+        except Exception as exc:
+            # Advisory LLM analysis must never affect deterministic governance,
+            # but failures need to remain visible for operational diagnosis.
+            logger.warning("Governance LLM evidence review failed: %s", exc, exc_info=True)
 
         return {"llm_available": True, "error": "LLM analysis failed"}

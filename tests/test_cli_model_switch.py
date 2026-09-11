@@ -87,14 +87,14 @@ def test_execution_table_routes_model_command_with_preserved_arguments(
         command_handler_registry,
         "_model_command_ports",
         lambda _host, *, emit: ModelCommandPorts(
-            parse_flags=lambda value: arguments.append(value) or ("new-model", "", False),
+            parse_flags=lambda value: arguments.append(value) or ("new-model", False),
             user_providers=lambda: None,
             model=lambda: "old-model",
             provider=lambda: "provider-a",
             base_url=lambda: "https://old.example/v1",
             api_key=lambda: "old-key",
             provider_label=lambda value: value,
-            list_configured_providers=lambda **_kwargs: [],
+            list_current_models=lambda **_kwargs: [],
             switch_model=lambda **_kwargs: result,
             open_picker=lambda *_args: pytest.fail("must switch when a model is given"),
             apply_result=lambda value, persist: applied.append((value, persist)),
@@ -112,22 +112,22 @@ def test_model_handler_delegates_result_to_single_apply_path() -> None:
     result = ModelSwitchResult(
         success=True,
         new_model="next-model",
-        target_provider="provider-b",
+        target_provider="provider-a",
     )
     applied: list[tuple[ModelSwitchResult, bool]] = []
     observed: list[dict[str, object]] = []
 
     handle_model_command(
-        parse_cli_command("/model next-model --provider provider-b --session-only"),
+        parse_cli_command("/model next-model --session-only"),
         ports=ModelCommandPorts(
-            parse_flags=lambda _raw: ("next-model", "provider-b", False),
-            user_providers=lambda: {"provider-b": {}},
+            parse_flags=lambda _raw: ("next-model", False),
+            user_providers=lambda: {"provider-a": {}},
             model=lambda: "old-model",
             provider=lambda: "provider-a",
             base_url=lambda: "https://old.example/v1",
             api_key=lambda: "old-key",
             provider_label=lambda value: value,
-            list_configured_providers=lambda **_kwargs: [],
+            list_current_models=lambda **_kwargs: [],
             switch_model=lambda **kwargs: observed.append(kwargs) or result,
             open_picker=lambda *_args: pytest.fail("must not open picker"),
             apply_result=lambda value, persist: applied.append((value, persist)),
@@ -140,13 +140,38 @@ def test_model_handler_delegates_result_to_single_apply_path() -> None:
         {
             "raw_input": "next-model",
             "current_provider": "provider-a",
-            "current_model": "old-model",
             "current_base_url": "https://old.example/v1",
             "current_api_key": "old-key",
             "is_global": False,
-            "explicit_provider": "provider-b",
-            "user_providers": {"provider-b": {}},
+            "user_providers": {"provider-a": {}},
         }
+    ]
+
+
+def test_model_handler_rejects_provider_flag_with_api_pointer() -> None:
+    emitted: list[str] = []
+
+    handle_model_command(
+        parse_cli_command("/model --provider provider-b"),
+        ports=ModelCommandPorts(
+            parse_flags=lambda _raw: ("--provider provider-b", True),
+            user_providers=lambda: {"provider-a": {}, "provider-b": {}},
+            model=lambda: "old-model",
+            provider=lambda: "provider-a",
+            base_url=lambda: "",
+            api_key=lambda: "",
+            provider_label=lambda value: value,
+            list_current_models=lambda **_kwargs: pytest.fail("must not list models"),
+            switch_model=lambda **_kwargs: pytest.fail("must not switch providers"),
+            open_picker=lambda *_args: pytest.fail("must not open picker"),
+            apply_result=lambda *_args: pytest.fail("must not apply"),
+            emit=emitted.append,
+        ),
+    )
+
+    assert emitted == [
+        "  /model no longer switches providers.",
+        "  Use /api to change the active provider, then /model to pick a model.",
     ]
 
 
@@ -163,7 +188,6 @@ def test_model_handler_confirms_native_modalities_after_switch() -> None:
         ports=ModelCommandPorts(
             parse_flags=lambda _raw: (
                 "deepseek-v4-flash-vision-exp",
-                "deepseek-v",
                 True,
             ),
             user_providers=lambda: {"deepseek-v": {}},
@@ -172,7 +196,7 @@ def test_model_handler_confirms_native_modalities_after_switch() -> None:
             base_url=lambda: "",
             api_key=lambda: "",
             provider_label=lambda value: value,
-            list_configured_providers=lambda **_kwargs: [],
+            list_current_models=lambda **_kwargs: [],
             switch_model=lambda **_kwargs: result,
             open_picker=lambda *_args: pytest.fail("must not open picker"),
             apply_result=lambda value, persist: applied.append((value, persist)),
@@ -201,14 +225,14 @@ def test_model_handler_can_cancel_before_apply_when_capability_prompt_ends() -> 
     handle_model_command(
         parse_cli_command("/model next-model"),
         ports=ModelCommandPorts(
-            parse_flags=lambda _raw: ("next-model", "", True),
+            parse_flags=lambda _raw: ("next-model", True),
             user_providers=lambda: {"provider-a": {}},
             model=lambda: "old-model",
             provider=lambda: "provider-a",
             base_url=lambda: "",
             api_key=lambda: "",
             provider_label=lambda value: value,
-            list_configured_providers=lambda **_kwargs: [],
+            list_current_models=lambda **_kwargs: [],
             switch_model=lambda **_kwargs: result,
             open_picker=lambda *_args: pytest.fail("must not open picker"),
             apply_result=lambda *_args: applied.append(True),
@@ -221,30 +245,58 @@ def test_model_handler_can_cancel_before_apply_when_capability_prompt_ends() -> 
     assert emitted == ["  No change."]
 
 
-def test_model_handler_opens_picker_from_configured_provider_snapshot() -> None:
+def test_model_handler_opens_picker_with_active_provider_models() -> None:
     opened: list[tuple[object, ...]] = []
-    providers = [{"slug": "provider-a", "is_current": True}]
+    models = ["model-a", "old-model"]
     user_providers = {"provider-a": {"selected_model": "old-model"}}
 
     handle_model_command(
         parse_cli_command("/model"),
         ports=ModelCommandPorts(
-            parse_flags=lambda _raw: ("", "", True),
+            parse_flags=lambda _raw: ("", True),
             user_providers=lambda: user_providers,
             model=lambda: "old-model",
             provider=lambda: "provider-a",
             base_url=lambda: "",
             api_key=lambda: "",
             provider_label=lambda value: f"Label {value}",
-            list_configured_providers=lambda **kwargs: providers,
+            list_current_models=lambda **kwargs: models,
             switch_model=lambda **_kwargs: pytest.fail("must not switch without a selection"),
             open_picker=lambda *args: opened.append(args),
             apply_result=lambda *_args: pytest.fail("must not apply without a selection"),
-            emit=lambda _text: pytest.fail("must open picker when providers exist"),
+            emit=lambda _text: pytest.fail("must open picker when models exist"),
         ),
     )
 
-    assert opened == [(providers, "old-model", "Label provider-a", user_providers)]
+    assert opened == [(models, "old-model", "Label provider-a", user_providers)]
+
+
+def test_model_handler_emits_hint_when_active_provider_has_no_models() -> None:
+    emitted: list[str] = []
+
+    handle_model_command(
+        parse_cli_command("/model"),
+        ports=ModelCommandPorts(
+            parse_flags=lambda _raw: ("", True),
+            user_providers=lambda: {"provider-a": {}},
+            model=lambda: "",
+            provider=lambda: "provider-a",
+            base_url=lambda: "",
+            api_key=lambda: "",
+            provider_label=lambda value: value,
+            list_current_models=lambda **_kwargs: [],
+            switch_model=lambda **_kwargs: pytest.fail("must not switch"),
+            open_picker=lambda *_args: pytest.fail("must not open picker"),
+            apply_result=lambda *_args: pytest.fail("must not apply"),
+            emit=emitted.append,
+        ),
+    )
+
+    assert emitted == [
+        "  No models available for the current provider.",
+        "",
+        "  Run /api to configure a provider.",
+    ]
 
 
 def test_apply_model_switch_updates_cli_running_agent_and_turn_note(monkeypatch) -> None:

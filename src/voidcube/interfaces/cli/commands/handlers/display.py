@@ -405,12 +405,11 @@ def handle_provider_display_command(
             ports.translate("  Usage: /provider"),
             ports.translate("         /provider list"),
             "",
-            ports.translate("  Use /model to switch providers or models:"),
-            ports.translate("    /model <model-name>              — switch model"),
-            ports.translate("    /model --provider <provider-name> — switch provider"),
-            ports.translate("    /model <provider>:<model>         — switch provider and model"),
+            ports.translate("  /model switches models within the active provider:"),
+            ports.translate("    /model                    — pick a model interactively"),
+            ports.translate("    /model <model-name>       — switch model"),
             "",
-            ports.translate("  Run /api to configure provider credentials"),
+            ports.translate("  Run /api to change the active provider or its credentials"),
         ):
             ports.emit_usage(line)
         return
@@ -451,13 +450,13 @@ def handle_provider_display_command(
 
     ports.emit(
         ports.translate(
-            "prompts.use_model_to_switch_providers_or_models",
-            default="  Use /model to switch providers or models:",
+            "prompts.use_model_to_switch_models",
+            default="  /model switches models within the active provider:",
         )
     )
-    ports.emit("    /model <model-name>               — switch model")
-    ports.emit("    /model --provider <provider-name> — switch provider")
-    ports.emit("    /model <name> --provider <provider-name> — switch provider and model")
+    ports.emit("    /model                    — pick a model interactively")
+    ports.emit("    /model <model-name>       — switch model")
+    ports.emit("  Run /api to change the active provider or its credentials")
 
 
 def handle_memory_display_command(

@@ -73,14 +73,17 @@ _BACKGROUND_REVIEW_MARKER = (
 )
 
 
-def infer_sync_tags(user_content: str, tags: Optional[List[str]] = None) -> List[str]:
+def infer_sync_tags(user_content: Any, tags: Optional[List[str]] = None) -> List[str]:
     """为明确的记忆系统评估回合补充隔离标签。
 
     只在用户请求同时包含评估类词和记忆系统语境时标记，避免把普通
     "请记住"或一般诊断请求误当成评估数据。显式标签按原顺序保留。
     """
     result = list(tags or [])
-    normalized = user_content.casefold()
+    # Runtime adapters may hand us ``None`` or structured content.  Memory
+    # tagging is a best-effort side effect and must never break turn
+    # finalization because of an unexpected payload type.
+    normalized = str(user_content or "").casefold()
     has_evaluation_marker = any(marker.casefold() in normalized for marker in _EVALUATION_QUERY_MARKERS)
     has_memory_marker = any(marker.casefold() in normalized for marker in _EVALUATION_MEMORY_MARKERS)
     is_background_review = _BACKGROUND_REVIEW_MARKER in normalized
@@ -353,7 +356,9 @@ class MemoryManager:
                 details={"reason": "no_provider"},
             )
 
-        tags = infer_sync_tags(user_content, tags)
+        user_text = str(user_content or "")
+        assistant_text = str(assistant_content or "")
+        tags = infer_sync_tags(user_text, tags)
         provider = self._providers[0]
         try:
             sync_turn = provider.sync_turn
@@ -364,15 +369,15 @@ class MemoryManager:
             )
             if supports_tags:
                 raw_outcome = sync_turn(
-                    user_content,
-                    assistant_content,
+                    user_text,
+                    assistant_text,
                     session_id=session_id,
                     tags=tags,
                 )
             else:
                 raw_outcome = sync_turn(
-                    user_content,
-                    assistant_content,
+                    user_text,
+                    assistant_text,
                     session_id=session_id,
                 )
             outcome = require_effect_outcome(

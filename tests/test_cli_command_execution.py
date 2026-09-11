@@ -897,7 +897,7 @@ def test_cli_process_routes_provider_through_display_handler(monkeypatch) -> Non
     install_cli_command_execution(app, emit=lambda _text: None)
 
     assert app.process_command("/provider list") is True
-    assert usage[-1] == "  Run /api to configure provider credentials"
+    assert usage[-1] == "  Run /api to change the active provider or its credentials"
     assert output == []
 
 

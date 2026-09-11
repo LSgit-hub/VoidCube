@@ -681,84 +681,54 @@ class SlashCommandCompleter(Completer):
             count += 1
 
     def _model_completions(self, sub_text: str, sub_lower: str):
-        """Yield model IDs from the configured Provider pool and aliases."""
-        seen: set[str] = set()
+        """Yield model IDs available for the currently active provider.
 
-        # The configured catalog is the source of truth for /model.  It is
-        # populated by /api refreshes and also contains explicit overrides.
+        Only the active provider's catalog is offered: /model never switches
+        providers, so completing models from other providers would suggest
+        selections that cannot be applied.
+        """
         try:
-            from ....infrastructure.config.configuration import load_config
+            from ....infrastructure.config.configuration import (
+                get_active_provider_key,
+                load_config,
+            )
             from ....infrastructure.config.provider_config import (
                 provider_model_catalog,
             )
 
             config = load_config()
             providers = config.get("providers") if isinstance(config, dict) else {}
-            if isinstance(providers, Mapping):
-                for provider_key, provider_cfg in providers.items():
-                    if not isinstance(provider_cfg, Mapping):
-                        continue
-                    label = str(
-                        provider_cfg.get("label")
-                        or provider_cfg.get("name")
-                        or provider_key
-                    )
-                    explicit_models = (
-                        provider_cfg.get("model_override"),
-                        provider_cfg.get("selected_model"),
-                        provider_cfg.get("default_model"),
-                        provider_cfg.get("model"),
-                    )
-                    model_ids = [
-                        str(model_id).strip()
-                        for model_id in (
-                            *explicit_models,
-                            *provider_model_catalog(dict(provider_cfg)),
-                        )
-                        if str(model_id or "").strip()
-                    ]
-                    for model_id in dict.fromkeys(model_ids):
-                        if model_id.lower().startswith(sub_lower) and model_id.lower() != sub_lower:
-                            seen.add(model_id.lower())
-                            yield Completion(
-                                model_id,
-                                start_position=-len(sub_text),
-                                display=model_id,
-                                display_meta=f"{label} ({provider_key})",
-                            )
-        except Exception:
-            pass
+            if not isinstance(providers, Mapping):
+                return
 
-        # Keep aliases as a compatibility convenience, but they are no longer
-        # the model list used by the picker or the primary completion source.
-        try:
-            from ..model_switch import (
-                _ensure_direct_aliases, DIRECT_ALIASES, MODEL_ALIASES,
+            provider_key = get_active_provider_key(config)
+            provider_cfg = providers.get(provider_key)
+            if not isinstance(provider_cfg, Mapping):
+                return
+
+            label = str(
+                provider_cfg.get("label")
+                or provider_cfg.get("name")
+                or provider_key
             )
-            _ensure_direct_aliases()
-            for name, da in DIRECT_ALIASES.items():
-                if name.lower().startswith(sub_lower) and name.lower() != sub_lower:
-                    if name.lower() in seen:
-                        continue
-                    seen.add(name.lower())
+            model_ids = [
+                str(model_id).strip()
+                for model_id in (
+                    provider_cfg.get("model_override"),
+                    provider_cfg.get("selected_model"),
+                    provider_cfg.get("default_model"),
+                    provider_cfg.get("model"),
+                    *provider_model_catalog(dict(provider_cfg)),
+                )
+                if str(model_id or "").strip()
+            ]
+            for model_id in dict.fromkeys(model_ids):
+                if model_id.lower().startswith(sub_lower) and model_id.lower() != sub_lower:
                     yield Completion(
-                        name,
+                        model_id,
                         start_position=-len(sub_text),
-                        display=name,
-                        display_meta=f"{da.model} ({da.provider})",
-                    )
-            # Built-in catalog aliases not already covered
-            for name in sorted(MODEL_ALIASES.keys()):
-                if name.lower() in seen:
-                    continue
-                if name.lower().startswith(sub_lower) and name.lower() != sub_lower:
-                    seen.add(name.lower())
-                    identity = MODEL_ALIASES[name]
-                    yield Completion(
-                        name,
-                        start_position=-len(sub_text),
-                        display=name,
-                        display_meta=f"{identity.vendor}/{identity.family}",
+                        display=model_id,
+                        display_meta=f"{label} ({provider_key})",
                     )
         except Exception:
             pass

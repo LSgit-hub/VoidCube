@@ -117,3 +117,19 @@ def test_memory_manager_reports_missing_provider_as_skipped():
 
     assert outcome.status == "skipped"
     assert outcome.details["reason"] == "no_provider"
+
+
+def test_memory_manager_normalizes_non_string_turn_content():
+    received = {}
+
+    def sync_turn(user, assistant, *, session_id="", tags=None):
+        received.update(user=user, assistant=assistant, tags=tags)
+        return EffectOutcome(status="queued", details={})
+
+    manager = MemoryManager()
+    manager.add_provider(_provider(sync_turn))
+
+    outcome = manager.sync_turn(None, {"text": "完成"})
+
+    assert outcome.status == "queued"
+    assert received == {"user": "", "assistant": "{'text': '完成'}", "tags": []}

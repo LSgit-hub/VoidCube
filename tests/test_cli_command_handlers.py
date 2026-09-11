@@ -1015,12 +1015,12 @@ def test_provider_display_handler_projects_active_provider_models_and_usage() ->
         "      active-model ← current",
         "      backup-model",
         "",
-        "  Use /model to switch providers or models:",
-        "    /model <model-name>               — switch model",
-        "    /model --provider <provider-name> — switch provider",
-        "    /model <name> --provider <provider-name> — switch provider and model",
+        "  /model switches models within the active provider:",
+        "    /model                    — pick a model interactively",
+        "    /model <model-name>       — switch model",
+        "  Run /api to change the active provider or its credentials",
     ]
-    assert usage[-1] == "  Run /api to configure provider credentials"
+    assert usage[-1] == "  Run /api to change the active provider or its credentials"
     assert "None" not in usage
 
 

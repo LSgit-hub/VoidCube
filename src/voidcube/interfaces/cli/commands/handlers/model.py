@@ -10,16 +10,16 @@ from ..router import ParsedCliCommand
 
 @dataclass(frozen=True, slots=True)
 class ModelCommandPorts:
-    parse_flags: Callable[[str], tuple[str, str, bool]]
+    parse_flags: Callable[[str], tuple[str, bool]]
     user_providers: Callable[[], Mapping[str, Any] | None]
     model: Callable[[], str]
     provider: Callable[[], str]
     base_url: Callable[[], str]
     api_key: Callable[[], str]
     provider_label: Callable[[str], str]
-    list_configured_providers: Callable[..., list[dict[str, Any]]]
+    list_current_models: Callable[..., list[str]]
     switch_model: Callable[..., Any]
-    open_picker: Callable[[list[dict[str, Any]], str, str, Mapping[str, Any] | None], None]
+    open_picker: Callable[[list[str], str, str, Mapping[str, Any] | None], None]
     apply_result: Callable[[Any, bool], None]
     emit: Callable[[str], None]
     confirm_capabilities: Callable[[str, str], Sequence[str] | None] | None = None
@@ -30,32 +30,40 @@ def handle_model_command(
     *,
     ports: ModelCommandPorts,
 ) -> None:
-    """Route /model while leaving resolution, persistence, and UI ownership separate."""
-    model_input, explicit_provider, persist_global = ports.parse_flags(
-        request.arguments
-    )
+    """Route /model within the active provider.
+
+    ``/model`` only selects a different model that the current provider already
+    exposes. Provider changes go through the /api wizard, so the legacy
+    ``--provider`` flag is rejected with a pointer to /api.
+    """
+    model_input, persist_global = ports.parse_flags(request.arguments)
     user_providers = ports.user_providers()
     current_provider = ports.provider()
     current_model = ports.model()
 
-    if not model_input and not explicit_provider:
+    if "--provider" in model_input.split():
+        ports.emit("  /model no longer switches providers.")
+        ports.emit("  Use /api to change the active provider, then /model to pick a model.")
+        return
+
+    if not model_input:
         try:
-            providers = ports.list_configured_providers(
+            models = ports.list_current_models(
                 current_provider=current_provider,
                 user_providers=user_providers,
                 max_models=30,
             )
         except Exception:
-            providers = []
+            models = []
 
-        if not providers:
-            ports.emit("  No configured providers found.")
+        if not models:
+            ports.emit("  No models available for the current provider.")
             ports.emit("")
-            ports.emit("  Run /api first to add a provider.")
+            ports.emit("  Run /api to configure a provider.")
             return
 
         ports.open_picker(
-            providers,
+            models,
             current_model or "unknown",
             ports.provider_label(current_provider) if current_provider else "unknown",
             user_providers,
@@ -65,11 +73,9 @@ def handle_model_command(
     result = ports.switch_model(
         raw_input=model_input,
         current_provider=current_provider,
-        current_model=current_model,
         current_base_url=ports.base_url(),
         current_api_key=ports.api_key(),
         is_global=persist_global,
-        explicit_provider=explicit_provider,
         user_providers=user_providers,
     )
     if result.success and ports.confirm_capabilities is not None:

@@ -31,21 +31,22 @@ class CliProviderRuntime:
 
     def open_picker(
         self,
-        providers: list,
+        models: list,
         current_model: str,
         current_provider: str,
         user_providers: Any = None,
     ) -> None:
         host = self.host
         host._capture_modal_input_snapshot()
-        default_idx = next(
-            (index for index, provider in enumerate(providers) if provider.get("is_current")),
-            0,
-        )
+        model_list = list(models or [])
+        try:
+            default_idx = model_list.index(current_model)
+        except ValueError:
+            default_idx = 0
         with host._modal_lock:
             host._model_picker_state = {
-                "stage": "provider",
-                "providers": providers,
+                "stage": "model",
+                "model_list": model_list,
                 "selected": default_idx,
                 "current_model": current_model,
                 "current_provider": current_provider,
@@ -80,7 +81,6 @@ class CliProviderRuntime:
                 switch_model=switch_model,
                 apply_switch_result=self.apply_switch_result,
                 current_provider=lambda: host.provider,
-                current_model=lambda: host.model,
                 current_base_url=lambda: host.base_url or "",
                 current_api_key=lambda: host.api_key or "",
                 confirm_capabilities=self.confirm_capabilities,

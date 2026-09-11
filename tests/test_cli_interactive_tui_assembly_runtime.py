@@ -114,7 +114,7 @@ def test_tui_assembly_projects_modal_input_policy():
             sudo_state=base.state.sudo_state,
             secret_state=base.state.secret_state,
             approval_state=base.state.approval_state,
-            model_picker_state=lambda: {"stage": "provider"},
+            model_picker_state=lambda: {"stage": "model", "model_list": ["m"]},
             update_selection=lambda mutate: mutate(),
         ),
     )

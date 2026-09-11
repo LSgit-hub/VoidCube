@@ -72,15 +72,12 @@ def test_model_picker_limits_the_visible_window_and_shows_position(
             )
         ),
     )
-    providers = [
-        {"name": f"Provider {index}", "models": ["default"]}
-        for index in range(15)
-    ]
+    models = [f"model-{index}" for index in range(15)]
     widgets = build_modal_widgets(
         ports=_ports(
             picker={
-                "stage": "provider",
-                "providers": providers,
+                "stage": "model",
+                "model_list": models,
                 "selected": 8,
                 "current_model": "default",
                 "current_provider": "Provider 0",
@@ -90,7 +87,7 @@ def test_model_picker_limits_the_visible_window_and_shows_position(
 
     text = _widget_text(widgets.model_picker)
 
-    assert "Provider 8" in text
+    assert "model-8" in text
     assert "9/16" in text
     assert "..." in text
 
@@ -174,15 +171,12 @@ def test_model_picker_panel_lines_share_one_width(monkeypatch) -> None:
             )
         ),
     )
-    providers = [
-        {"name": f"Provider {index}", "models": ["default"]}
-        for index in range(15)
-    ]
+    models = [f"model-{index}" for index in range(15)]
     widgets = build_modal_widgets(
         ports=_ports(
             picker={
-                "stage": "provider",
-                "providers": providers,
+                "stage": "model",
+                "model_list": models,
                 "selected": 8,
                 "current_model": "default",
                 "current_provider": "Provider 0",

@@ -172,7 +172,7 @@ def test_modal_navigation_selection_clamps_at_boundaries() -> None:
     bindings = KeyBindings()
     clarify = {"selected": 1, "choices": ["first", "second"]}
     approval = {"selected": 0, "choices": ["yes", "no"]}
-    picker = {"selected": 2, "stage": "model", "model_list": ["a", "b"]}
+    picker = {"selected": 1, "stage": "model", "model_list": ["a", "b"]}
 
     install_modal_navigation_keybindings(
         bindings,
@@ -195,6 +195,7 @@ def test_modal_navigation_selection_clamps_at_boundaries() -> None:
     _binding_handler(bindings, "up", occurrence=1)(object())  # type: ignore[call-arg]
     assert approval["selected"] == 0
 
-    # Model picker in "model" stage clamps at len(model_list)+1.
+    # Model picker rows are 0..len(model_list)-1 plus the trailing "Cancel"
+    # row; stepping down from the last model lands on Cancel and clamps there.
     _binding_handler(bindings, "down", occurrence=2)(object())  # type: ignore[call-arg]
-    assert picker["selected"] == 3
+    assert picker["selected"] == 2

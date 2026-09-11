@@ -614,8 +614,12 @@ class ContextCompressor(ContextEngine):
         except Exception:
             try:
                 os.unlink(temporary_path)
-            except OSError:
-                pass
+            except OSError as cleanup_exc:
+                logger.warning(
+                    "Failed to remove compression checkpoint temp file %s: %s",
+                    temporary_path,
+                    cleanup_exc,
+                )
             raise
 
     def _load_checkpoint(self) -> dict[str, Any] | None:
