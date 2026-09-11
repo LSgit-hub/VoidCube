@@ -1254,6 +1254,43 @@ async def test_tier2_bridge_repeated_failures_degrade_health(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_low_information_skip_does_not_degrade_health(tmp_path):
+    """低信息批次（无有效事件但属预期跳过）不得把整体健康拉成 degraded。"""
+    config = MemoryServiceConfig(
+        db_path=str(tmp_path / "mem.db"),
+        tier1_max_turns=1,
+        tier2_bridge_failure_degraded_after=1,
+    )
+    service = MemoryService(config)
+    service._gateway_registration_healthy = True
+    await service.create_session(SessionCreate(session_id="low-info-skip", metadata={}))
+    await service.add_turn(
+        "low-info-skip", TurnCreate(speaker="user", text="OK", metadata={})
+    )
+
+    async def skip_compression(request):
+        return {
+            "status": "skipped_low_information",
+            "turns_processed": 0,
+            "events_generated": 0,
+            "errors": [],
+        }
+
+    service.tier2_compress = skip_compression  # type: ignore[method-assign]
+    service._tier2_bridge_last_trigger_reason = "candidate_count"
+    await service._tier2_bridge_cycle()
+
+    health = await service.health_check()
+    bridge_health = health["maintenance"]["tier2_bridge"]
+    result = health["maintenance"]["last_tier2_bridge_result"]
+    assert health["status"] == "healthy"
+    assert bridge_health["state"] != "degraded"
+    assert bridge_health["consecutive_failures"] == 0
+    assert result["skipped_scope_count"] == 1
+    assert result["failed_scope_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_tier2_candidate_health_normalizes_mixed_iso_offsets(tmp_path):
     service = _make_service(tmp_path)
     await service.create_session(SessionCreate(session_id="utc", metadata={}))
@@ -1366,7 +1403,14 @@ async def test_standalone_tier2_bridge_finds_expired_low_relevance_candidates(tm
 async def test_tier2_compress_keeps_turns_uncompressed_when_no_events_generated(tmp_path):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="empty-events", metadata={}))
-    await svc.add_turn("empty-events", TurnCreate(speaker="user", text="plain chatter", metadata={}))
+    await svc.add_turn(
+        "empty-events",
+        TurnCreate(
+            speaker="user",
+            text="A durable architecture decision was recorded for the compression bridge.",
+            metadata={},
+        ),
+    )
 
     class _EmptyPipeline:
         def ingest(self, turns):
@@ -1407,7 +1451,14 @@ async def test_tier2_compress_keeps_turns_uncompressed_when_no_events_generated(
 async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generated(tmp_path):
     svc = _make_service(tmp_path)
     await svc.create_session(SessionCreate(session_id="empty-events", metadata={}))
-    await svc.add_turn("empty-events", TurnCreate(speaker="user", text="plain chatter", metadata={}))
+    await svc.add_turn(
+        "empty-events",
+        TurnCreate(
+            speaker="user",
+            text="A durable architecture decision was recorded for the compression bridge.",
+            metadata={},
+        ),
+    )
 
     class _EmptyPipeline:
         def ingest(self, turns):
@@ -1436,7 +1487,8 @@ async def test_standalone_bridge_keeps_turns_uncompressed_when_no_events_generat
 
     assert result.turns_processed == 0
     assert result.candidate_count == 1
-    # 未压缩且未归档；零事件进入有界退避，避免被无限重选。
+    # 有实质内容却抽不出事件 → 仍按真实失败上报；未压缩且未归档，并进入有界退避。
+    assert result.status == "no_events_generated"
     assert compressed == "retry_wait"
     assert archive_count == 0
 
@@ -1620,8 +1672,8 @@ def test_quality_rejection_stops_retrying_after_three_attempts(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.operational
-async def test_zero_event_cycle_advances_bounded_retry_accounting(tmp_path):
-    """零事件批次必须推进有界重试，否则会被反复选中且失败信号不收敛。"""
+async def test_low_information_cycle_advances_bounded_retry_accounting(tmp_path):
+    """低信息批次（整批低于信息量阈值）记为跳过，但仍须推进有界重试，否则会被反复选中且失败信号不收敛。"""
     svc = _make_service(tmp_path)
     svc._llm_healthy = True
     await svc.create_session(SessionCreate(session_id="no-events", metadata={}))
@@ -1641,7 +1693,8 @@ async def test_zero_event_cycle_advances_bounded_retry_accounting(tmp_path):
     first = await svc.tier2_compress(
         Tier2CompressRequest(min_relevance=0.0, force_oldest=True)
     )
-    assert first["status"] == "no_events_generated"
+    # 整批 turn 都低于信息量阈值（"OK"）→ 记为跳过而非失败。
+    assert first["status"] == "skipped_low_information"
 
     # 退避生效后同一批 turn 不应被立刻再次选中。
     again = await svc.tier2_compress(

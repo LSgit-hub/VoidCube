@@ -1403,10 +1403,22 @@ class Tier1ToTier2Bridge:
 
         quality_evidence = self._evaluate_quality(candidates, tier2_output)
         if not tier2_output.get("events"):
+            # 整批 turn 都在信息量阈值以下时，"本批没有可压缩内容"是预期结果，
+            # 不是压缩失败：用 skipped_low_information 与真实抽取失败
+            # (no_events_generated) 区分，否则健康信号会被低信息批次长期拉成
+            # 假 degraded（实测：'OK' + 23 字提示构成的批次每个周期都触发）。
+            low_information_batch = not [
+                turn
+                for turn in candidates
+                if len(str(turn.get("text") or "").strip()) >= _MIN_INFORMATIVE_CHARS
+            ]
             logger.warning(
-                "Tier 2 bridge cycle produced no events for %d candidate turns; "
-                "leaving Tier1 turns uncompressed.",
+                "Tier 2 bridge cycle produced no events for %d candidate turns "
+                "(%s); leaving Tier1 turns uncompressed.",
                 len(candidates),
+                "low-information batch"
+                if low_information_batch
+                else "extraction produced no valid events",
             )
             self._persist_quality_audit(quality_evidence, "rejected")
             # 零事件同样要推进有界重试计数：否则这批 turn 会永远停留在
@@ -1421,7 +1433,11 @@ class Tier1ToTier2Bridge:
                 arcs_generated=0,
                 epochs_generated=0,
                 profiles_generated=0,
-                status="no_events_generated",
+                status=(
+                    "skipped_low_information"
+                    if low_information_batch
+                    else "no_events_generated"
+                ),
                 quality_evidence=quality_evidence,
                 **metadata,
             )

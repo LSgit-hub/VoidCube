@@ -223,6 +223,13 @@ async def run_tier2_bridge_cycle(
             item["status"] in {"compressed", "partially_compressed", "no_candidates"}
             for item in scope_results
         ),
+        # 低信息批次（整批 turn 低于信息量阈值 → 无事件）是预期跳过，既不是成功
+        # 也不是失败：单独计数，避免它把整体健康判成 degraded（见 bridge
+        # skipped_low_information）。
+        "skipped_scope_count": sum(
+            item["status"] in {"skipped_low_information"}
+            for item in scope_results
+        ),
         "failed_scope_count": sum(
             item["status"] in {"failed", "quality_rejected", "no_events_generated"}
             for item in scope_results
