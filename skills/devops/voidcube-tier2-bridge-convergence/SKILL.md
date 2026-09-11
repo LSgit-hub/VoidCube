@@ -1,9 +1,9 @@
 ---
 name: voidcube-tier2-bridge-convergence
-description: 诊断和修复 VoidCube Tier1→Tier2 记忆压缩流水线"停滞/不收敛"（no_events_generated 长期失败、pending 永不下降）。含判定性 SQL 签名（retry_count 全 0）、零事件分支漏记重试的根因、候选池取证与测试套路
+description: 诊断和修复 VoidCube Tier1→Tier2 记忆压缩流水线"停滞/不收敛"（no_events_generated 长期失败、pending 永不下降），以及 /health 长期 degraded 的"健康信号过敏"（低信息批次跳过 vs 真失败、部分失败走连续阈值）。含判定性 SQL 签名（retry_count 全 0）、零事件分支漏记重试的根因、候选池取证与测试套路
 category: devops
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-09-11
 ---
 
 # VoidCube Tier1→Tier2 压缩流水线不收敛（no_events_generated 长期失败）
@@ -213,13 +213,76 @@ failed_checks=['event_coverage','validated_event_coverage']
   不降门槛、不丢数据，代价是打破"全或无"契约，需配套测试（推荐）
 - (c) coverage 分母改为"含可提取内容的 turn" —— 语义最准但需先定义"可提取"
 
-### 聚合语义：部分成功**已经**不会被记成全局失败（别再当缺陷修）
+### 聚合语义：部分成功不记全局连续失败（2026-09-11 起改为连续阈值）
 
-`_tier2_bridge_cycle` 已实现：有 scope 成功 → `consecutive_failures=0`、
-`last_succeeded_at` 更新、`state=degraded`；只有
-`successful_scope_count == 0` 才 `_record_tier2_bridge_failure`。
+`_tier2_bridge_cycle` 的判定链（**行为已在 2026-09-11 变更，勿沿用旧结论**）：
+
+- 有 scope 成功（部分成功）→ `consecutive_failures=0`（不记全局连续失败）、
+  `last_succeeded_at` 更新、`consecutive_rejections += 1`；未达
+  `tier2_bridge_failure_degraded_after`（默认 3）时 `state="warning"`，达阈值才 `degraded`。
+- 无任何 scope 成功 → `_record_tier2_bridge_failure`（`consecutive_failures` 与
+  `consecutive_rejections` 同时 +1），未达阈值 `state="failed"`，达阈值 `degraded`。
+- 干净周期 → 两个计数同时清零、`state="idle"`。
+
 实测 `scope_count=2, successful=0, failed=2` 时报 `failed` 是**正确**的。
-先看 `successful_scope_count` 再判断，不要凭 `state` 直接下结论。
+先看 `successful_scope_count` / `consecutive_rejections` 再判断，不要凭 `state` 直接下结论。
+
+## 健康信号过敏：把"跳过"与"失败"分开，别让一个坏批次拉红整个服务
+（2026-09-10~11 实测，两轮修复；degraded 长期不消失时先读这节）
+
+症状：`/health` 长期 `degraded`，但压缩在推进（scope 里有 `compressed`）。
+根因不是管道坏了，而是**健康信号把"本批没东西可压"当成"服务不健康"**。两处过敏：
+
+### 1) 低信息批次：`skipped_low_information` ≠ 失败
+
+- 判据：整批 turn 都 `length(trim(text)) < _MIN_INFORMATIVE_CHARS(40)` 且抽不出事件。
+- 修法（`run_cycle` 零事件分支）：这种情况记 `status="skipped_low_information"`，其余仍记
+  `no_events_generated`（**有实质内容却抽不出事件 = 真失败，绝不能一起放过**）。
+- 聚合（`maintenance.py`）新增 `skipped_scope_count`：跳过既不计成功也不计失败。
+- 跳过**仍要推进有界重试**（复用 `_record_quality_rejection`），否则低信息 turn 会停在 pending
+  被无限重选 —— "跳过"只改健康语义，不改收敛行为。
+- scope `status` 是内存字符串，**不受 `turns.compression_status` 的 CHECK 约束**，
+  新增一个 scope 状态不需要写迁移（与新增 turn 状态完全不同）。
+
+### 2) 部分失败：改走连续阈值（修正严重度倒挂）
+
+原行为：部分成功分支**只要有一个被拒 scope 就立即 `degraded`**，而全失败反而要连续 3 次才
+degraded —— 一个被拒批次比整轮失败更容易拉红服务。修法（`memory_service.py`）：
+
+- 新增 `_tier2_bridge_consecutive_rejections`：连续"存在被拒 scope 的周期"数（**含部分成功**），
+  是判定 degraded 的**唯一依据**；`consecutive_failures` 语义不变（只表示"本轮无 scope 成功"），
+  仅用于报告可见性。
+- 部分成功未达阈值 → `state="warning"`（健康仍 `healthy`，但 `last_failure_reason` 与
+  `consecutive_rejections` 保留可见性）；达阈值 → `degraded`。
+- `/health` 的 `maintenance.tier2_bridge` 新增 `consecutive_rejections` 字段。
+
+原则：**不要靠降低门禁/改数据让指标变绿**；要让信号如实区分"跳过 / 单次拒绝 / 持续恶化"。
+
+### 验证技巧（两个都很省事）
+
+- **判断新代码是否已加载**：在 `/health` 里找**只有新代码才会有的字段**
+  （本轮是 `skipped_scope_count`、`consecutive_rejections`）。比重启日志、比 PID 都直接。
+- **构造"部分成功"周期**：真实数据很难同时给出"一个成功 scope + 一个被拒 scope"，
+  所以 monkeypatch **模块级函数**而不是走真链路：
+  ```python
+  from memai.application import memory_service as ms
+  async def partial_cycle(*a, **k):
+      return {"scope_count": 2, "successful_scope_count": 1, "skipped_scope_count": 0,
+              "failed_scope_count": 1,
+              "scopes": [{"memory_domain": "agent_interaction", "status": "quality_rejected",
+                          "errors": [], "quality_evidence": {"failed_checks": ["compression_ratio"]}},
+                         {"memory_domain": "companion", "status": "compressed", "errors": []}]}
+  monkeypatch.setattr(ms, "run_tier2_bridge_cycle", partial_cycle)
+  await service._tier2_bridge_cycle()   # 第 1 次 → warning + healthy
+  await service._tier2_bridge_cycle()   # 第 2 次（阈值=2）→ degraded
+  ```
+
+### 改这类规则时会连坐既有测试（本轮踩过）
+
+既有用例用**超短文本**（`"plain chatter"` / `"OK"`）驱动零事件路径 —— 新规则下它们会自动
+落入"低信息跳过"，断言 `no_events_generated` 的用例随即假失败。处理：想继续覆盖**真失败**
+路径的用例把文本换成 ≥40 字符的实质内容并补 `status` 断言；想覆盖**跳过**路径的用例保留
+短文本、断言 `skipped_low_information` 并按语义改名。
 
 另外：**单次 `/tier2/compress` 不更新这套聚合**（只有全量 cycle 会），
 所以手动压缩成功后 `last_succeeded_at` 仍可能是 null——别据此判断失败。
