@@ -939,7 +939,12 @@ profile_memories 是用户偏好和事实的单独存储层，与 compressed_mem
 - 判读链第 2/3 步仍适用于 `no_events_generated`：**有实质内容却抽不出事件 = 真失败**。
 - 快捷证据：`/health` → `maintenance.last_tier2_bridge_result` 里出现 `skipped_scope_count`
   即说明运行的是新代码（旧版本没有这个键）。
-- **仍未修的相邻问题（待定调）**：只要有一个 scope `quality_rejected`
-  （例如 `failed_checks=['compression_ratio']`），bridge 的"部分成功"分支会**立即**把
-  `_tier2_bridge_state` 置为 `degraded`；而全部 scope 失败时反而要连续 3 次
-  （`tier2_bridge_failure_degraded_after`）才 degraded —— 严重度判定疑似反了。
+- **部分失败的严重度已修正（2026-09-11）**：degraded 现在由
+  `_tier2_bridge_consecutive_rejections`（连续"存在被拒 scope 的周期"数，**含部分成功**）
+  决定 —— 未达 `tier2_bridge_failure_degraded_after`（默认 3）时记 `state="warning"`，
+  整体健康仍是 `healthy`；只有达到阈值才 `degraded`。此前"部分成功即立即 degraded、
+  而全失败要连续 3 次"的倒挂已消除。
+  - `consecutive_failures` 语义**未变**：只表示"本轮无任何 scope 成功"，仅用于报告可见性。
+  - 判断"是否正在恶化"应看 `/health` → `maintenance.tier2_bridge.consecutive_rejections`。
+  - 干净周期会把两个计数一起清零（`state` 回 `idle`）。
+    实测：`partially_compressed` 属成功（只失败覆盖度检查），不会计入 rejections。
