@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import subprocess
+from ...domain.agent.effect_outcomes import EffectOutcome
 from pathlib import Path
 from ..config.runtime_paths import get_VoidCube_home
 from typing import Dict, List, Optional, Set
@@ -270,6 +271,7 @@ class CheckpointManager:
         self.max_snapshots = max_snapshots
         self._checkpointed_dirs: Set[str] = set()
         self._git_available: Optional[bool] = None  # lazy probe
+        self._last_take_skip_reason: str | None = None
 
     # ------------------------------------------------------------------
     # Turn lifecycle
@@ -289,8 +291,18 @@ class CheckpointManager:
         Returns True if a checkpoint was taken, False otherwise.
         Never raises — all errors are silently logged.
         """
+        return self.ensure_checkpoint_effect(working_dir, reason).status == "succeeded"
+
+    def ensure_checkpoint_effect(
+        self, working_dir: str, reason: str = "auto"
+    ) -> EffectOutcome:
+        """Take a checkpoint and preserve whether it was skipped or failed.
+
+        ``ensure_checkpoint`` remains a boolean compatibility wrapper for UI
+        callers; orchestration code should use this structured result.
+        """
         if not self.enabled:
-            return False
+            return EffectOutcome(status="skipped", details={"reason": "disabled"})
 
         # Lazy git probe
         if self._git_available is None:
@@ -298,26 +310,43 @@ class CheckpointManager:
             if not self._git_available:
                 logger.debug("Checkpoints disabled: git not found")
         if not self._git_available:
-            return False
+            return EffectOutcome(status="skipped", details={"reason": "git_unavailable"})
 
         abs_dir = str(_normalize_path(working_dir))
 
         # Skip root, home, and other overly broad directories
         if abs_dir in ("/", str(Path.home())):
             logger.debug("Checkpoint skipped: directory too broad (%s)", abs_dir)
-            return False
+            return EffectOutcome(status="skipped", details={"reason": "directory_too_broad"})
 
         # Already checkpointed this turn?
         if abs_dir in self._checkpointed_dirs:
-            return False
+            return EffectOutcome(status="skipped", details={"reason": "already_checkpointed"})
 
         self._checkpointed_dirs.add(abs_dir)
 
         try:
-            return self._take(abs_dir, reason)
+            self._last_take_skip_reason = None
+            taken = self._take(abs_dir, reason)
+            if taken:
+                return EffectOutcome(status="succeeded", details={"directory": abs_dir})
+            # A failed snapshot must be retryable in the same turn. An
+            # unchanged directory is a normal skip; _take cannot distinguish
+            # it from an error, so report a degraded skip with diagnostics.
+            self._checkpointed_dirs.discard(abs_dir)
+            if self._last_take_skip_reason:
+                return EffectOutcome(
+                    status="skipped", details={"reason": self._last_take_skip_reason, "directory": abs_dir}
+                )
+            return EffectOutcome(
+                status="failed",
+                error="checkpoint snapshot was not created",
+                details={"directory": abs_dir, "reason": reason},
+            )
         except Exception as e:
             logger.debug("Checkpoint failed (non-fatal): %s", e)
-            return False
+            self._checkpointed_dirs.discard(abs_dir)
+            return EffectOutcome(status="failed", error=f"{type(e).__name__}: {e}")
 
     def list_checkpoints(self, working_dir: str) -> List[Dict]:
         """List available checkpoints for a directory.
@@ -535,6 +564,7 @@ class CheckpointManager:
 
         # Quick size guard — don't try to snapshot enormous directories
         if _dir_file_count(working_dir) > _MAX_FILES:
+            self._last_take_skip_reason = "file_limit"
             logger.debug("Checkpoint skipped: >%d files in %s", _MAX_FILES, working_dir)
             return False
 
@@ -555,6 +585,7 @@ class CheckpointManager:
         )
         if ok_diff:
             # No changes to commit
+            self._last_take_skip_reason = "no_changes"
             logger.debug("Checkpoint skipped: no changes in %s", working_dir)
             return False
 

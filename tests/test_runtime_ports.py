@@ -1,7 +1,11 @@
 import pytest
 
-from voidcube.application.ports import CallbackEventPort, CallbackPersistencePort, RuntimePorts
+from voidcube.application.ports import (
+    CallbackEventPort, CallbackGovernancePort, CallbackPersistencePort,
+    CallbackTaskPort, RuntimePorts,
+)
 from voidcube.domain.events import MemorySyncFailed, TurnCompleted
+from voidcube.domain.agent.effect_outcomes import EffectOutcome
 
 
 def test_callback_event_port_returns_structured_success():
@@ -37,3 +41,17 @@ def test_domain_events_are_typed_and_immutable():
     assert event.response_length == 12
     failure = MemorySyncFailed(session_id="s1", error="outbox down")
     assert failure.error == "outbox down"
+
+
+def test_task_and_governance_callbacks_normalize_outcomes():
+    task = CallbackTaskPort(lambda value, **_: EffectOutcome(status="queued", details={"task": value}))
+    governance = CallbackGovernancePort(lambda value: EffectOutcome(status="succeeded", details={"decision": value}))
+    assert task.submit("t1", session_id="s1").status == "queued"
+    assert governance.record_decision("approve").status == "succeeded"
+
+
+def test_task_and_governance_callback_failures_are_contained():
+    task = CallbackTaskPort(lambda *_args, **_kwargs: None)
+    governance = CallbackGovernancePort(lambda _value: (_ for _ in ()).throw(RuntimeError("down")))
+    assert task.submit("t").status == "failed"
+    assert governance.record_decision("approve").status == "failed"

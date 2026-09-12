@@ -96,6 +96,7 @@ def get_active_env(task_id: str):
 from ...application.memory_manager import build_memory_context_block
 from ...application.ports import CallbackEventPort, CallbackPersistencePort, RuntimePorts
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
+from ...domain.events import CheckpointPersistFailed
 from ...infrastructure.llm.retry_policy import (
     RetryKind,
     RetryRecoveryKind,
@@ -3210,7 +3211,7 @@ class AIAgent:
                     work_dir = self._checkpoint_mgr.get_working_dir_for_path(
                         file_path
                     )
-                    self._checkpoint_mgr.ensure_checkpoint(
+                    self._checkpoint_with_event(
                         work_dir, f"before {call.name}"
                     )
             elif call.name == "terminal":
@@ -3219,11 +3220,25 @@ class AIAgent:
                     work_dir = call.arguments.get("workdir") or os.getenv(
                         "TERMINAL_CWD", os.getcwd()
                     )
-                    self._checkpoint_mgr.ensure_checkpoint(
+                    self._checkpoint_with_event(
                         work_dir, f"before terminal: {command[:60]}"
                     )
         except Exception:
             logger.debug("Tool checkpoint failed", exc_info=True)
+
+    def _checkpoint_with_event(self, work_dir: str, reason: str) -> EffectOutcome:
+        outcome = self._checkpoint_mgr.ensure_checkpoint_effect(work_dir, reason)
+        if outcome.status == "failed" and self.runtime_ports.events:
+            event = CheckpointPersistFailed(
+                session_id=self.session_id or "",
+                error=outcome.error or "checkpoint failed",
+                details={"directory": work_dir, "reason": reason},
+            )
+            try:
+                self.runtime_ports.events.emit(event)
+            except Exception:
+                logger.warning("Checkpoint failure event publication failed", exc_info=True)
+        return outcome
 
     def _invoke_prepared_tool(
         self,

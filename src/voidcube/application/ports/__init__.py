@@ -8,8 +8,11 @@ implementations. Concrete adapters may live in ``infrastructure`` or
 from .runtime import (
     CallbackEventPort,
     CallbackPersistencePort,
+    CallbackGovernancePort,
+    CallbackTaskPort,
     ContextPort,
     EventPort,
+    GovernancePort,
     MemoryPort,
     PersistencePort,
     RuntimePorts,
@@ -25,4 +28,7 @@ __all__ = [
     "PersistencePort",
     "RuntimePorts",
     "TaskPort",
+    "GovernancePort",
+    "CallbackTaskPort",
+    "CallbackGovernancePort",
 ]

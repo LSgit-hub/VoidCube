@@ -17,6 +17,12 @@ from .autonomous_chain_store import (
     AutonomousChainTask,
 )
 from ...domain.state.autonomous_task import AutonomousTaskTransition
+from ...application.ports import EventPort
+from ...domain.events import (
+    AutonomousTaskReviewed,
+    AutonomousTaskStarted,
+    GovernanceDecisionMade,
+)
 
 
 class GovernanceEventRepository(Protocol):
@@ -35,10 +41,24 @@ class AutonomousTaskStateService:
         store: AutonomousChainStore,
         governance_repository: GovernanceEventRepository,
         on_status_change: Optional[TaskStatusObserver] = None,
+        event_port: EventPort | None = None,
     ) -> None:
         self._store = store
         self._governance_repository = governance_repository
         self._on_status_change = on_status_change
+        self._event_port = event_port
+
+    def _emit_event(self, event: object) -> None:
+        if self._event_port is None:
+            return
+        try:
+            outcome = self._event_port.emit(event)
+            if getattr(outcome, "status", "") in {"failed", "degraded"}:
+                import logging
+                logging.getLogger(__name__).warning("Autonomous event publication failed: %s", getattr(outcome, "error", ""))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("Autonomous event publication failed", exc_info=True)
 
     def create_task(self, **kwargs: Any) -> AutonomousChainTask:
         return self._store.create_task(
@@ -97,6 +117,12 @@ class AutonomousTaskStateService:
             ),
         )
         self._notify_status(task, "execution_claim")
+        self._emit_event(AutonomousTaskStarted(
+            task_id=task.task_id,
+            cycle_id=str(task.metadata.get("cycle_id") or ""),
+            lease_id=str(task.execution_lease.attempt_id or ""),
+            attempt=int(task.metadata.get("attempt") or task.execution_lease.generation or 0),
+        ))
         return task
 
     def renew_execution(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
@@ -172,6 +198,17 @@ class AutonomousTaskStateService:
         )
         if self._on_status_change is not None:
             self._on_status_change(task, event_type)
+        if event_type in {"status_update", "execution_finalize", "execution_reconcile"}:
+            refs = tuple(str(x) for x in (task.evidence.get("evidence_refs") or ()) if str(x))
+            self._emit_event(AutonomousTaskReviewed(
+                task_id=task.task_id, status=str(task.status),
+                reason=str(task.decision_reason or ""), evidence_refs=refs,
+            ))
+        if event_type == "status_update":
+            self._emit_event(GovernanceDecisionMade(
+                task_id=task.task_id, decision=str(task.status),
+                reason=str(task.decision_reason or ""), evidence_refs=refs,
+            ))
         return task
 
     def clear_tasks(self, tasks: Iterable[AutonomousChainTask]) -> None:

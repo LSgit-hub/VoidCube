@@ -45,6 +45,10 @@ class TaskPort(Protocol):
     def submit(self, task: str, *, session_id: str = "") -> EffectOutcome: ...
 
 
+class GovernancePort(Protocol):
+    def record_decision(self, decision: Any) -> EffectOutcome: ...
+
+
 class ContextPort(Protocol):
     def compress(
         self, messages: list[dict[str, Any]], system_message: str | None,
@@ -89,6 +93,34 @@ class CallbackPersistencePort:
             return failed_effect(exc)
 
 
+class CallbackTaskPort:
+    """Normalize a legacy task callback at the application boundary."""
+    def __init__(self, callback: Callable[..., Any] | None) -> None:
+        self._callback = callback
+
+    def submit(self, task: str, *, session_id: str = "") -> EffectOutcome:
+        if self._callback is None:
+            return EffectOutcome(status="skipped", details={"reason": "no_sink"})
+        try:
+            return require_effect_outcome(self._callback(task, session_id=session_id), effect="task callback")
+        except Exception as exc:
+            return failed_effect(exc)
+
+
+class CallbackGovernancePort:
+    """Normalize governance persistence callbacks without leaking exceptions."""
+    def __init__(self, callback: Callable[[Any], Any] | None) -> None:
+        self._callback = callback
+
+    def record_decision(self, decision: Any) -> EffectOutcome:
+        if self._callback is None:
+            return EffectOutcome(status="skipped", details={"reason": "no_sink"})
+        try:
+            return require_effect_outcome(self._callback(decision), effect="governance callback")
+        except Exception as exc:
+            return failed_effect(exc)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimePorts:
     """Optional capabilities passed into a turn orchestrator.
@@ -100,6 +132,7 @@ class RuntimePorts:
     memory: MemoryPort | None = None
     persistence: PersistencePort | None = None
     task: TaskPort | None = None
+    governance: GovernancePort | None = None
     events: EventPort | None = None
     context: ContextPort | None = None
 
@@ -113,4 +146,7 @@ __all__ = [
     "PersistencePort",
     "RuntimePorts",
     "TaskPort",
+    "GovernancePort",
+    "CallbackTaskPort",
+    "CallbackGovernancePort",
 ]
