@@ -45,6 +45,14 @@ class TaskPort(Protocol):
     def submit(self, task: str, *, session_id: str = "") -> EffectOutcome: ...
 
 
+class ContextPort(Protocol):
+    def compress(
+        self, messages: list[dict[str, Any]], system_message: str | None,
+        *, approx_tokens: int | None = None, task_id: str = "default",
+        focus_topic: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str]: ...
+
+
 class EventPort(Protocol):
     def emit(self, event: Any) -> EffectOutcome: ...
 
@@ -93,10 +101,12 @@ class RuntimePorts:
     persistence: PersistencePort | None = None
     task: TaskPort | None = None
     events: EventPort | None = None
+    context: ContextPort | None = None
 
 
 __all__ = [
     "EventPort",
+    "ContextPort",
     "CallbackEventPort",
     "CallbackPersistencePort",
     "MemoryPort",

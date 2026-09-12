@@ -35,6 +35,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from dataclasses import replace
 from pathlib import Path
 
 from ...infrastructure.config.runtime_paths import get_VoidCube_home
@@ -117,7 +118,7 @@ from .prompt_builder import (
 )
 from ...infrastructure.providers.model_metadata import (
         fetch_model_metadata,
-        estimate_tokens_rough, estimate_messages_tokens_rough, estimate_request_tokens_rough,
+        estimate_messages_tokens_rough, estimate_request_tokens_rough,
         save_context_length, is_local_endpoint,
         query_ollama_num_ctx,
 )
@@ -129,6 +130,7 @@ from .context_compressor import (
     execute_context_recovery,
 )
 from .context_policy import ContextCompressionPolicy, configured_context_length
+from .context_service import ContextBindings, ContextService
 from ...domain.agent.api_attempt import ApiAttemptState
 from .client_lifecycle import ChatClientLifecycle
 from .client_initialization import (
@@ -917,6 +919,25 @@ class AIAgent:
                         f"{_policy.context_length:,}",
                     )
         self.compression_enabled = compression_enabled
+        self.runtime_ports = replace(
+            self.runtime_ports,
+            context=ContextService(
+                engine=self.context_compressor,
+                memory=self.runtime_ports.memory,
+                events=self.runtime_ports.events,
+                bindings=ContextBindings(
+                    session_id=lambda: self.session_id or "",
+                    system_prompt=self._context_system_prompt,
+                    continue_session=self._continue_compressed_session,
+                    todo_snapshot=lambda: self._todo_store.format_for_injection(),
+                    reset_pressure=context_pressure_tracker.reset,
+                    reset_file_reads=self._reset_compressed_file_reads,
+                    warn=lambda message: self._vprint(
+                        f"{self.log_prefix}⚠️  {message}", force=True,
+                    ),
+                ),
+            ),
+        )
 
         # Reject models whose context window is below the minimum required
         # for reliable tool-calling workflows (64K tokens).
@@ -2997,125 +3018,59 @@ class AIAgent:
         task_id: str = "default",
         focus_topic: str | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
-        """Compress conversation context and split the session in SQLite.
-
-        Args:
-            focus_topic: Optional focus string for guided compression — the
-                summariser will prioritise preserving information related to
-                this topic.
-
-        Returns:
-            (compressed_messages, new_system_prompt) tuple
-        """
-        _pre_msg_count = len(messages)
-        logger.info(
-            "context compression started: session=%s messages=%d tokens=~%s model=%s focus=%r",
-            self.session_id or "none", _pre_msg_count,
-            f"{approx_tokens:,}" if approx_tokens else "unknown", self.model,
-            focus_topic,
-        )
-        # Notify canonical Mem before compression discards context.
-        if self.runtime_ports.memory:
-            try:
-                self.runtime_ports.memory.on_pre_compress(messages)
-            except Exception as exc:
-                logger.warning("Memory pre-compress hook failed: %s", exc, exc_info=True)
-
-        compressed = self.context_compressor.compress(
-            messages,
-            current_tokens=approx_tokens or 0,
-            focus_topic=focus_topic or "",
+        """Delegate compression through the runtime context port."""
+        context = self.runtime_ports.context
+        if context is None:
+            raise RuntimeError("Context service is not initialized")
+        return context.compress(
+            messages, system_message, approx_tokens=approx_tokens,
+            task_id=task_id, focus_topic=focus_topic,
         )
 
-        todo_snapshot = self._todo_store.format_for_injection()
-        if todo_snapshot:
-            compressed.append({"role": "user", "content": todo_snapshot})
+    def _context_system_prompt(self, system_message: str | None, rebuild: bool) -> str:
+        if rebuild:
+            self._invalidate_system_prompt()
+        if self._cached_system_prompt is None:
+            self._cached_system_prompt = self._build_system_prompt(system_message)
+        return self._cached_system_prompt
 
-        self._invalidate_system_prompt()
-        new_system_prompt = self._build_system_prompt(system_message)
-        self._cached_system_prompt = new_system_prompt
+    @staticmethod
+    def _reset_compressed_file_reads(task_id: str) -> None:
+        from ...extensions.tools.files.file_tools import reset_file_dedup
 
-        if self._session_db:
-            try:
-                # Propagate title to the new session with auto-numbering
-                old_session_id = self.session_id
-                old_title = self._session_db.get_session_title(old_session_id)
-                continuation_start = datetime.now()
-                continuation_session_id = (
-                    f"{continuation_start.strftime('%Y%m%d_%H%M%S')}_"
-                    f"{uuid.uuid4().hex[:6]}"
-                )
-                self._session_db.create_session(
-                    session_id=continuation_session_id,
-                    source=self.platform or os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
-                    model=self.model,
-                    parent_session_id=old_session_id,
-                )
-                # Auto-number the title for the continuation session
-                if old_title:
-                    try:
-                        new_title = self._session_db.get_next_title_in_lineage(old_title)
-                        self._session_db.set_session_title(
-                            continuation_session_id,
-                            new_title,
-                        )
-                    except Exception as e:
-                        logger.debug("Could not propagate title on compression: %s", e)
-                self._session_db.update_system_prompt(
-                    continuation_session_id,
-                    new_system_prompt,
-                )
-                self._session_db.end_session(old_session_id, "compression")
-                self._bind_session_identity(
-                    continuation_session_id,
-                    session_start=continuation_start,
-                )
-            except Exception as e:
-                logger.warning("Session DB compression split failed — new session will NOT be indexed: %s", e)
+        reset_file_dedup(task_id)
 
-        # Warn on repeated compressions (quality degrades with each pass)
-        _cc = self.context_compressor.compression_count
-        if _cc >= 2:
-            self._vprint(
-                f"{self.log_prefix}⚠️  Session compressed {_cc} times — "
-                f"accuracy may degrade. Consider /new to start fresh.",
-                force=True,
-            )
-
-        # Update token estimate after compaction so pressure calculations
-        # use the post-compression count, not the stale pre-compression one.
-        _compressed_est = (
-            estimate_tokens_rough(new_system_prompt)
-            + estimate_messages_tokens_rough(compressed)
-        )
-        self.context_compressor.last_prompt_tokens = _compressed_est
-        self.context_compressor.last_completion_tokens = 0
-
-        # Only reset the pressure warning if compression actually brought
-        # us below the warning level (85% of threshold).  When compression
-        # can't reduce enough (e.g. threshold is very low, or system prompt
-        # alone exceeds the warning level), keep the tier set to prevent
-        # spamming the user with repeated warnings every loop iteration.
-        if self.context_compressor.threshold_tokens > 0:
-            _post_progress = _compressed_est / self.context_compressor.threshold_tokens
-            if _post_progress < 0.85:
-                context_pressure_tracker.reset(self.session_id or "default")
-
-        # Clear the file-read dedup cache.  After compression the original
-        # read content is summarised away — if the model re-reads the same
-        # file it needs the full content, not a "file unchanged" stub.
+    def _continue_compressed_session(self, system_prompt: str) -> EffectOutcome:
+        if not self._session_db:
+            return EffectOutcome(status="skipped", details={"reason": "no_database"})
         try:
-            from voidcube.extensions.tools.files.file_tools import reset_file_dedup
-            reset_file_dedup(task_id)
-        except Exception:
-            pass
-
-        logger.info(
-            "context compression done: session=%s messages=%d->%d tokens=~%s",
-            self.session_id or "none", _pre_msg_count, len(compressed),
-            f"{_compressed_est:,}",
-        )
-        return compressed, new_system_prompt
+            old_session_id = self.session_id
+            old_title = self._session_db.get_session_title(old_session_id)
+            continuation_start = datetime.now()
+            continuation_session_id = (
+                f"{continuation_start.strftime('%Y%m%d_%H%M%S')}_"
+                f"{uuid.uuid4().hex[:6]}"
+            )
+            self._session_db.create_session(
+                session_id=continuation_session_id,
+                source=self.platform or os.environ.get("VOIDCUBE_SESSION_SOURCE", "cli"),
+                model=self.model,
+                parent_session_id=old_session_id,
+            )
+            if old_title:
+                try:
+                    new_title = self._session_db.get_next_title_in_lineage(old_title)
+                    self._session_db.set_session_title(continuation_session_id, new_title)
+                except Exception as exc:
+                    logger.debug("Could not propagate title on compression: %s", exc)
+            self._session_db.update_system_prompt(continuation_session_id, system_prompt)
+            self._session_db.end_session(old_session_id, "compression")
+            self._bind_session_identity(
+                continuation_session_id, session_start=continuation_start,
+            )
+            return EffectOutcome(status="succeeded", details={"session_id": continuation_session_id})
+        except Exception as exc:
+            return failed_effect(exc)
 
     def _compress_for_api_recovery(
         self,

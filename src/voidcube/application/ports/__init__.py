@@ -8,6 +8,7 @@ implementations. Concrete adapters may live in ``infrastructure`` or
 from .runtime import (
     CallbackEventPort,
     CallbackPersistencePort,
+    ContextPort,
     EventPort,
     MemoryPort,
     PersistencePort,
@@ -17,6 +18,7 @@ from .runtime import (
 
 __all__ = [
     "EventPort",
+    "ContextPort",
     "CallbackEventPort",
     "CallbackPersistencePort",
     "MemoryPort",

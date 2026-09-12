@@ -106,7 +106,9 @@ def _ready_scope() -> None:
     mark_task_execution_ready(TASK_ID, active_backend="local")
 
 
-def test_project_toolsets_resolve_only_authoring_tools():
+def test_project_toolsets_resolve_only_authoring_tools(monkeypatch):
+    # Toolset membership must not depend on a configured container daemon.
+    monkeypatch.setenv("TERMINAL_ENV", "local")
     from voidcube.extensions.tools.model_tools import get_tool_definitions
 
     definitions = get_tool_definitions(
