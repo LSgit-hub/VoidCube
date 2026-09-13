@@ -24,6 +24,14 @@ def test_callback_event_port_contains_sink_failures():
     assert "sink down" in (outcome.error or "")
 
 
+def test_callback_event_port_preserves_structured_sink_outcome():
+    outcome = CallbackEventPort(
+        lambda _event: EffectOutcome(status="degraded", error="ui unavailable")
+    ).emit(object())
+    assert outcome.status == "degraded"
+    assert outcome.error == "ui unavailable"
+
+
 def test_runtime_ports_default_to_optional_capabilities():
     ports = RuntimePorts()
     assert ports.memory is None

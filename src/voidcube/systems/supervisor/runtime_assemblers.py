@@ -16,6 +16,8 @@ from ...infrastructure.runtime.layout import (
     get_runtime_layout,
 )
 from ...infrastructure.memory.governor_bridge import MemGovernorBridge
+from ...infrastructure.events import SupervisorDomainEventSink
+from ...domain.agent.effect_outcomes import EffectOutcome
 from ..body_registry import BodyRegistryManager
 from ..body_runtime_migration import migrate_body_runtime
 from ..execution import (
@@ -101,6 +103,7 @@ from .autonomous_task_memory_promotion_service import (
 )
 from .autonomous_task_review_service import AutonomousTaskReviewService
 from .autonomous_task_state import AutonomousTaskStateService
+from ...application.ports import CallbackEventPort
 from .scheduled_tasks import ScheduledTaskStore
 from .schedule_allocator import ScheduleAllocator
 from .task_profile_policy import TaskProfilePolicy
@@ -218,10 +221,33 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
         supervisor._record_endogenous_drive_outcome(task, event_type=event_type)
         supervisor._publish_ui_phase_for_task(task, event_type=event_type)
 
+    def record_governance_event(event: dict[str, Any]) -> EffectOutcome:
+        governor = getattr(supervisor, "_governor", None)
+        if governor is not None and hasattr(governor, "record_supervisor_activity"):
+            governor.record_supervisor_activity(event=event)
+            return EffectOutcome(status="succeeded")
+        return EffectOutcome(status="skipped", details={"reason": "governor_unavailable"})
+
+    def record_ui_domain_event(*args: Any, **kwargs: Any) -> EffectOutcome:
+        # Resolve lazily because UI runtime is assembled after the task state
+        # service in the supervisor bootstrap sequence.
+        ui_runtime = getattr(supervisor, "_ui_runtime", None)
+        if ui_runtime is not None:
+            ui_runtime.record_activity(*args, **kwargs)
+            return EffectOutcome(status="succeeded")
+        return EffectOutcome(status="skipped", details={"reason": "ui_unavailable"})
+
+    event_sink = SupervisorDomainEventSink(
+        record_governance=record_governance_event,
+        record_activity=record_ui_domain_event,
+        logger=logger,
+    )
+
     supervisor._autonomous_task_state = AutonomousTaskStateService(
         store=supervisor._autonomous_chain_store,
         governance_repository=supervisor._governor.governance_repository,
         on_status_change=record_employee_task_status_change,
+        event_port=CallbackEventPort(event_sink),
     )
     supervisor._autonomous_body_switch_consent_service = AutonomousBodySwitchConsentService(
         store=supervisor._autonomous_chain_store,

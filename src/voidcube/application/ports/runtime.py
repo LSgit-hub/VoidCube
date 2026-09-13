@@ -71,7 +71,12 @@ class CallbackEventPort:
         if self._callback is None:
             return EffectOutcome(status="skipped", details={"reason": "no_sink"})
         try:
-            self._callback(event)
+            result = self._callback(event)
+            # Legacy callbacks return ``None``; structured publishers may
+            # return their own outcome so projection degradation reaches the
+            # caller instead of being hidden by this compatibility adapter.
+            if isinstance(result, EffectOutcome):
+                return result
         except Exception as exc:
             return failed_effect(exc)
         return EffectOutcome(status="succeeded")
