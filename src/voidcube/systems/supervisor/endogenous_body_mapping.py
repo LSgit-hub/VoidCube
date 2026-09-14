@@ -39,7 +39,7 @@ _BODY_STRUCTURE_DOMAIN_TARGETS: tuple[
         "memory_access",
         ("memory", "recall", "记忆", "召回"),
         (
-            "src/voidcube/application/memory_manager.py",
+            "src/voidcube/infrastructure/memory/memory_bridge.py",
             "src/voidcube/domain/contracts/memory.py",
             "Mem/src/memai/application/recall.py",
         ),

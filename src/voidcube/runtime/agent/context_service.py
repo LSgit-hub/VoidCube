@@ -54,8 +54,11 @@ class ContextService:
         memory_outcome = EffectOutcome(status="skipped", details={"reason": "no_memory"})
         if self.memory is not None:
             try:
-                self.memory.on_pre_compress(messages)
-                memory_outcome = EffectOutcome(status="succeeded")
+                memory_outcome = require_effect_outcome(
+                    self.memory.on_pre_compress(messages), effect="memory pre-compress hook",
+                )
+                if memory_outcome.status in {"failed", "degraded"}:
+                    logger.warning("Memory pre-compress hook failed: %s", memory_outcome.error)
             except Exception as exc:
                 memory_outcome = failed_effect(exc)
                 logger.warning("Memory pre-compress hook failed: %s", exc, exc_info=True)

@@ -46,7 +46,7 @@ def _service(*, compress=None, memory=None, continuation=None, events=None):
 def test_compaction_preserves_memory_before_discard_and_reports_effects():
     original = [{"role": "user", "content": "important fact"}, {"role": "assistant", "content": "answer"}]
     memorized = []
-    memory = SimpleNamespace(on_pre_compress=lambda messages: memorized.extend(messages))
+    memory = SimpleNamespace(on_pre_compress=lambda messages: memorized.extend(messages) or EffectOutcome(status="queued", details={"write_id": "handoff-1"}))
 
     def compress(messages, **kwargs):
         assert memorized == original
@@ -67,7 +67,8 @@ def test_compaction_preserves_memory_before_discard_and_reports_effects():
     assert isinstance(event, ContextCompressed)
     assert event.session_id == "continuation"
     assert event.details["previous_session_id"] == "original"
-    assert event.details["memory"]["status"] == "succeeded"
+    assert event.details["memory"]["status"] == "queued"
+    assert event.details["memory"]["details"]["write_id"] == "handoff-1"
     assert event.details["continuation"]["status"] == "succeeded"
 
 
@@ -119,3 +120,47 @@ def test_event_port_exception_does_not_destroy_compacted_history():
     service, _, _, _ = _service(events=SimpleNamespace(emit=fail))
     compressed, _ = service.compress([{"role": "user", "content": "old"}], None)
     assert compressed[0]["content"] == "summary"
+
+
+@pytest.mark.parametrize("status", ["queued", "skipped", "degraded", "failed"])
+def test_real_bridge_preserves_pre_compress_handoff_status_in_event(status, monkeypatch):
+    from plugins.memory.mem import MemMemoryProvider
+    from voidcube.infrastructure.memory.memory_bridge import MemoryBridge
+
+    provider = MemMemoryProvider()
+    monkeypatch.setattr(provider, "on_pre_compress", lambda _: EffectOutcome(
+        status=status, details={"write_id": "handoff"},
+    ))
+    service, _, _, events = _service(memory=MemoryBridge(provider))
+    service.compress([{"role": "user", "content": "old"}], None)
+    memory = events[0].details["memory"]
+    assert memory["status"] == status
+    assert memory["details"]["write_id"] == "handoff"
+
+
+def test_default_mem_pre_compress_hook_does_not_claim_memory_was_saved():
+    from plugins.memory.mem import MemMemoryProvider
+    from voidcube.infrastructure.memory.memory_bridge import MemoryBridge
+
+    service, _, _, events = _service(memory=MemoryBridge(MemMemoryProvider()))
+    service.compress([{"role": "user", "content": "old"}], None)
+    assert events[0].details["memory"]["status"] == "skipped"
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_bridge_hook_failures_reach_compression_event(monkeypatch, raises):
+    from plugins.memory.mem import MemMemoryProvider
+    from voidcube.infrastructure.memory.memory_bridge import MemoryBridge
+
+    def hook(messages):
+        if raises:
+            raise OSError("disk full")
+        return None
+
+    provider = MemMemoryProvider()
+    monkeypatch.setattr(provider, "on_pre_compress", hook)
+    service, _, _, events = _service(memory=MemoryBridge(provider))
+    service.compress([{"role": "user", "content": "old"}], None)
+    memory = events[0].details["memory"]
+    assert memory["status"] == "failed"
+    assert ("disk full" if raises else "must return EffectOutcome") in memory["error"]

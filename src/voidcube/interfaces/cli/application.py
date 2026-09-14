@@ -744,7 +744,7 @@ def _run_cleanup():
         shutdown_cached_clients()
     except Exception:
         pass
-    # Shut down memory provider (on_session_end + shutdown_all) at actual
+    # Shut down memory provider (on_session_end + shutdown) at actual
     # session boundary — NOT per-turn inside run_conversation().
     try:
         from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook

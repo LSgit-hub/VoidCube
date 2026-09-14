@@ -1,13 +1,13 @@
 """Abstract interface for canonical service-backed memory.
 
 Memory providers give the agent canonical service-backed recall and durable
-memory across sessions. The MemoryManager permits one provider at a time to
+memory across sessions. The MemoryBridge owns one provider at a time to
 prevent tool schema bloat and conflicting long-term backends.
 
 Registration:
 The active implementation is ``plugins.memory.mem.MemMemoryProvider``.
 
-Lifecycle (called by MemoryManager, wired in the Agent runtime):
+Lifecycle (called by MemoryBridge, wired in the Agent runtime):
   initialize()          — connect, create resources, warm up
   bind_session()        — switch provider state to the active session
   system_prompt_block()  — static text for the system prompt
@@ -20,7 +20,7 @@ Lifecycle (called by MemoryManager, wired in the Agent runtime):
 Optional hooks (override to opt in):
   on_turn_start(turn, message, **kwargs) — per-turn tick with runtime context
   on_session_end(messages)               — end-of-session extraction
-  on_pre_compress(messages) -> str       — extract before context compression
+  on_pre_compress(messages)              — report pre-compression handoff
   on_delegation(task, result, **kwargs)  — parent-side observation of subagent work
 """
 
@@ -134,8 +134,9 @@ class MemoryProvider(ABC):
         """
         raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
 
-    def shutdown(self) -> None:
+    def shutdown(self) -> EffectOutcome:
         """Clean shutdown — flush queues, close connections."""
+        return EffectOutcome(status="skipped", details={"reason": "no_shutdown_hook"})
 
     # -- Optional hooks (override to opt in) ---------------------------------
 
@@ -148,7 +149,7 @@ class MemoryProvider(ABC):
         Providers use what they need; extras are ignored.
         """
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> EffectOutcome:
         """Called when a session ends (explicit exit or timeout).
 
         Use for end-of-session fact extraction, summarization, etc.
@@ -157,21 +158,23 @@ class MemoryProvider(ABC):
         NOT called after every turn — only at actual session boundaries
         (CLI exit, /reset, gateway session expiry).
         """
+        return EffectOutcome(status="skipped", details={"reason": "no_session_end_hook"})
 
-    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> EffectOutcome:
         """Called before context compression discards old messages.
 
         Use to extract insights from messages about to be compressed.
         messages is the list that will be summarized/discarded.
 
-        Return text to include in the compression summary prompt so the
-        compressor preserves provider-extracted insights. Return empty
-        string for no contribution (backwards-compatible default).
+        Report the actual handoff, including any durable write receipt.
+        A provider without extra pre-compression work returns skipped. Neither
+        a skipped hook nor an accepted queue entry proves long-term extraction
+        or persistence has completed.
         """
-        return ""
+        return EffectOutcome(status="skipped", details={"reason": "no_pre_compress_hook"})
 
     def on_delegation(self, task: str, result: str, *,
-                      child_session_id: str = "", **kwargs) -> None:
+                      child_session_id: str = "", **kwargs) -> EffectOutcome:
         """Called on the PARENT agent when a subagent completes.
 
         The parent's memory provider gets the task+result pair as an
@@ -182,6 +185,7 @@ class MemoryProvider(ABC):
         result: the subagent's final response
         child_session_id: the subagent's session_id
         """
+        return EffectOutcome(status="skipped", details={"reason": "no_delegation_hook"})
 
     def get_config_schema(self) -> List[Dict[str, Any]]:
         """Return config fields this provider needs for setup.

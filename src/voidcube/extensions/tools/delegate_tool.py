@@ -1092,7 +1092,8 @@ def delegate_task(
         _archive_display_manager(parent_agent, invocation_id, display_manager)
 
     # Notify parent's memory provider of delegation outcomes
-    if parent_agent and hasattr(parent_agent, '_memory_manager') and parent_agent._memory_manager:
+    memory_port = parent_agent.runtime_ports.memory if parent_agent else None
+    if memory_port is not None:
         for entry in results:
             try:
                 _task_goal = task_list[entry["task_index"]]["goal"] if entry["task_index"] < len(task_list) else ""
@@ -1102,13 +1103,15 @@ def delegate_task(
                     if child_info[0] == entry["task_index"]:
                         child_session_id = getattr(child_info[2], "session_id", "")
                         break
-                parent_agent._memory_manager.on_delegation(
+                outcome = memory_port.on_delegation(
                     task=_task_goal,
                     result=entry.get("summary", "") or "",
                     child_session_id=child_session_id,
                 )
+                if outcome.status in {"failed", "degraded"}:
+                    logger.warning("Delegation memory hook failed: %s", outcome.error)
             except Exception:
-                pass
+                logger.warning("Delegation memory hook failed", exc_info=True)
 
     total_duration = round(time.monotonic() - overall_start, 2)
 

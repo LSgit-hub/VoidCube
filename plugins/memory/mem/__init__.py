@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 def activate(manager: Any, config: dict[str, Any] | None = None) -> None:
     """Register the memory plugin boundary without creating a second provider.
 
-    The Agent runtime owns ``MemMemoryProvider`` construction and session
+    The MemoryBridge factory owns ``MemMemoryProvider`` construction and session
     lifecycle.  The generic plugin registry still requires a module-level
     activation hook, so this adapter intentionally performs no initialization.
     """
@@ -534,25 +534,33 @@ class MemMemoryProvider(MemoryProvider):
             },
         )
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> EffectOutcome:
         """Queue session closure after all earlier durable Turn writes."""
         del messages
-        if not self._initialized or self._outbox is None or not self._session_id:
-            return
-        self._outbox.enqueue(
-            {
-                "write_id": f"session-close:{self._session_id}",
-                "operation": "close_session",
-                "session_id": self._session_id,
-                **self._scope_payload(),
-            }
-        )
-        self._sync_wake.set()
-
-    def shutdown(self) -> None:
         if not self._initialized:
-            return
+            return EffectOutcome(status="skipped", details={"reason": "not_initialized"})
+        if self._outbox is None or not self._session_id:
+            return EffectOutcome(status="failed", error="Session closure requires an outbox and session ID")
+        write_id = f"session-close:{self._session_id}"
+        try:
+            self._outbox.enqueue(
+                {
+                    "write_id": write_id,
+                    "operation": "close_session",
+                    "session_id": self._session_id,
+                    **self._scope_payload(),
+                }
+            )
+        except Exception as exc:
+            return failed_effect(exc)
+        self._sync_wake.set()
+        return EffectOutcome(status="queued", details={"write_id": write_id, "durable_outbox": True})
+
+    def shutdown(self) -> EffectOutcome:
+        if not self._initialized:
+            return EffectOutcome(status="skipped", details={"reason": "not_initialized"})
         self._initialized = False
+        failure = None
         thread = self._sync_thread
         if thread is not None:
             deadline = (
@@ -572,6 +580,7 @@ class MemMemoryProvider(MemoryProvider):
                     self._sync_wake.set()
             except Exception as exc:
                 logger.warning("Memory outbox shutdown drain failed: %s", exc)
+                failure = str(exc)
             finally:
                 self._sync_stop.set()
                 self._sync_wake.set()
@@ -579,6 +588,7 @@ class MemMemoryProvider(MemoryProvider):
             if remaining > 0:
                 thread.join(timeout=remaining)
             if thread.is_alive():
+                failure = failure or "Memory outbox shutdown drain timed out"
                 remaining_writes = (
                     self._outbox.pending_count() if self._outbox is not None else 0
                 )
@@ -588,6 +598,11 @@ class MemMemoryProvider(MemoryProvider):
                 )
             else:
                 self._sync_thread = None
+        return EffectOutcome(
+            status="degraded" if failure else "succeeded",
+            error=failure,
+            details={"pending_writes": self._outbox.pending_count() if self._outbox is not None else 0},
+        )
 
     def outbox_status(self) -> dict[str, Any]:
         """Return durable write backlog and retry state for local monitoring."""

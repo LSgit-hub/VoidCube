@@ -46,7 +46,6 @@ from ...infrastructure.config.environment import load_VoidCube_dotenv
 from ...domain.contracts.interaction import ClarificationSink
 from ...domain.contracts.execution import ExecutionState
 from ...domain.contracts.tool_events import ToolEvent, ToolEventSink
-from memai.domain.scope import CLI_WORKSPACE_ID
 
 _VoidCube_home = get_VoidCube_home()
 # In a source checkout the project root is four levels above this module;
@@ -93,7 +92,8 @@ def get_active_env(task_id: str):
     return _get_active_env(task_id)
 
 # Agent internals extracted to agent/ package for modularity
-from ...application.memory_manager import build_memory_context_block
+from ...application.memory_context import build_memory_context_block
+from ...infrastructure.memory.memory_bridge import create_memory_bridge
 from ...application.ports import CallbackEventPort, CallbackPersistencePort, RuntimePorts
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
 from ...domain.events import CheckpointPersistFailed
@@ -676,49 +676,22 @@ class AIAgent:
         # ordinary long-term recall. Normal agents keep this empty.
         self._memory_sync_tags: list[str] = []
 
-        # Canonical Memory Service provider.
-        self._memory_manager = None
+        # Mem construction and provider lifecycle belong to the infrastructure adapter.
+        memory_port = None
+        if not skip_memory:
+            try:
+                memory_port = create_memory_bridge(
+                    session_id=self.session_id, platform=platform or "cli",
+                    user_id=self._user_id,
+                )
+                logger.info("Canonical Mem provider activated")
+            except Exception as exc:
+                logger.warning("Canonical Mem provider init failed: %s", exc)
         self.runtime_ports = RuntimePorts(
+            memory=memory_port,
             persistence=CallbackPersistencePort(self._session_persistence.persist),
             events=self._event_port,
         )
-        if not skip_memory:
-            try:
-                from ...application.memory_manager import MemoryManager as _MemoryManager
-                from plugins.memory.mem import MemMemoryProvider
-
-                self._memory_manager = _MemoryManager()
-                self._memory_manager.add_provider(MemMemoryProvider())
-                from ...infrastructure.config.runtime_paths import get_VoidCube_home as _ghh
-                _init_kwargs: dict[str, Any] = {
-                    "session_id": self.session_id,
-                    "platform": platform or "cli",
-                    "VoidCube_home": str(_ghh()),
-                    "agent_context": "primary",
-                }
-                _init_kwargs["agent_workspace"] = CLI_WORKSPACE_ID
-                if self._user_id:
-                    _init_kwargs["user_id"] = self._user_id
-                try:
-                    from ...infrastructure.config.profiles import get_active_profile_name
-                    _profile = get_active_profile_name()
-                    _init_kwargs["agent_identity"] = _profile
-                except Exception as exc:
-                    logger.debug("Active profile lookup skipped: %s", exc, exc_info=True)
-                self._memory_manager.initialize_all(**_init_kwargs)
-                self.runtime_ports = RuntimePorts(
-                    memory=self._memory_manager,
-                    persistence=self.runtime_ports.persistence,
-                    events=self._event_port,
-                )
-                logger.info("Canonical Mem provider activated")
-            except Exception as _mpe:
-                logger.warning("Canonical Mem provider init failed: %s", _mpe)
-                self._memory_manager = None
-                self.runtime_ports = RuntimePorts(
-                    persistence=self.runtime_ports.persistence,
-                    events=self._event_port,
-                )
 
         # Inject memory provider tool schemas into the tool surface
         if self.runtime_ports.memory and self.tools is not None:
@@ -2090,18 +2063,22 @@ class AIAgent:
     def shutdown_memory_provider(self, messages: list | None = None) -> None:
         """Shut down the memory provider and context engine — call at actual session boundaries.
 
-        This calls on_session_end() then shutdown_all() on the memory
+        This calls on_session_end() then shutdown() on the memory
         manager, and on_session_end() on the context engine.
         NOT called per-turn — only at CLI exit, /reset, gateway
         session expiry, etc.
         """
         if self.runtime_ports.memory:
             try:
-                self.runtime_ports.memory.on_session_end(messages or [])
+                outcome = self.runtime_ports.memory.on_session_end(messages or [])
+                if outcome.status in {"failed", "degraded"}:
+                    logger.warning("Memory session-end hook failed: %s", outcome.error)
             except Exception as exc:
                 logger.warning("Memory session-end hook failed: %s", exc, exc_info=True)
             try:
-                self.runtime_ports.memory.shutdown_all()
+                outcome = self.runtime_ports.memory.shutdown()
+                if outcome.status in {"failed", "degraded"}:
+                    logger.warning("Memory provider shutdown failed: %s", outcome.error)
             except Exception as exc:
                 logger.warning("Memory provider shutdown failed: %s", exc, exc_info=True)
         # Notify context engine of session end (flush DAG, close DBs, etc.)
@@ -4066,7 +4043,7 @@ class AIAgent:
 
         # Canonical Mem: prefetch once before the tool loop.
         # Reuse the cached result on every iteration to avoid re-calling
-        # prefetch_all() on each tool call (10 tool calls = 10x latency + cost).
+        # prefetch() on each tool call (10 tool calls = 10x latency + cost).
         # Use original_user_message (clean input) — user_message may contain
         # injected skill content that bloats / breaks provider queries.
         _ext_prefetch_cache = ""
