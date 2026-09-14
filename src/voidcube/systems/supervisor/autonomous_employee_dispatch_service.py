@@ -331,6 +331,9 @@ class AutonomousEmployeeDispatchService:
             success = run_status == "completed"
             result_summary = str(run.get("result_summary") or "").strip()
             result_context = self._result_context(schedule, run)
+            result_context["memory_write_status"] = str(
+                run.get("memory_write_status") or "unknown"
+            )
             evidence_validation = (
                 self._validate_body_improvement_result(task, result_summary)
                 if success
@@ -349,8 +352,18 @@ class AutonomousEmployeeDispatchService:
             if success and not evidence_validation.get("ok"):
                 success = False
             final_status = "completed" if success else "failed"
+            # Keep execution completion separate from downstream memory
+            # promotion. A worker result is evidence of execution only; it
+            # must not be presented as durable memory until a later write
+            # receipt is available.
+            result_context["execution_outcome"] = {
+                "status": "succeeded" if success else "failed",
+                "source": "employee_run",
+            }
             metadata: Dict[str, Any] = {
                 "employee_execution_result": result_context,
+                "execution_outcome_status": result_context["execution_outcome"]["status"],
+                "memory_write_status": result_context["memory_write_status"],
                 "completed_at": str(run.get("completed_at") or ""),
                 "employee_result_disposition": {
                     "status": "returned_to_xingzi",

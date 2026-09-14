@@ -266,6 +266,11 @@ class AutonomousTaskStateService:
             or task.evidence.get("memory_write_status")
             or "unknown"
         )
+        execution_outcome_status = str(
+            task.metadata.get("execution_outcome_status")
+            or task.evidence.get("execution_outcome_status")
+            or "unknown"
+        )
         transition = AutonomousTaskTransition(
             task_id=task.task_id,
             from_status=str(previous_decision.status if previous_decision else ""),
@@ -317,6 +322,7 @@ class AutonomousTaskStateService:
                         "attempt": transition.attempt,
                         "evidence_refs": list(transition.evidence_refs),
                         "memory_write_status": transition.memory_write_status,
+                        "execution_outcome_status": execution_outcome_status,
                         "context": dict(transition.context),
                     },
                     "autonomous_task_projection": task.model_dump(mode="json"),

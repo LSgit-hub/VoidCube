@@ -29,6 +29,7 @@ def test_state_service_owns_mutations_and_governance_events(tmp_path) -> None:
             "attempt": 2,
             "evidence_refs": ["probe-1"],
             "memory_write_status": "queued",
+            "execution_outcome_status": "succeeded",
         },
     )
     service.update_priority(
@@ -61,6 +62,7 @@ def test_state_service_owns_mutations_and_governance_events(tmp_path) -> None:
     assert evidence["attempt"] == 2
     assert evidence["evidence_refs"] == ["probe-1"]
     assert evidence["memory_write_status"] == "queued"
+    assert evidence["execution_outcome_status"] == "succeeded"
 
     service.clear_tasks([store.get_task(task.task_id)])
 
