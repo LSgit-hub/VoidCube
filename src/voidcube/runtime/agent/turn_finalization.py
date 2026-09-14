@@ -72,6 +72,45 @@ class TurnDiagnostics:
         return self.last_message_role == "tool" and not self.interrupted
 
 
+@dataclass(frozen=True, slots=True)
+class FinalizationResult:
+    """Typed summary of turn side effects.
+
+    ``queued`` remains visible in the individual outcome and is deliberately
+    not promoted to ``succeeded``: it means a durable handoff exists, while
+    downstream processing may still fail.
+    """
+
+    cleanup: EffectOutcome
+    persistence: EffectOutcome
+    memory_sync: EffectOutcome
+
+    @property
+    def status(self) -> str:
+        return finalization_status(self.cleanup, self.persistence, self.memory_sync)
+
+    def as_dict(self) -> dict[str, Any]:
+        cleanup_payload = {"status": self.cleanup.status}
+        cleanup_payload.update(dict(self.cleanup.details))
+        if self.cleanup.error:
+            cleanup_payload["error"] = self.cleanup.error
+        return {
+            "status": self.status,
+            "cleanup": cleanup_payload,
+            "persistence": self.persistence.as_dict(),
+            "memory_sync": self.memory_sync.as_dict(),
+        }
+
+
+__all__ = [
+    "FinalizationResult",
+    "TurnDiagnostics",
+    "TurnFinalizationPorts",
+    "derive_turn_diagnostics",
+    "finalize_turn",
+]
+
+
 def derive_turn_diagnostics(
     messages: list[dict[str, Any]],
     state: ConversationTurnState,
@@ -350,25 +389,20 @@ def finalize_conversation_turn(
         interrupt_cleanup_outcome,
         stream_cleanup_outcome,
     )
-    result["finalization"] = {
-        "status": finalization_status(
-            cleanup_outcome,
-            persistence_outcome,
-            preview_cleanup_outcome,
-            interrupt_cleanup_outcome,
-            stream_cleanup_outcome,
-            memory_outcome,
+    finalization = FinalizationResult(
+        cleanup=EffectOutcome(
+            status=cleanup_status,
+            details={
+                "task_resources": cleanup_outcome.as_dict(),
+                "response_preview": preview_cleanup_outcome.as_dict(),
+                "interrupt": interrupt_cleanup_outcome.as_dict(),
+                "stream_callback": stream_cleanup_outcome.as_dict(),
+            },
         ),
-        "cleanup": {
-            "status": cleanup_status,
-            "task_resources": cleanup_outcome.as_dict(),
-            "response_preview": preview_cleanup_outcome.as_dict(),
-            "interrupt": interrupt_cleanup_outcome.as_dict(),
-            "stream_callback": stream_cleanup_outcome.as_dict(),
-        },
-        "persistence": persistence_outcome.as_dict(),
-        "memory_sync": memory_outcome.as_dict(),
-    }
+        persistence=persistence_outcome,
+        memory_sync=memory_outcome,
+    )
+    result["finalization"] = finalization.as_dict()
 
     if ports.event_port is not None and state.final_response:
         event_outcome = ports.event_port.emit(
