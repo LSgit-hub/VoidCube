@@ -18,6 +18,7 @@ from ...domain.tasks.runtime_profile import (
 )
 from ...domain.state.autonomous_task import (
     validate_autonomous_task_transition,
+    validate_task_outcome_bundle,
 )
 
 # `approved` means API-B has authorized employee dispatch, not that execution
@@ -477,6 +478,19 @@ class AutonomousChainStore:
                     self._write_snapshot(snapshot)
                     return task
                 validate_autonomous_task_transition(current, target)
+                metadata = dict(task.metadata or {})
+                transition_context = dict(context or {})
+                validate_task_outcome_bundle(
+                    target,
+                    execution_outcome_status=str(
+                        transition_context.get("execution_outcome_status")
+                        or metadata.get("execution_outcome_status") or "unknown"
+                    ),
+                    memory_write_status=str(
+                        transition_context.get("memory_write_status")
+                        or metadata.get("memory_write_status") or "unknown"
+                    ),
+                )
                 task.status = status
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason
