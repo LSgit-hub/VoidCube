@@ -18,6 +18,27 @@ class _TaskState:
 
 
 @pytest.mark.asyncio
+async def test_failed_execution_cannot_enter_memory_promotion():
+    state = _TaskState()
+    service = AutonomousTaskMemoryPromotionService(
+        task_state=state,
+        memory_client_factory=lambda **_: pytest.fail("must not write memory"),
+    )
+    task = AutonomousChainTask(
+        title="Rejected result",
+        source="self_learning",
+        status="completed",
+        metadata={"execution_outcome_status": "failed"},
+    )
+
+    result = await service.propose(task)
+
+    assert result["status"] == "deferred"
+    assert result["reason"] == "execution_outcome_not_successful"
+    assert state.metadata_updates == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("source", "expected_topics"),
     [

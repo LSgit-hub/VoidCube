@@ -50,6 +50,24 @@ class AutonomousTaskMemoryPromotionService:
         if not verified and not completed:
             return None
 
+        # A terminal task may still have failed downstream effects. Never
+        # promote a conclusion when execution is explicitly degraded/failed;
+        # an absent field remains a legacy-compatible unknown and is recorded
+        # below rather than being mistaken for a successful write.
+        execution_status = str(
+            metadata.get("execution_outcome_status")
+            or (metadata.get("employee_execution_result") or {}).get(
+                "execution_outcome", {}
+            ).get("status")
+            or "unknown"
+        ).strip().lower()
+        if execution_status in {"failed", "degraded"}:
+            return {
+                "status": "deferred",
+                "reason": "execution_outcome_not_successful",
+                "execution_outcome_status": execution_status,
+            }
+
         existing_status = str(
             metadata.get("memory_promotion_candidate_status") or ""
         ).strip()
@@ -200,6 +218,7 @@ class AutonomousTaskMemoryPromotionService:
                 "memory_promotion_candidate_id": result.get("candidate_id"),
                 "memory_promotion_candidate_status": result["status"],
                 "memory_promotion_governance_ref": governance_ref,
+                "memory_write_status": "succeeded",
             },
         )
         return result
