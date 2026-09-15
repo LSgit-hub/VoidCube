@@ -16,7 +16,7 @@ from .autonomous_chain_store import (
     AutonomousChainStore,
     AutonomousChainTask,
 )
-from ...domain.state.autonomous_task import AutonomousTaskTransition
+from ...domain.state.autonomous_task import AutonomousTaskTransition, validate_task_outcome_bundle
 from ...application.ports import EventPort
 from ...domain.events import (
     AutonomousTaskReviewed,
@@ -183,13 +183,27 @@ class AutonomousTaskStateService:
         execution_request: Optional[AutonomousChainExecutionRequest] = None,
         event_type: str = "status_update",
     ) -> AutonomousChainTask:
+        current = self._store.get_task(task_id)
+        metadata = dict((current.metadata if current is not None else {}) or {})
+        supplied_context = dict(context or {})
+        validate_task_outcome_bundle(
+            status,
+            execution_outcome_status=str(
+                supplied_context.get("execution_outcome_status")
+                or metadata.get("execution_outcome_status") or "unknown"
+            ),
+            memory_write_status=str(
+                supplied_context.get("memory_write_status")
+                or metadata.get("memory_write_status") or "unknown"
+            ),
+        )
         task = self._store.update_status(
             task_id,
             status=status,
             decision_id=decision_id,
             actor=actor,
             reason=reason or f"Status updated to {status}",
-            context=dict(context or {}),
+            context=supplied_context,
             execution_request=execution_request,
             before_commit=lambda updated: self._record_transition(
                 updated,
