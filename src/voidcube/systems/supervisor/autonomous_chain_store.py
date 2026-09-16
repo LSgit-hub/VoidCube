@@ -848,6 +848,11 @@ class AutonomousChainStore:
                         reason=reason,
                         context={
                             **dict(context or {}),
+                            "task_id": task.task_id,
+                            "trace_id": task.trace_id,
+                            "cycle_id": str(task.metadata.get("cycle_id") or ""),
+                            "attempt": int(task.metadata.get("attempt") or generation),
+                            "lease_id": str(task.metadata.get("lease_id") or attempt_id),
                             "lease_generation": generation,
                             "attempt_id": attempt_id,
                         },
@@ -897,6 +902,9 @@ class AutonomousChainStore:
                     expires_at=datetime.now(timezone.utc),
                     state="reconciling",
                 )
+                task.metadata["attempt"] = task.execution_lease.generation
+                task.metadata["lease_id"] = task.execution_lease.attempt_id
+                task.metadata.setdefault("cycle_id", str(uuid.uuid4()))
                 task.decision_history.append(
                     AutonomousChainTaskDecision(
                         status="reconciling",
@@ -909,6 +917,11 @@ class AutonomousChainStore:
                         reason=reason,
                         context={
                             **dict(context or {}),
+                            "task_id": task.task_id,
+                            "trace_id": task.trace_id,
+                            "cycle_id": task.metadata["cycle_id"],
+                            "attempt": task.metadata["attempt"],
+                            "lease_id": task.metadata["lease_id"],
                             "previous_generation": previous_generation,
                             "previous_attempt_id": previous_attempt_id,
                             "fence_generation": task.execution_lease.generation,
@@ -953,6 +966,9 @@ class AutonomousChainStore:
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason
                 lease.state = "expired"
+                task.metadata["attempt"] = int(expected_generation)
+                task.metadata["lease_id"] = str(expected_attempt_id).strip()
+                task.metadata.setdefault("cycle_id", str(uuid.uuid4()))
                 task.decision_history.append(
                     AutonomousChainTaskDecision(
                         status="failed",
@@ -964,6 +980,11 @@ class AutonomousChainStore:
                         actor="supervisor",
                         reason=reason,
                         context={
+                            "task_id": task.task_id,
+                            "trace_id": task.trace_id,
+                            "cycle_id": task.metadata["cycle_id"],
+                            "attempt": task.metadata["attempt"],
+                            "lease_id": task.metadata["lease_id"],
                             "lease_generation": expected_generation,
                             "attempt_id": expected_attempt_id,
                             "heartbeat_at": (
