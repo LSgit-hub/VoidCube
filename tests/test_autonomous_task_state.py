@@ -68,3 +68,25 @@ def test_state_service_owns_mutations_and_governance_events(tmp_path) -> None:
 
     assert repository.events[-1].event_type.value == "autonomous_task_clear"
     assert store.list_tasks() == []
+
+
+def test_store_finalize_execution_rejects_failed_completed_outcome(tmp_path) -> None:
+    store = AutonomousChainStore(tmp_path / "tasks.json")
+    task = store.create_task(title="terminal guard")
+    store.update_status(task.task_id, status="approved", reason="ready")
+    running = store.claim_execution(
+        task.task_id, owner_session_id="worker-1", lease_seconds=30,
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="successful execution"):
+        store.finalize_execution(
+            task.task_id,
+            generation=running.execution_lease.generation,
+            attempt_id=running.execution_lease.attempt_id,
+            status="completed",
+            actor="worker-1",
+            reason="invalid completion",
+            context={"execution_outcome_status": "failed"},
+        )

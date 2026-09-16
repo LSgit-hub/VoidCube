@@ -803,6 +803,21 @@ class AutonomousChainStore:
                     raise StaleExecutionLeaseError(
                         f"stale_execution_lease: task {task_id} cannot finalize from {task.status}"
                     )
+                final_metadata = dict(task.metadata or {})
+                final_context = dict(context or {})
+                if metadata:
+                    final_metadata.update(dict(metadata))
+                validate_task_outcome_bundle(
+                    status,
+                    execution_outcome_status=str(
+                        final_context.get("execution_outcome_status")
+                        or final_metadata.get("execution_outcome_status") or "unknown"
+                    ),
+                    memory_write_status=str(
+                        final_context.get("memory_write_status")
+                        or final_metadata.get("memory_write_status") or "unknown"
+                    ),
+                )
                 task.status = status
                 task.updated_at = datetime.utcnow()
                 task.decision_reason = reason
