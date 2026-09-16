@@ -509,7 +509,9 @@ class AutonomousChainStore:
                         trace_id=task.trace_id,
                         actor=actor,
                         reason=reason,
-                        context=dict(context or {}),
+                        context=self._decision_context(
+                            task, from_status=current, reason=reason, context=context,
+                        ),
                     )
                 )
                 if execution_request is not None:
@@ -668,7 +670,7 @@ class AutonomousChainStore:
                         actor=actor,
                         reason=reason,
                         context={
-                            **dict(context or {}),
+                            **self._decision_context(task, from_status="approved", reason=reason, context=context),
                             "task_id": task.task_id,
                             "trace_id": task.trace_id,
                             "cycle_id": task.metadata["cycle_id"],
@@ -847,7 +849,7 @@ class AutonomousChainStore:
                         actor=actor,
                         reason=reason,
                         context={
-                            **dict(context or {}),
+                            **self._decision_context(task, from_status="running", reason=reason, context=context),
                             "task_id": task.task_id,
                             "trace_id": task.trace_id,
                             "cycle_id": str(task.metadata.get("cycle_id") or ""),
@@ -916,7 +918,7 @@ class AutonomousChainStore:
                         actor="supervisor",
                         reason=reason,
                         context={
-                            **dict(context or {}),
+                            **self._decision_context(task, from_status="running", reason=reason, context=context),
                             "task_id": task.task_id,
                             "trace_id": task.trace_id,
                             "cycle_id": task.metadata["cycle_id"],
@@ -980,6 +982,7 @@ class AutonomousChainStore:
                         actor="supervisor",
                         reason=reason,
                         context={
+                            **self._decision_context(task, from_status="running", reason=reason, context=None),
                             "task_id": task.task_id,
                             "trace_id": task.trace_id,
                             "cycle_id": task.metadata["cycle_id"],
@@ -1225,6 +1228,55 @@ class AutonomousChainStore:
             self.storage_path,
             snapshot.model_dump(mode="json"),
         )
+
+    @staticmethod
+    def _decision_context(
+        task: AutonomousChainTask,
+        *,
+        from_status: str,
+        reason: str,
+        context: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build the canonical cross-system transition envelope."""
+        metadata = dict(task.metadata or {})
+        envelope = dict(context or {})
+        envelope.update(
+            {
+                "task_id": task.task_id,
+                "from_status": str(from_status),
+                "to_status": str(task.status),
+                "cycle_id": str(metadata.get("cycle_id") or ""),
+                "lease_id": str(
+                    metadata.get("lease_id")
+                    or task.execution_lease.attempt_id
+                    or ""
+                ),
+                "attempt": int(
+                    metadata.get("attempt")
+                    or task.execution_lease.generation
+                    or 0
+                ),
+                "reason": str(reason or ""),
+                "evidence_refs": list(
+                    dict.fromkeys(
+                        str(ref).strip()
+                        for ref in (
+                            list(task.evidence.get("evidence_refs") or [])
+                            + list(metadata.get("evidence_refs") or [])
+                            + list(envelope.get("evidence_refs") or [])
+                        )
+                        if str(ref).strip()
+                    )
+                ),
+                "memory_write_status": str(
+                    envelope.get("memory_write_status")
+                    or metadata.get("memory_write_status")
+                    or task.evidence.get("memory_write_status")
+                    or "unknown"
+                ),
+            }
+        )
+        return envelope
 
     def _list_tasks_by_statuses(
         self,

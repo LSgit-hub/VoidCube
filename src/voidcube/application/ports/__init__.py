@@ -10,6 +10,7 @@ from .runtime import (
     CallbackPersistencePort,
     CallbackGovernancePort,
     CallbackTaskPort,
+    CallbackToolPort,
     ContextPort,
     EventPort,
     GovernancePort,
@@ -17,6 +18,7 @@ from .runtime import (
     PersistencePort,
     RuntimePorts,
     TaskPort,
+    ToolPort,
 )
 
 __all__ = [
@@ -28,7 +30,9 @@ __all__ = [
     "PersistencePort",
     "RuntimePorts",
     "TaskPort",
+    "ToolPort",
     "GovernancePort",
     "CallbackTaskPort",
+    "CallbackToolPort",
     "CallbackGovernancePort",
 ]

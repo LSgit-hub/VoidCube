@@ -1203,16 +1203,17 @@
         (item.uri ? " · " + escapeHtml(item.uri) : "") + "</li>";
     }).join("") : '<li class="evidence-item">暂无证据</li>';
     $("detail-content").innerHTML =
-      '<div class="detail-type">' + escapeHtml(typeLabel(node.nodeType)) + "</div>" +
-      '<p class="detail-description">' + escapeHtml(node.description || "暂无描述") + "</p>" +
-      '<div class="detail-meter"><div class="detail-meter-fill" style="width:' +
-      percent(node.progress) + ";background:" + progressColor(node.progress) + '"></div></div>' +
-      '<div class="detail-meter-row"><span>' + escapeHtml(statusLabel(node.status)) +
-      '</span><strong>' + percent(node.progress) + "</strong></div>" +
-      '<div class="detail-grid">' +
-      detailField("优先级", node.priority) + detailField("置信度", percent(node.confidence)) +
-      detailField("进度模式", node.progressMode) + detailField("版本", node.version) +
-      "</div>" +
+        '<p class="detail-description">' + escapeHtml(node.description || "暂无描述") + "</p>" +
+        '<section class="detail-section detail-summary"><div class="detail-summary-heading">' +
+        '<span class="detail-type">' + escapeHtml(typeLabel(node.nodeType)) + "</span>" +
+        '<strong class="detail-summary-status">' + escapeHtml(statusLabel(node.status)) + "</strong></div>" +
+        '<div class="detail-meter"><div class="detail-meter-fill" style="width:' +
+        percent(node.progress) + ";background:" + progressColor(node.progress) + '"></div></div>' +
+        '<div class="detail-meter-row"><span>完成进度</span><strong>' + percent(node.progress) + "</strong></div>" +
+        '<div class="detail-grid">' +
+        detailField("优先级", node.priority) + detailField("置信度", percent(node.confidence)) +
+        detailField("进度模式", node.progressMode) + detailField("版本", node.version) +
+        "</div></section>" +
       reviewQueueHtml() +
       '<section class="detail-section"><h3>验收条件</h3><ul id="criteria-list" class="criteria-list">' +
       criteriaHtml + "</ul>" +

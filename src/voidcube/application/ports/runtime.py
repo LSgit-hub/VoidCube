@@ -49,6 +49,14 @@ class TaskPort(Protocol):
     def submit(self, task: str, *, session_id: str = "") -> EffectOutcome: ...
 
 
+class ToolPort(Protocol):
+    """Stable boundary for invoking a named tool from orchestration code."""
+
+    def invoke(
+        self, tool_name: str, arguments: Mapping[str, Any], *, tool_call_id: str = ""
+    ) -> str: ...
+
+
 class GovernancePort(Protocol):
     def record_decision(self, decision: Any) -> EffectOutcome: ...
 
@@ -116,6 +124,26 @@ class CallbackTaskPort:
             return failed_effect(exc)
 
 
+class CallbackToolPort:
+    """Adapt a tool router while keeping invocation details behind a port."""
+
+    def __init__(self, callback: Callable[..., Any] | None) -> None:
+        self._callback = callback
+
+    def invoke(
+        self, tool_name: str, arguments: Mapping[str, Any], *, tool_call_id: str = ""
+    ) -> str:
+        if self._callback is None:
+            return "tool_unavailable"
+        try:
+            result = self._callback(
+                str(tool_name), dict(arguments), tool_call_id=str(tool_call_id or "")
+            )
+            return result if isinstance(result, str) else str(result)
+        except Exception as exc:
+            return f"tool_failed: {type(exc).__name__}: {exc}"
+
+
 class CallbackGovernancePort:
     """Normalize governance persistence callbacks without leaking exceptions."""
     def __init__(self, callback: Callable[[Any], Any] | None) -> None:
@@ -144,6 +172,7 @@ class RuntimePorts:
     governance: GovernancePort | None = None
     events: EventPort | None = None
     context: ContextPort | None = None
+    tool: ToolPort | None = None
 
 
 __all__ = [
@@ -155,7 +184,9 @@ __all__ = [
     "PersistencePort",
     "RuntimePorts",
     "TaskPort",
+    "ToolPort",
     "GovernancePort",
     "CallbackTaskPort",
+    "CallbackToolPort",
     "CallbackGovernancePort",
 ]

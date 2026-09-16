@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: "Aptos", "Segoe UI Variable", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   font-synthesis: none;
   --app-bar-height: 46px;
   --monitor-size: 54%;
@@ -15,6 +15,8 @@
   --amber: #e6bd69;
   --coral: #ef7f79;
   --blue: #70a8e8;
+  --cyan: #64c7d7;
+  --shadow-deep: 0 18px 44px rgb(0 0 0 / 24%);
 }
 
 * {
@@ -31,7 +33,9 @@ body,
 }
 
 body {
-  background: var(--surface);
+  background:
+    radial-gradient(circle at 82% -20%, rgb(100 199 215 / 7%), transparent 34%),
+    var(--surface);
   color: var(--text);
   letter-spacing: 0;
 }
@@ -63,8 +67,9 @@ button:focus-visible,
   gap: 18px;
   height: var(--app-bar-height);
   padding: 0 12px 0 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-raised);
+  border-bottom: 1px solid #3a4653;
+  background: linear-gradient(180deg, #1b222c 0%, var(--surface-raised) 100%);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 3%), var(--shadow-deep);
   user-select: none;
   -webkit-app-region: drag;
 }
@@ -142,6 +147,7 @@ button:focus-visible,
   border-radius: 50%;
   background: var(--amber);
   box-shadow: 0 0 0 3px rgb(230 189 105 / 12%);
+  transition: background 160ms ease, box-shadow 160ms ease;
 }
 
 .app-actions {
@@ -528,7 +534,10 @@ button:focus-visible,
   grid-template-rows: minmax(180px, var(--monitor-size)) 7px minmax(180px, 1fr);
   min-width: 0;
   min-height: 0;
-  background: var(--surface);
+  gap: 0;
+  background:
+    linear-gradient(90deg, rgb(100 199 215 / 3%), transparent 18%, transparent 82%, rgb(104 213 179 / 3%)),
+    #0b0f14;
 }
 
 .workspace[data-layout="monitor"] {
@@ -552,10 +561,11 @@ button:focus-visible,
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 2%);
 }
 
 .monitor-pane {
-  background: #10141a;
+  background: #10151b;
 }
 
 #monitor-frame {
@@ -777,7 +787,7 @@ body.resizing * {
 .terminal-pane {
   display: grid;
   grid-template-rows: 32px minmax(0, 1fr);
-  background: #0d1117;
+  background: #0c1015;
 }
 
 .pane-bar {
@@ -787,8 +797,9 @@ body.resizing * {
   gap: 16px;
   min-width: 0;
   padding: 0 12px;
-  border-bottom: 1px solid #232a34;
-  background: #11161d;
+  border-bottom: 1px solid #34404d;
+  background: linear-gradient(180deg, #171e27 0%, #11171f 100%);
+  box-shadow: 0 5px 16px rgb(0 0 0 / 18%);
 }
 
 .pane-title {
@@ -797,12 +808,14 @@ body.resizing * {
   gap: 8px;
   min-width: 0;
   font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 .terminal-glyph {
   color: var(--green);
   font-family: Consolas, monospace;
   font-weight: 700;
+  text-shadow: 0 0 12px rgb(104 213 179 / 40%);
 }
 
 .pane-meta {
@@ -1188,6 +1201,33 @@ body.resizing * {
   }
 
   .brand-copy span {
+    display: none;
+  }
+
+  .app-actions {
+    gap: 2px;
+  }
+
+  .action-divider {
+    margin: 0;
+  }
+
+  .window-controls {
+    display: none;
+  }
+
+  .pane-bar {
+    grid-template-columns: minmax(100px, 1fr) auto;
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .execution-context {
+    justify-self: end;
+  }
+
+  .body-verification-context,
+  .context-divider {
     display: none;
   }
 }

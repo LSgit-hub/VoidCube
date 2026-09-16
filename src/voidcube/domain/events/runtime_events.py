@@ -57,6 +57,10 @@ class AutonomousTaskReviewed:
     status: str
     reason: str = ""
     evidence_refs: tuple[str, ...] = ()
+    cycle_id: str = ""
+    lease_id: str = ""
+    attempt: int = 0
+    memory_write_status: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +69,10 @@ class GovernanceDecisionMade:
     decision: str
     reason: str = ""
     evidence_refs: tuple[str, ...] = ()
+    cycle_id: str = ""
+    lease_id: str = ""
+    attempt: int = 0
+    memory_write_status: str = "unknown"
 
 
 __all__ = [

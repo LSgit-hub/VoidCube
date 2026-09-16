@@ -2,7 +2,7 @@ import pytest
 
 from voidcube.application.ports import (
     CallbackEventPort, CallbackGovernancePort, CallbackPersistencePort,
-    CallbackTaskPort, RuntimePorts,
+    CallbackTaskPort, CallbackToolPort, RuntimePorts,
 )
 from voidcube.domain.events import MemorySyncFailed, TurnCompleted
 from voidcube.domain.agent.effect_outcomes import EffectOutcome
@@ -63,3 +63,12 @@ def test_task_and_governance_callback_failures_are_contained():
     governance = CallbackGovernancePort(lambda _value: (_ for _ in ()).throw(RuntimeError("down")))
     assert task.submit("t").status == "failed"
     assert governance.record_decision("approve").status == "failed"
+
+
+def test_tool_port_adapts_named_invocation():
+    seen = []
+    port = CallbackToolPort(
+        lambda name, args, **kwargs: seen.append((name, args, kwargs)) or "ok"
+    )
+    assert port.invoke("read_file", {"path": "README.md"}, tool_call_id="tc-1") == "ok"
+    assert seen == [("read_file", {"path": "README.md"}, {"tool_call_id": "tc-1"})]

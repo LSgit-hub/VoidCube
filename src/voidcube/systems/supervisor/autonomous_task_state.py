@@ -217,11 +217,19 @@ class AutonomousTaskStateService:
             self._emit_event(AutonomousTaskReviewed(
                 task_id=task.task_id, status=str(task.status),
                 reason=str(task.decision_reason or ""), evidence_refs=refs,
+                cycle_id=str(task.metadata.get("cycle_id") or ""),
+                lease_id=str(task.metadata.get("lease_id") or task.execution_lease.attempt_id or ""),
+                attempt=int(task.metadata.get("attempt") or task.execution_lease.generation or 0),
+                memory_write_status=str(task.metadata.get("memory_write_status") or "unknown"),
             ))
         if event_type == "status_update":
             self._emit_event(GovernanceDecisionMade(
                 task_id=task.task_id, decision=str(task.status),
                 reason=str(task.decision_reason or ""), evidence_refs=refs,
+                cycle_id=str(task.metadata.get("cycle_id") or ""),
+                lease_id=str(task.metadata.get("lease_id") or task.execution_lease.attempt_id or ""),
+                attempt=int(task.metadata.get("attempt") or task.execution_lease.generation or 0),
+                memory_write_status=str(task.metadata.get("memory_write_status") or "unknown"),
             ))
         return task
 
