@@ -32,6 +32,8 @@ def test_state_service_owns_mutations_and_governance_events(tmp_path) -> None:
             "execution_outcome_status": "succeeded",
         },
     )
+    assert task.metadata["cycle_id"] == "cycle-1"
+    assert task.metadata["attempt"] == 2
     service.update_priority(
         task.task_id,
         priority="high",
@@ -77,6 +79,9 @@ def test_store_finalize_execution_rejects_failed_completed_outcome(tmp_path) -> 
     running = store.claim_execution(
         task.task_id, owner_session_id="worker-1", lease_seconds=30,
     )
+    assert running.metadata["attempt"] == running.execution_lease.generation
+    assert running.metadata["lease_id"] == running.execution_lease.attempt_id
+    assert running.metadata["cycle_id"]
 
     import pytest
 

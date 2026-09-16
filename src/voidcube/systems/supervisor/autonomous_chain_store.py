@@ -426,6 +426,10 @@ class AutonomousChainStore:
     ) -> AutonomousChainTask:
         with self._lock, interprocess_file_lock(self._storage_lock_path):
             snapshot = self._load_snapshot()
+            normalized_metadata = dict(metadata or {})
+            normalized_metadata.setdefault("cycle_id", str(uuid.uuid4()))
+            normalized_metadata.setdefault("attempt", 0)
+            normalized_metadata.setdefault("lease_id", "")
             task = AutonomousChainTask(
                 title=title,
                 summary=summary,
@@ -433,7 +437,7 @@ class AutonomousChainStore:
                 task_type=task_type,
                 source=source,
                 priority=priority,
-                metadata=dict(metadata or {}),
+                metadata=normalized_metadata,
                 evidence=dict(evidence or {}),
                 constraints=dict(constraints or {}),
             )
@@ -638,6 +642,9 @@ class AutonomousChainStore:
                     )
                 generation = task.execution_lease.generation + 1
                 attempt_id = str(uuid.uuid4())
+                task.metadata["attempt"] = generation
+                task.metadata["lease_id"] = attempt_id
+                task.metadata.setdefault("cycle_id", str(uuid.uuid4()))
                 task.status = "running"
                 task.updated_at = datetime.utcnow()
                 task.execution_lease = AutonomousChainExecutionLease(
@@ -662,6 +669,11 @@ class AutonomousChainStore:
                         reason=reason,
                         context={
                             **dict(context or {}),
+                            "task_id": task.task_id,
+                            "trace_id": task.trace_id,
+                            "cycle_id": task.metadata["cycle_id"],
+                            "attempt": generation,
+                            "lease_id": attempt_id,
                             "lease_generation": generation,
                             "attempt_id": attempt_id,
                         },
