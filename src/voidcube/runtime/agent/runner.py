@@ -149,6 +149,7 @@ from .tool_execution import (
     ToolExecutionResult,
 )
 from .tool_loop_service import ToolLoopService
+from .model_call_service import ModelCallService
 from .tool_turn import (
     context_pressure_tracker,
     execute_successful_tool_turn,
@@ -693,6 +694,7 @@ class AIAgent:
             persistence=CallbackPersistencePort(self._session_persistence.persist),
             events=self._event_port,
         )
+        self._model_call_service = ModelCallService()
 
         # Inject memory provider tool schemas into the tool surface
         if self.runtime_ports.memory and self.tools is not None:
@@ -4188,35 +4190,33 @@ class AIAgent:
             while attempt_state.can_retry:
                 try:
                     self._reset_stream_delivery_tracking()
-                    attempt_state.request_kwargs = build_chat_completion_kwargs(
-                        self._chat_request_config(),
-                        api_messages,
-                    )
-                    try:
-                        from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
-                        _invoke_hook(
-                            "pre_api_request",
-                            task_id=effective_task_id,
-                            session_id=self.session_id or "",
-                            platform=self.platform or "",
-                            model=self.model,
-                            provider=self.provider,
-                            base_url=self.base_url,
-                            api_call_count=turn_state.api_call_count,
-                            message_count=len(api_messages),
-                            tool_count=len(self.tools or []),
-                            approx_input_tokens=approx_tokens,
-                            request_char_count=total_chars,
-                            max_tokens=self.max_tokens,
-                        )
-                    except Exception:
-                        pass
+                    def _before_model_send(request_kwargs):
+                        attempt_state.request_kwargs = request_kwargs
+                        try:
+                            from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
+                            _invoke_hook(
+                                "pre_api_request",
+                                task_id=effective_task_id,
+                                session_id=self.session_id or "",
+                                platform=self.platform or "",
+                                model=self.model,
+                                provider=self.provider,
+                                base_url=self.base_url,
+                                api_call_count=turn_state.api_call_count,
+                                message_count=len(api_messages),
+                                tool_count=len(self.tools or []),
+                                approx_input_tokens=approx_tokens,
+                                request_char_count=total_chars,
+                                max_tokens=self.max_tokens,
+                            )
+                        except Exception:
+                            pass
 
-                    if env_var_enabled("VOIDCUBE_DUMP_REQUESTS"):
-                        self._dump_api_request_debug(
-                            attempt_state.request_kwargs,
-                            reason="preflight",
-                        )
+                        if env_var_enabled("VOIDCUBE_DUMP_REQUESTS"):
+                            self._dump_api_request_debug(
+                                attempt_state.request_kwargs,
+                                reason="preflight",
+                            )
 
                     # Always prefer the streaming path — even without stream
                     # consumers.  Streaming gives us fine-grained health
@@ -4237,13 +4237,17 @@ class AIAgent:
                         if self.thinking_callback:
                             self.thinking_callback("")
 
-                    attempt_state.response = self._chat_transport.stream(
-                        attempt_state.request_kwargs,
+                    model_call = self._model_call_service.call(
+                        config=self._chat_request_config(),
+                        messages=api_messages,
+                        transport=self._chat_transport,
                         on_update=self._deliver_stream_update,
                         on_first_delta=_stop_spinner,
+                        before_send=_before_model_send,
                     )
-                    
-                    api_duration = time.time() - attempt_state.started_at
+                    attempt_state.request_kwargs = model_call.request_kwargs
+                    attempt_state.response = model_call.response
+                    api_duration = model_call.duration_seconds
                     
                     # Stop thinking spinner silently -- the response box or tool
                     # execution messages that follow are more informative.
