@@ -16,6 +16,7 @@ from .prompt_builder import (
     has_canonical_memory_tools,
 )
 from .turn_finalization import TurnFinalizationPorts, finalize_conversation_turn
+from .tool_loop_service import ToolLoopService
 
 __all__ = [
     "ContextPressureTracker",
@@ -32,4 +33,5 @@ __all__ = [
     "build_skills_system_prompt",
     "ensure_persistent_identity_guidance",
     "has_canonical_memory_tools",
+    "ToolLoopService",
 ]
