@@ -355,8 +355,8 @@
     var children = (state.focus.children || []).map(normalizeNode).filter(Boolean);
     var cx = 450;
     var cy = 305;
-    var radius = children.length > 30 ? 58 : 68;
-    var orbit = children.length <= 12 ? 205 : 190;
+    var radius = children.length > 30 ? 48 : 56;
+    var orbit = children.length <= 12 ? 185 : 172;
     root.appendChild(svg("circle", { "class": "radial-background", cx: cx, cy: cy, r: orbit }));
     root.appendChild(svg("circle", { "class": "radial-background", cx: cx, cy: cy, r: orbit + 58 }));
     children.forEach(function (node, index) {
@@ -372,7 +372,7 @@
       root.appendChild(svg("line", { "class": "radial-link", x1: cx, y1: cy, x2: x, y2: y }));
       root.appendChild(makeNodeGroup(node, x, y, radius, false));
     });
-    root.appendChild(makeNodeGroup(focus, cx, cy, 82, true));
+    root.appendChild(makeNodeGroup(focus, cx, cy, 68, true));
     $("focus-heading").textContent = focus.title;
     $("project-progress").textContent = "项目进度 " + percent(state.project ? state.project.progress : focus.progress);
     renderBreadcrumb(focus);
