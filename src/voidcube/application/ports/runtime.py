@@ -68,6 +68,20 @@ class ContextPort(Protocol):
         focus_topic: str | None = None,
     ) -> tuple[list[dict[str, Any]], str]: ...
 
+    def compress_until_below_threshold(
+        self,
+        messages: list[dict[str, Any]],
+        system_message: str | None,
+        *,
+        token_estimator: Callable[[list[dict[str, Any]], str], int],
+        threshold_tokens: int,
+        protect_first_n: int = 0,
+        protect_last_n: int = 0,
+        task_id: str = "default",
+        focus_topic: str | None = None,
+        max_passes: int = 3,
+    ) -> tuple[list[dict[str, Any]], str, bool]: ...
+
 
 class EventPort(Protocol):
     def emit(self, event: Any) -> EffectOutcome: ...

@@ -4530,14 +4530,30 @@ async def test_supervisor_autonomous_chain_deactivate_closes_running_tasks(tmp_p
 
     task = supervisor._autonomous_chain_store.get_task(task_id)
     assert task.status == "failed"
-    assert task.decision_history[-1].context == {
-        "failure_kind": "interrupted_by_gate_deactivation"
-    }
+    decision_context = task.decision_history[-1].context
+    assert decision_context["failure_kind"] == "interrupted_by_gate_deactivation"
+    # Autonomous transitions carry the stable evidence envelope so governance,
+    # memory and recovery consumers can correlate the terminal write.
+    assert {
+        "task_id",
+        "cycle_id",
+        "lease_id",
+        "attempt",
+        "reason",
+        "evidence_refs",
+        "memory_write_status",
+    } <= set(decision_context)
+    assert decision_context["task_id"] == task_id
+    assert decision_context["cycle_id"] == task.metadata["cycle_id"]
+    assert decision_context["from_status"] == "running"
+    assert decision_context["to_status"] == "failed"
+    assert decision_context["reason"] == task.decision_reason
     recovered = AutonomousChainStore(tmp_path / "recovered-after-stop.json")
     recovered.recover_from_governance_events(
         supervisor._governor.governance_repository.list_events()
     )
     assert recovered.get_task(task_id).status == "failed"
+    assert recovered.get_task(task_id).decision_history[-1].context == decision_context
 
 
 @pytest.mark.asyncio

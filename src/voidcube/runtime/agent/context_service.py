@@ -125,3 +125,51 @@ class ContextService:
             session_id, before_count, len(compressed), estimate,
         )
         return compressed, new_system_prompt
+
+    def compress_until_below_threshold(
+        self,
+        messages: list[dict[str, Any]],
+        system_message: str | None,
+        *,
+        token_estimator: Callable[[list[dict[str, Any]], str], int],
+        threshold_tokens: int,
+        protect_first_n: int = 0,
+        protect_last_n: int = 0,
+        task_id: str = "default",
+        focus_topic: str | None = None,
+        max_passes: int = 3,
+    ) -> tuple[list[dict[str, Any]], str, bool]:
+        """Run bounded preflight compaction and report whether history changed.
+
+        Capacity checks belong to the context boundary.  The orchestrator only
+        needs the resulting messages, prompt, and a flag telling it that the
+        persisted-history reference must be invalidated after session rotation.
+        """
+        prompt = self.bindings.system_prompt(system_message, False)
+        if threshold_tokens <= 0:
+            return messages, prompt, False
+        if len(messages) <= protect_first_n + protect_last_n + 1:
+            return messages, prompt, False
+        changed = False
+        for _ in range(max(0, int(max_passes))):
+            approx_tokens = int(token_estimator(messages, prompt))
+            if approx_tokens < threshold_tokens:
+                break
+            before = deepcopy(messages)
+            previous_session = self.bindings.session_id()
+            messages, prompt = self.compress(
+                messages,
+                system_message,
+                approx_tokens=approx_tokens,
+                task_id=task_id,
+                focus_topic=focus_topic,
+            )
+            # Neither message count nor object identity proves a no-op: engines
+            # may rewrite content in place, and continuation may fail separately.
+            pass_changed = (
+                messages != before or self.bindings.session_id() != previous_session
+            )
+            changed = changed or pass_changed
+            if not pass_changed:
+                break
+        return messages, prompt, changed

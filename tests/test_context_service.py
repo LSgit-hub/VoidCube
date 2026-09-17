@@ -147,6 +147,54 @@ def test_default_mem_pre_compress_hook_does_not_claim_memory_was_saved():
     assert events[0].details["memory"]["status"] == "skipped"
 
 
+def test_preflight_compaction_is_bounded_and_reports_content_change_without_length_change():
+    calls = []
+    service, engine, _, _ = _service(
+        compress=lambda messages, **kwargs: calls.append(kwargs) or [
+            {"role": "user", "content": "summary"},
+        ],
+    )
+    messages = [
+        {"role": "user", "content": "old-1"},
+        {"role": "assistant", "content": "old-2"},
+        {"role": "user", "content": "old-3"},
+    ]
+
+    compressed, prompt, changed = service.compress_until_below_threshold(
+        messages,
+        None,
+        token_estimator=lambda _messages, _prompt: 100,
+        threshold_tokens=10,
+        protect_first_n=0,
+        protect_last_n=0,
+        max_passes=2,
+    )
+
+    assert changed is True
+    assert compressed[-1]["content"] == "todo"
+    assert prompt == "system"
+    assert len(calls) == 2
+
+
+def test_preflight_compaction_detects_content_change_when_message_count_is_equal():
+    service, _, calls, _ = _service(
+        compress=lambda messages, **kwargs: [
+            {"role": "user", "content": "summary"},
+            {"role": "assistant", "content": "a"},
+        ],
+    )
+    compressed, _, changed = service.compress_until_below_threshold(
+        [{"role": "user", "content": "old"}, {"role": "assistant", "content": "a"}],
+        None,
+        token_estimator=lambda _messages, _prompt: 100,
+        threshold_tokens=10,
+        max_passes=1,
+    )
+    assert changed is True
+    assert compressed[-1]["content"] == "todo"
+    assert any(item[0] == "continue" for item in calls)
+
+
 @pytest.mark.parametrize("raises", [False, True])
 def test_bridge_hook_failures_reach_compression_event(monkeypatch, raises):
     from plugins.memory.mem import MemMemoryProvider

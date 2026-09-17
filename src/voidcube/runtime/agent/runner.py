@@ -148,6 +148,7 @@ from .tool_execution import (
     ToolExecutionCoordinator,
     ToolExecutionResult,
 )
+from .tool_loop_service import ToolLoopService
 from .tool_turn import (
     context_pressure_tracker,
     execute_successful_tool_turn,
@@ -194,7 +195,7 @@ from ...domain.agent.response_disposition import (
 )
 from ...infrastructure.providers.usage_pricing import estimate_usage_cost, normalize_usage
 from ...domain.agent.tool_scheduler import (
-    is_destructive_command, should_parallelize_tool_batch,
+    is_destructive_command,
 )
 from .display import (
         KawaiiSpinner, build_tool_preview as _build_tool_preview,
@@ -3082,24 +3083,40 @@ class AIAgent:
     ) -> None:
         """Execute one assistant tool batch through the canonical coordinator."""
         tool_calls = tuple(assistant_message.tool_calls or ())
-        prepared = ToolExecutionCoordinator.prepare(tool_calls)
-        if not prepared:
+        if not tool_calls:
             return
-        parallel = should_parallelize_tool_batch(tool_calls)
         announced_skips: set[str] = set()
         batch_spinner: dict[str, Any] = {"value": None}
 
-        if parallel and not self.quiet_mode:
-            names = ", ".join(call.name for call in prepared)
-            print(f"  🔧 Concurrent: {len(prepared)} tool calls - {names}")
-
-        coordinator = ToolExecutionCoordinator(
-            invoke=lambda call: self._invoke_prepared_tool(
+        def invoke(call: PreparedToolCall, parallel: bool) -> ToolExecutionResult | str:
+            return self._invoke_prepared_tool(
                 call,
                 messages=messages,
                 effective_task_id=effective_task_id,
                 parallel=parallel,
-            ),
+            )
+
+        def before_call(call: PreparedToolCall, parallel: bool) -> None:
+            self._prepare_tool_call(call, parallel=parallel)
+
+        def after_call(outcome: ToolCallOutcome, parallel: bool) -> None:
+            self._complete_tool_call(
+                outcome,
+                messages=messages,
+                effective_task_id=effective_task_id,
+                parallel=parallel,
+                announced_skips=announced_skips,
+            )
+
+        def batch_started(calls: tuple[PreparedToolCall, ...]) -> None:
+            if not self.quiet_mode:
+                names = ", ".join(call.name for call in calls)
+                print(f"  🔧 Concurrent: {len(calls)} tool calls - {names}")
+            self._start_parallel_tool_batch(calls, batch_spinner)
+
+        loop = ToolLoopService(
+            coordinator_factory=ToolExecutionCoordinator,
+            invoke=invoke,
             is_interrupted=lambda: self._interrupt_requested,
             classify_failure=_detect_tool_failure,
             max_workers=MAX_TOOL_WORKERS,
@@ -3108,22 +3125,11 @@ class AIAgent:
 
         self._executing_tools = True
         try:
-            coordinator.execute(
-                prepared,
-                parallel=parallel,
-                before_call=lambda call: self._prepare_tool_call(
-                    call, parallel=parallel
-                ),
-                after_call=lambda outcome: self._complete_tool_call(
-                    outcome,
-                    messages=messages,
-                    effective_task_id=effective_task_id,
-                    parallel=parallel,
-                    announced_skips=announced_skips,
-                ),
-                batch_started=lambda calls: self._start_parallel_tool_batch(
-                    calls, batch_spinner
-                ),
+            outcomes = loop.execute(
+                tool_calls,
+                before_call=before_call,
+                after_call=after_call,
+                batch_started=batch_started,
                 batch_completed=lambda outcomes: self._finish_parallel_tool_batch(
                     outcomes, batch_spinner
                 ),
@@ -3132,7 +3138,7 @@ class AIAgent:
             self._executing_tools = False
 
         enforce_turn_budget(
-            messages[-len(prepared) :],
+            messages[-len(outcomes) :],
             env=get_active_env(effective_task_id) or "",
         )
 
@@ -3943,56 +3949,43 @@ class AIAgent:
         # while having a large existing session — compress proactively rather
         # than waiting for an API error (which might be caught as a non-retryable
         # 4xx and abort the request entirely).
-        if (
-            self.compression_enabled
-            and len(messages) > self.context_compressor.protect_first_n
-                                + self.context_compressor.protect_last_n + 1
-        ):
-            # Include tool schema tokens — with many tools these can add
-            # 20-30K+ tokens that the old sys+msg estimate missed entirely.
-            _preflight_tokens = estimate_request_tokens_rough(
-                messages,
-                system_prompt=active_system_prompt or "",
-                tools=self.tools or None,
+        if self.compression_enabled and self.runtime_ports.context is not None:
+            # Capacity checks and bounded compaction are owned by ContextService;
+            # the runner only supplies the request-size estimator and handles
+            # the persistence consequence of a rotated/rewritten history.
+            messages, active_system_prompt, _context_changed = (
+                self.runtime_ports.context.compress_until_below_threshold(
+                    messages,
+                    system_message,
+                    token_estimator=lambda current, prompt: estimate_request_tokens_rough(
+                        current,
+                        system_prompt=prompt or "",
+                        tools=self.tools or None,
+                    ),
+                    threshold_tokens=self.context_compressor.threshold_tokens,
+                    protect_first_n=self.context_compressor.protect_first_n,
+                    protect_last_n=self.context_compressor.protect_last_n,
+                    task_id=effective_task_id,
+                )
             )
-
-            if _preflight_tokens >= self.context_compressor.threshold_tokens:
+            if _context_changed:
+                _preflight_tokens = estimate_request_tokens_rough(
+                    messages,
+                    system_prompt=active_system_prompt or "",
+                    tools=self.tools or None,
+                )
                 logger.info(
-                    "Preflight compression: ~%s tokens >= %s threshold (model %s, ctx %s)",
-                    f"{_preflight_tokens:,}",
-                    f"{self.context_compressor.threshold_tokens:,}",
-                    self.model,
+                    "Preflight compression: ~%s tokens (model %s, ctx %s)",
+                    f"{_preflight_tokens:,}", self.model,
                     f"{self.context_compressor.context_length:,}",
                 )
                 if not self.quiet_mode:
                     self._safe_print(
-                        f"📦 Preflight compression: ~{_preflight_tokens:,} tokens "
-                        f">= {self.context_compressor.threshold_tokens:,} threshold"
+                        f"📦 Preflight compression: ~{_preflight_tokens:,} tokens"
                     )
-                # May need multiple passes for very large sessions with small
-                # context windows (each pass summarises the middle N turns).
-                for _pass in range(3):
-                    _orig_len = len(messages)
-                    messages, active_system_prompt = self._compress_context(
-                        messages, system_message, approx_tokens=_preflight_tokens,
-                        task_id=effective_task_id,
-                    )
-                    if len(messages) >= _orig_len:
-                        break  # Cannot compress further
-                    # Compression created a new session — clear the history
-                    # reference so SessionPersistence writes ALL
-                    # compressed messages to the new session's SQLite, not
-                    # skipping them because conversation_history is still the
-                    # pre-compression length.
-                    conversation_history = None
-                    # Re-estimate after compression
-                    _preflight_tokens = estimate_request_tokens_rough(
-                        messages,
-                        system_prompt=active_system_prompt or "",
-                        tools=self.tools or None,
-                    )
-                    if _preflight_tokens < self.context_compressor.threshold_tokens:
-                        break  # Under threshold
+                # Compression can rotate the session even when message count is
+                # unchanged; either signal requires writing the full transcript.
+                conversation_history = None
 
         # Plugin hook: pre_llm_call
         # Fired once per turn before the tool-calling loop.  Plugins can
