@@ -100,8 +100,6 @@ from ...domain.events import CheckpointPersistFailed
 from ...infrastructure.llm.retry_policy import (
     RetryKind,
     RetryRecoveryKind,
-    decide_retry_directive,
-    execute_retry_recovery,
     jittered_backoff,
     wait_for_retry,
 )
@@ -173,7 +171,6 @@ from .prompt_builder import (
 )
 from ...infrastructure.llm.request import (
     ChatRequestConfig,
-    build_chat_completion_kwargs,
     prepare_chat_messages,
 )
 from ...infrastructure.llm.multimodal import native_input_modalities
@@ -3705,45 +3702,15 @@ class AIAgent:
                 native_input_modalities=tuple(self._native_input_modalities()),
             )
 
-            summary_kwargs = build_chat_completion_kwargs(
-                self._chat_request_config(),
-                api_messages,
-                include_tools=False,
-                include_request_overrides=False,
+            final_response = self._model_call_service.summarize(
+                config=self._chat_request_config(),
+                messages=api_messages,
+                transport=self._chat_transport,
             )
-
-            summary_response = self._chat_transport.complete(summary_kwargs)
-            summary_inspection = inspect_chat_response(summary_response)
-            final_response = (
-                summary_inspection.message.content
-                if summary_inspection.valid and summary_inspection.message.content
-                else ""
-            )
-
             if final_response:
-                final_response = strip_thinking_blocks(final_response).strip()
-                if final_response:
-                    messages.append({"role": "assistant", "content": final_response})
-                else:
-                    final_response = "I reached the iteration limit and couldn't generate a summary."
+                messages.append({"role": "assistant", "content": final_response})
             else:
-                # Retry summary generation
-                summary_response = self._chat_transport.complete(summary_kwargs)
-                summary_inspection = inspect_chat_response(summary_response)
-                final_response = (
-                    summary_inspection.message.content
-                    if summary_inspection.valid and summary_inspection.message.content
-                    else ""
-                )
-
-                if final_response:
-                    final_response = strip_thinking_blocks(final_response).strip()
-                    if final_response:
-                        messages.append({"role": "assistant", "content": final_response})
-                    else:
-                        final_response = "I reached the iteration limit and couldn't generate a summary."
-                else:
-                    final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = "I reached the iteration limit and couldn't generate a summary."
 
         except Exception as e:
             logging.warning(f"Failed to get summary response: {e}")
@@ -4773,20 +4740,7 @@ class AIAgent:
                         and pool is not None
                         and pool.has_available()
                     )
-                    retry_directive = decide_retry_directive(
-                        classified,
-                        api_error,
-                        retry_count=attempt_state.retry_count,
-                        max_retries=attempt_state.max_retries,
-                        fallback_available=fallback_available,
-                        credential_pool_may_recover=pool_may_recover,
-                        primary_recovery_attempted=(
-                            attempt_state.primary_recovery_attempted
-                        ),
-                    )
-                    is_rate_limited = retry_directive.is_rate_limited
-
-                    def _activate_directive_fallback() -> bool:
+                    def _activate_directive_fallback(retry_directive) -> bool:
                         if retry_directive.try_eager_fallback:
                             self._emit_status(
                                 "⚠️ Rate limited — switching to fallback provider..."
@@ -4803,11 +4757,12 @@ class AIAgent:
                             )
                         return self._try_activate_fallback()
 
-                    recovery_result = execute_retry_recovery(
-                        retry_directive,
-                        api_error,
-                        retry_count=attempt_state.retry_count,
-                        max_retries=attempt_state.max_retries,
+                    model_recovery = self._model_call_service.recover(
+                        attempt=attempt_state,
+                        classified=classified,
+                        error=api_error,
+                        fallback_available=fallback_available,
+                        credential_pool_may_recover=pool_may_recover,
                         activate_fallback=_activate_directive_fallback,
                         recover_transport=lambda error, count, maximum: (
                             self._try_recover_primary_transport(
@@ -4817,13 +4772,12 @@ class AIAgent:
                             )
                         ),
                     )
-                    if recovery_result.kind is RetryRecoveryKind.fallback:
-                        attempt_state.reset_retry_cycle()
+                    retry_directive = model_recovery.directive
+                    is_rate_limited = retry_directive.is_rate_limited
+                    if model_recovery.recovery.kind is RetryRecoveryKind.fallback:
                         turn_state.compression_attempts = 0
                         continue
-                    if recovery_result.kind is RetryRecoveryKind.transport:
-                        attempt_state.primary_recovery_attempted = True
-                        attempt_state.retry_count = 0
+                    if model_recovery.recovery.kind is RetryRecoveryKind.transport:
                         continue
 
                     if retry_directive.kind in {

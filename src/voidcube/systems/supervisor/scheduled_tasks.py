@@ -101,19 +101,50 @@ class ScheduledTaskStore:
         *,
         legacy_json_path: str | Path | None = None,
         run_history_limit: int = 1000,
+        defer_open: bool = False,
     ):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._owner_lease = SQLiteOwnerLease(self.path, "scheduled-task-owner")
+        self._owner_lease: SQLiteOwnerLease | None = None
         self.legacy_json_path = Path(legacy_json_path) if legacy_json_path else None
         self.run_history_limit = max(100, int(run_history_limit))
         self._lock = threading.RLock()
-        self._initialize_schema()
-        self._migrate_legacy_json_once()
-        self._recover_expired_claims_at_startup()
+        self._initialized = False
+        self._initializing = False
+        if not defer_open:
+            self.open()
+
+    def open(self) -> None:
+        """Acquire ownership and recover storage on lifespan entry or first use.
+
+        All readers and writers share this lock while initialization is pending;
+        no caller may use a partially initialized schema. Initialization itself
+        uses the same connection helpers under the reentrant lock.
+        """
+        with self._lock:
+            if self._initialized or self._initializing:
+                return
+            self._initializing = True
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self._owner_lease = SQLiteOwnerLease(self.path, "scheduled-task-owner")
+                self._initialize_schema()
+                self._migrate_legacy_json_once()
+                self._recover_expired_claims_at_startup()
+                self._initialized = True
+            except BaseException:
+                if self._owner_lease is not None:
+                    self._owner_lease.close()
+                    self._owner_lease = None
+                raise
+            finally:
+                self._initializing = False
 
     def close(self) -> None:
-        self._owner_lease.close()
+        with self._lock:
+            if self._owner_lease is not None:
+                self._owner_lease.close()
+                self._owner_lease = None
+            self._initialized = False
 
     def _recover_expired_claims_at_startup(self) -> None:
         """Fail any run whose lease expired while this process was not the
@@ -133,6 +164,7 @@ class ScheduledTaskStore:
             )
 
     def _connect(self) -> sqlite3.Connection:
+        self.open()
         connection = sqlite3.connect(
             str(self.path),
             timeout=30.0,
@@ -159,11 +191,12 @@ class ScheduledTaskStore:
 
     @contextmanager
     def _reader(self) -> Iterator[sqlite3.Connection]:
-        connection = self._connect()
-        try:
-            yield connection
-        finally:
-            connection.close()
+        with self._lock:
+            connection = self._connect()
+            try:
+                yield connection
+            finally:
+                connection.close()
 
     def _initialize_schema(self) -> None:
         with self._reader() as connection:

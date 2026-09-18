@@ -8,12 +8,14 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
+from functools import cached_property
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 import uuid
 
 from plugins.memory.mem.outbox import (
+    MemoryWriteOutbox,
     build_outbox_health_report,
     load_memory_outbox_settings,
 )
@@ -135,13 +137,15 @@ class ServiceRuntimeMixin:
     def _initialize_service_runtime(self) -> None:
         self._service_runtime = ServiceRuntimeState()
         self._outbox_settings = load_memory_outbox_settings()
-        self._companion_memory_outbox = self._outbox_settings.create(
-            "companion", home=get_VoidCube_home()
-        )
         self._gateway_service_id: Optional[str] = None
         self._gateway_executor_service_id: Optional[str] = None
         self._gateway_service_tokens: Dict[str, str] = {}
         self._last_companion_outbox_health_report_at = 0.0
+
+    @cached_property
+    def _companion_memory_outbox(self) -> MemoryWriteOutbox:
+        """Open the durable queue on first use instead of during assembly."""
+        return self._outbox_settings.create("companion", home=get_VoidCube_home())
 
     @staticmethod
     def _gateway_registration_headers() -> Dict[str, str]:
@@ -1477,9 +1481,13 @@ class ServiceRuntimeMixin:
         if current is not None and not current.done():
             return
 
+        # Surface schema/open failures in lifespan startup, before scheduling
+        # a worker whose first iteration could otherwise fail unobserved.
+        outbox = self._companion_memory_outbox
+
         async def drain_loop() -> None:
             while True:
-                item = self._companion_memory_outbox.next_due()
+                item = outbox.next_due()
                 if item is None:
                     await asyncio.sleep(1.0)
                     continue
@@ -2661,7 +2669,9 @@ class ServiceRuntimeMixin:
         await self._stop_autonomous_chain_gate(restore_companion=False)
         await self._stop_companion_memory_outbox()
 
-        voice_manager = getattr(self, "_voice_manager", None)
+        # Reading the cached property would allocate audio resources just to
+        # tear them down when voice was never used during this lifespan.
+        voice_manager = self.__dict__.get("_voice_manager")
         if voice_manager is not None:
             voice_manager.interrupt()
             await voice_manager.stop_continuous()
@@ -2679,4 +2689,6 @@ class ServiceRuntimeMixin:
             self._watch_window_task = None
 
         self._service_runtime_started = False
+
+        self._scheduled_task_store.close()
 

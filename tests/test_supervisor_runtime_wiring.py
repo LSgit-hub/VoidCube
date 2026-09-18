@@ -639,6 +639,7 @@ async def _execute_body_upgrade(supervisor: Supervisor, request: dict | None = N
 @pytest.mark.unit
 async def test_supervisor_health_exposes_runtime_state_without_deprecated_runtime_catalog(tmp_path):
     supervisor = _make_supervisor(tmp_path)
+    supervisor._recover_startup_state()
 
     health = await supervisor.health_check()
 
@@ -653,10 +654,13 @@ async def test_supervisor_health_exposes_runtime_state_without_deprecated_runtim
 @pytest.mark.unit
 def test_supervisor_recovery_success_is_shared_by_health_and_readiness(tmp_path):
     supervisor = _make_supervisor(tmp_path)
-    client = TestClient(supervisor.app)
-
-    health = client.get("/health")
-    ready = client.get("/ready")
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+    supervisor._start_periodic_tasks = AsyncMock()
+    supervisor._stop_periodic_tasks = AsyncMock()
+    assert supervisor._service_runtime.recovery.state == "pending"
+    with TestClient(supervisor.app) as client:
+        health = client.get("/health")
+        ready = client.get("/ready")
 
     assert health.status_code == 200
     assert health.json()["status"] == "healthy"
@@ -672,10 +676,13 @@ def test_supervisor_recovery_failure_degrades_health_and_readiness(tmp_path, mon
 
     monkeypatch.setattr(AutonomousChainRecoveryService, "recover", fail_recovery)
     supervisor = Supervisor(_make_supervisor_config(tmp_path))
-    client = TestClient(supervisor.app)
-
-    health = client.get("/health")
-    ready = client.get("/ready")
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+    supervisor._start_periodic_tasks = AsyncMock()
+    supervisor._stop_periodic_tasks = AsyncMock()
+    assert supervisor._service_runtime.recovery.state == "pending"
+    with TestClient(supervisor.app) as client:
+        health = client.get("/health")
+        ready = client.get("/ready")
 
     assert health.status_code == 200
     assert health.json()["status"] == "degraded"
@@ -4757,6 +4764,130 @@ def test_supervisor_fastapi_lifespan_starts_and_stops_periodic_runtime(tmp_path)
     supervisor.register_with_gateway.assert_awaited_once_with()  # type: ignore[attr-defined]
     supervisor._start_periodic_tasks.assert_awaited_once_with()  # type: ignore[attr-defined]
     supervisor._stop_periodic_tasks.assert_awaited_once_with()  # type: ignore[attr-defined]
+
+
+def test_supervisor_construction_defers_recovery_and_voice(tmp_path, monkeypatch):
+    import voidcube.systems.supervisor.supervisor as module
+
+    recovery = Mock(return_value={"event_count": 3, "updated_task_count": 1})
+    voice = Mock()
+    monkeypatch.setattr(AutonomousChainRecoveryService, "recover", recovery)
+    monkeypatch.setattr(module, "VoiceSessionManager", voice)
+    supervisor = _make_supervisor(tmp_path)
+    recovery.assert_not_called()
+    voice.assert_not_called()
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+
+    async def start():
+        recovery.assert_called_once_with()
+        assert supervisor._service_runtime.recovery.state == "healthy"
+
+    supervisor._start_periodic_tasks = start
+    supervisor._stop_periodic_tasks = AsyncMock()
+    with TestClient(supervisor.app) as client:
+        assert client.get("/ready").status_code == 200
+        voice.assert_not_called()
+        assert supervisor._voice_manager is supervisor._voice_manager
+        voice.assert_called_once()
+    assert supervisor._service_runtime.recovery.recovery_cursor == "3"
+
+
+def test_supervisor_not_ready_until_lifespan_recovery(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    client = TestClient(supervisor.app)
+    result = client.get("/ready")
+    assert result.status_code == 503
+    assert result.json()["detail"]["recovery"]["state"] == "pending"
+
+
+def test_supervisor_database_owner_conflict_is_reported_during_lifespan(tmp_path):
+    from voidcube.infrastructure.persistence.sqlite_owner import SQLiteOwnerLease
+
+    config = _make_supervisor_config(tmp_path)
+    database = Path(config.soul_store_path) / "scheduled_tasks.db"
+    owner = SQLiteOwnerLease(database, "another-service")
+    try:
+        supervisor = Supervisor(config)
+        supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+        supervisor._start_periodic_tasks = AsyncMock()
+        supervisor._stop_periodic_tasks = AsyncMock()
+        assert supervisor._service_runtime.recovery.state == "pending"
+        with TestClient(supervisor.app) as client:
+            ready = client.get("/ready")
+            assert ready.status_code == 503
+            assert ready.json()["detail"]["recovery"]["error_code"] == "SQLiteOwnerConflict"
+        assert database.with_suffix(".db.owner").exists()
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("failure_stage", ["registration", "periodic", "shutdown", None])
+def test_supervisor_lifespan_releases_database_on_exit(tmp_path, failure_stage):
+    supervisor = _make_supervisor(tmp_path)
+    marker = supervisor._scheduled_task_store.path.with_suffix(".db.owner")
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+    supervisor._start_periodic_tasks = AsyncMock()
+    supervisor._stop_periodic_tasks = AsyncMock()
+    target = {
+        "registration": supervisor.register_with_gateway,
+        "periodic": supervisor._start_periodic_tasks,
+        "shutdown": supervisor._stop_periodic_tasks,
+    }.get(failure_stage)
+    if target is not None:
+        target.side_effect = RuntimeError(failure_stage)
+        with pytest.raises(RuntimeError, match=failure_stage):
+            with TestClient(supervisor.app):
+                assert marker.exists()
+    else:
+        with TestClient(supervisor.app):
+            assert marker.exists()
+    assert not marker.exists()
+    supervisor._stop_periodic_tasks.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_shutdown_does_not_create_unused_voice_resources(tmp_path, monkeypatch):
+    import voidcube.systems.supervisor.supervisor as module
+
+    voice = Mock(side_effect=AssertionError("shutdown must not construct voice"))
+    monkeypatch.setattr(module, "VoiceSessionManager", voice)
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._stop_autonomous_chain_gate = AsyncMock()
+    supervisor._stop_companion_memory_outbox = AsyncMock()
+    await supervisor._stop_periodic_tasks()
+    voice.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_defers_outbox_until_use(tmp_path, monkeypatch):
+    import voidcube.systems.supervisor.service_runtime as module
+
+    create = Mock(return_value=Mock(next_due=Mock(return_value=None)))
+    monkeypatch.setattr(module, "load_memory_outbox_settings", lambda: SimpleNamespace(create=create))
+    supervisor = _make_supervisor(tmp_path)
+    create.assert_not_called()
+    await supervisor._stop_companion_memory_outbox()
+    create.assert_not_called()
+    await supervisor._start_companion_memory_outbox()
+    create.assert_called_once()
+    assert supervisor._companion_memory_outbox is create.return_value
+    create.return_value.pending_count.return_value = 0
+    await asyncio.sleep(0)
+    await supervisor._stop_companion_memory_outbox()
+    create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_supervisor_outbox_open_failure_does_not_leave_worker(tmp_path, monkeypatch):
+    import voidcube.systems.supervisor.service_runtime as module
+
+    create = Mock(side_effect=RuntimeError("outbox unavailable"))
+    monkeypatch.setattr(module, "load_memory_outbox_settings", lambda: SimpleNamespace(create=create))
+    supervisor = _make_supervisor(tmp_path)
+    with pytest.raises(RuntimeError, match="outbox unavailable"):
+        await supervisor._start_companion_memory_outbox()
+    assert supervisor._service_runtime.companion_memory_write_task is None
+    assert "_companion_memory_outbox" not in supervisor.__dict__
 
 
 @pytest.mark.asyncio

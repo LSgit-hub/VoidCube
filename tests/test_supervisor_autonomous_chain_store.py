@@ -18354,7 +18354,12 @@ def test_supervisor_boot_recovers_empty_autonomous_store_from_mem_governance(tmp
     cfg.body_runtime.state_root = str(tmp_path / "body-state")
     supervisor = Supervisor(config=cfg)
 
-    tasks = supervisor._autonomous_chain_store.list_tasks()
+    assert supervisor._autonomous_chain_store.list_tasks() == []
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+    supervisor._start_periodic_tasks = AsyncMock()
+    supervisor._stop_periodic_tasks = AsyncMock()
+    with TestClient(supervisor.app):
+        tasks = supervisor._autonomous_chain_store.list_tasks()
     assert [task.task_id for task in tasks] == ["boot-recover-task"]
     assert tasks[0].title == "Boot recovered task"
     assert tasks[0].status == "approved"

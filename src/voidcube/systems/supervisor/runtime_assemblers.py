@@ -266,6 +266,7 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
     )
     supervisor._scheduled_task_store = ScheduledTaskStore(
         scheduled_store_path,
+        defer_open=True,
         legacy_json_path=(
             runtime_root / "scheduled_tasks.json"
             if not supervisor.config.scheduled_task_store_path
@@ -591,7 +592,7 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
             ).rstrip("/"),
             memory_client_factory=supervisor._memory_client,
             ui_event_interval_seconds=config.ui_event_interval_seconds,
-            voice_realtime_status=supervisor._voice_manager.realtime_status,
+            voice_realtime_status=lambda: supervisor._voice_manager.realtime_status(),
             load_runtime_observation_input=supervisor.get_runtime_observation_input,
             inspect_body_layout=supervisor._body_registry.inspect_layout,
             load_body_slot_meta=supervisor._body_registry.load_slot_meta,
@@ -615,7 +616,7 @@ def assemble_supervisor_ui_runtime(supervisor: Any) -> None:
                 supervisor._endogenous_governance_state_persistence_service.load_cognition_state
             ),
             stellar_mode_status=supervisor._stellar_mode_status,
-            voice_status=supervisor._voice_manager.status,
+            voice_status=lambda: supervisor._voice_manager.status(),
             load_employee_execution_context=supervisor._companion_worker_execution_context,
             ui_enabled=config.ui_enabled,
             ui_auto_open=config.ui_auto_open,

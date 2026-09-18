@@ -3,6 +3,7 @@ import logging
 import re
 import subprocess
 import time
+from functools import cached_property
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
@@ -199,12 +200,6 @@ class Supervisor(
         stage_started = time.perf_counter()
         self._provider_pool_service = ProviderPoolService()
         logger.debug("Supervisor init stage provider_pool_ms=%.1f", (time.perf_counter() - stage_started) * 1000)
-        stage_started = time.perf_counter()
-        self._voice_manager = VoiceSessionManager(
-            VoiceConfig.from_env(),
-            companion_callback=self._handle_voice_companion_message,
-        )
-        logger.debug("Supervisor init stage voice_manager_ms=%.1f", (time.perf_counter() - stage_started) * 1000)
         # Watch-window state is owned by executor adapter (§3.6 / S-02/03).
         # Supervisor holds a plain holder that gets proxied after assembly.
         self._watch_window_runtime: Any = type("_WatchWindowHolder", (), {
@@ -219,7 +214,24 @@ class Supervisor(
         stage_started = time.perf_counter()
         assemble_supervisor_execution_runtime(self)
         logger.debug("Supervisor init stage execution_runtime_ms=%.1f", (time.perf_counter() - stage_started) * 1000)
+        logger.info("Supervisor initialization completed in %.1f ms", (time.perf_counter() - init_started) * 1000)
+        # Proxy supervisor._watch_window_runtime → adapter._state
+        if hasattr(self, '_watch_window_executor'):
+            self._watch_window_runtime = self._watch_window_executor._state
+        self._setup_routes()
+
+    @cached_property
+    def _voice_manager(self) -> VoiceSessionManager:
+        """Create voice resources on first use, outside runtime assembly."""
+        return VoiceSessionManager(
+            VoiceConfig.from_env(),
+            companion_callback=self._handle_voice_companion_message,
+        )
+
+    def _recover_startup_state(self) -> None:
+        """Recover persisted task projections during the application lifespan."""
         try:
+            self._scheduled_task_store.open()
             recovery_result = self._autonomous_chain_recovery_service.recover()
             recovery = self._service_runtime.recovery
             recovery.mark_healthy(
@@ -233,11 +245,6 @@ class Supervisor(
         except Exception as exc:
             self._service_runtime.recovery.mark_failed(exc)
             logger.error("Autonomous-chain Mem governance recovery failed", exc_info=True)
-        logger.info("Supervisor initialization completed in %.1f ms", (time.perf_counter() - init_started) * 1000)
-        # Proxy supervisor._watch_window_runtime → adapter._state
-        if hasattr(self, '_watch_window_executor'):
-            self._watch_window_runtime = self._watch_window_executor._state
-        self._setup_routes()
 
     @property
     def _watch_window_task(self) -> Optional[Any]:
@@ -1210,20 +1217,24 @@ class Supervisor(
     @asynccontextmanager
     async def _app_lifespan(self, app: FastAPI):
         del app
-        service_id = await self.register_with_gateway()
-        if not service_id:
-            logger.warning(
-                "Supervisor started without gateway registration — "
-                "gateway-mediated routes and activity tracking will be unavailable."
-            )
-        else:
-            self._gateway_service_id = service_id
-        await self._start_periodic_tasks()
-        self._ui_runtime.maybe_open()
         try:
+            self._recover_startup_state()
+            service_id = await self.register_with_gateway()
+            if not service_id:
+                logger.warning(
+                    "Supervisor started without gateway registration — "
+                    "gateway-mediated routes and activity tracking will be unavailable."
+                )
+            else:
+                self._gateway_service_id = service_id
+            await self._start_periodic_tasks()
+            self._ui_runtime.maybe_open()
             yield
         finally:
-            await self._stop_periodic_tasks()
+            try:
+                await self._stop_periodic_tasks()
+            finally:
+                self._scheduled_task_store.close()
 
     async def start(self):
         import uvicorn

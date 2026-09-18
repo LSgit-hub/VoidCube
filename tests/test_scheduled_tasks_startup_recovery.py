@@ -13,9 +13,74 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from voidcube.systems.supervisor.scheduled_tasks import ScheduledTaskStore
+from voidcube.infrastructure.persistence.sqlite_owner import SQLiteOwnerConflict, SQLiteOwnerLease
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.smoke]
+
+
+def test_deferred_store_and_unused_close_do_not_touch_storage(tmp_path):
+    path = tmp_path / "deferred" / "schedule.db"
+    store = ScheduledTaskStore(path, defer_open=True)
+    assert not path.parent.exists()
+    store.close()
+    assert not path.parent.exists()
+    assert store.recent_runs() == []
+    assert path.exists()
+    assert path.with_suffix(".db.owner").exists()
+    store.close()
+    assert not path.with_suffix(".db.owner").exists()
+
+
+def test_deferred_owner_conflict_is_reported_on_open_and_can_be_retried(tmp_path):
+    path = tmp_path / "schedule.db"
+    owner = SQLiteOwnerLease(path, "another-owner")
+    store = ScheduledTaskStore(path, defer_open=True)
+    try:
+        with pytest.raises(SQLiteOwnerConflict):
+            store.open()
+        assert not path.exists()
+    finally:
+        owner.close()
+    store.open()
+    assert store.recent_runs() == []
+    store.close()
+
+
+def test_failed_schema_initialization_releases_owner(tmp_path, monkeypatch):
+    path = tmp_path / "schedule.db"
+    store = ScheduledTaskStore(path, defer_open=True)
+    initialize = store._initialize_schema
+
+    def fail():
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_initialize_schema", fail)
+    with pytest.raises(OSError, match="disk full"):
+        store.open()
+    assert not path.with_suffix(".db.owner").exists()
+    monkeypatch.setattr(store, "_initialize_schema", initialize)
+    store.open()
+    assert store.recent_runs() == []
+    store.close()
+
+
+def test_concurrent_first_reads_initialize_once(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store = ScheduledTaskStore(tmp_path / "schedule.db", defer_open=True)
+    initialize = store._initialize_schema
+    calls = []
+
+    def initialize_once():
+        calls.append(1)
+        initialize()
+
+    monkeypatch.setattr(store, "_initialize_schema", initialize_once)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert list(pool.map(lambda _: store.recent_runs(), range(8))) == [[]] * 8
+    assert calls == [1]
+    store.close()
 
 
 def _now() -> datetime:
