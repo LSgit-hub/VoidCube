@@ -21,7 +21,7 @@ class FrameSource(Protocol):
 class RecordAnalyzer(Protocol):
     """Analyze one changed frame into a perception record."""
 
-    def analyze(self, image_bytes: bytes, **kwargs: Any) -> PerceptionRecord:
+    def analyze(self, image_bytes: bytes, **kwargs: Any) -> Any:
         ...
 
 
@@ -35,6 +35,9 @@ class PerceptionStepResult:
     record: PerceptionRecord | None
     closed_segments: tuple[TimelineSegment, ...]
     scene: SceneState
+    model: str = ""
+    escalated: bool = False
+    escalation_reason: str = ""
 
 
 class LocalPerceptionLoop:
@@ -77,13 +80,14 @@ class LocalPerceptionLoop:
                 scene=self.buffer.scene_state(now=frame.captured_at),
             )
 
-        record = self.analyzer.analyze(
+        analysis = self.analyzer.analyze(
             frame.to_png(),
             record_id=f"perception:{self.capture_session_id or 'session'}:{self._sequence}",
             observed_at=frame.captured_at,
             capture_session_id=self.capture_session_id,
             sequence=self._sequence,
         )
+        record, model, escalated, escalation_reason = _normalize_analysis(analysis)
         self.buffer.append(record)
         closed = tuple(self.segmenter.append(record))
         return PerceptionStepResult(
@@ -93,6 +97,9 @@ class LocalPerceptionLoop:
             record=record,
             closed_segments=closed,
             scene=self.buffer.scene_state(now=frame.captured_at),
+            model=model,
+            escalated=escalated,
+            escalation_reason=escalation_reason,
         )
 
     def flush(self) -> TimelineSegment | None:
@@ -109,9 +116,47 @@ class LocalPerceptionLoop:
         self._sequence = 0
 
 
+def build_default_local_perception_loop(
+    *,
+    monitor: int = 1,
+    roi: dict[str, int] | None = None,
+    capture_session_id: str = "",
+    screen_parser: Any | None = None,
+) -> LocalPerceptionLoop:
+    """Build the production MVP chain without starting capture or threads."""
+
+    from .adaptive import AdaptiveLocalVisionAnalyzer
+    from .capture import MssScreenCapture
+
+    return LocalPerceptionLoop(
+        MssScreenCapture(monitor=monitor, roi=roi),
+        AdaptiveLocalVisionAnalyzer(screen_parser=screen_parser),
+        capture_session_id=capture_session_id,
+    )
+
+
 __all__ = [
     "FrameSource",
+    "build_default_local_perception_loop",
     "LocalPerceptionLoop",
     "PerceptionStepResult",
     "RecordAnalyzer",
 ]
+
+
+def _normalize_analysis(
+    analysis: Any,
+) -> tuple[PerceptionRecord, str, bool, str]:
+    """Accept a plain record or an AdaptiveVisionResult without coupling layers."""
+
+    if isinstance(analysis, PerceptionRecord):
+        return analysis, "", False, ""
+    record = getattr(analysis, "record", None)
+    if not isinstance(record, PerceptionRecord):
+        raise TypeError("perception analyzer must return PerceptionRecord or an adaptive result")
+    return (
+        record,
+        str(getattr(analysis, "model", "") or ""),
+        bool(getattr(analysis, "escalated", False)),
+        str(getattr(analysis, "escalation_reason", "") or ""),
+    )

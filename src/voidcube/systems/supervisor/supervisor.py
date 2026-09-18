@@ -64,6 +64,10 @@ from .ui_routes import (
 )
 from .ui_projection import format_supervisor_ui_event
 from .ui_stream_adapters import SSE_HEADERS
+from .perception_routes import mount_perception_routes
+from ..perception.query import PerceptionQueryService
+from ..perception.runtime import PerceptionRuntime
+from ..perception.timeline_store import TimelineStore
 from ..voice import VoiceConfig, VoiceSessionManager
 
 logger = logging.getLogger("supervisor")
@@ -186,6 +190,7 @@ class Supervisor(
     def __init__(self, config: SupervisorConfig | None = None):
         init_started = time.perf_counter()
         self.config = config or SupervisorConfig()
+        self._perception_query_service = None
         self.app = FastAPI(
             title="VoidCube Supervisor",
             version="1.0",
@@ -262,6 +267,15 @@ class Supervisor(
     def _watch_window_last_outcome(self, result: Optional[Dict[str, Any]]) -> None:
         self._watch_window_runtime.last_outcome = result
 
+    def configure_perception(
+        self,
+        runtime: PerceptionRuntime,
+        *,
+        store: TimelineStore | None = None,
+    ) -> None:
+        """Inject an explicitly constructed read-only perception runtime."""
+        self._perception_query_service = PerceptionQueryService(runtime, store=store)
+
     def _setup_routes(self):
         async def execute_governor_review_request(request: dict):
             try:
@@ -271,6 +285,7 @@ class Supervisor(
                 raise HTTPException(status_code=400, detail=str(exc))
 
         self.app.add_api_route("/", self.health_check, methods=["GET"])
+        mount_perception_routes(self.app, get_service=lambda: self._perception_query_service)
         mount_supervisor_ui_routes(
             SupervisorUIRoutePorts(
                 app=self.app,
@@ -305,6 +320,7 @@ class Supervisor(
                 verify_account=self._ui_runtime.verify_account_endpoint,
             )
         )
+
         # 插件 web UI 静态挂载（plugins/*/plugin.json web 段声明）
         mount_plugin_web_routes(self.app)
         self.app.add_api_route("/runtime/activity", self.get_runtime_activity, methods=["GET"])

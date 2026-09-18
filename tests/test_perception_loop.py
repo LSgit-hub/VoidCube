@@ -21,17 +21,20 @@ class FakeSource:
         pixels = self.frames[min(self.index, len(self.frames) - 1)]
         captured_at = datetime(2026, 1, 1, tzinfo=timezone.utc).replace(second=self.index)
         self.index += 1
-        return ScreenFrame(pixels, 2, 1, 1, captured_at)
+        return ScreenFrame(pixels, 32, 1, 1, captured_at)
 
 
 class FakeAnalyzer:
     def analyze(self, image_bytes: bytes, **kwargs: object) -> PerceptionRecord:
-        assert image_bytes
+        from io import BytesIO
+        from PIL import Image
+        pixel = Image.open(BytesIO(image_bytes)).getpixel((0, 0))
+        assert image_bytes.startswith(b"\x89PNG")
         return PerceptionRecord(
             record_id=str(kwargs["record_id"]),
             observed_at=kwargs["observed_at"],
             source=("screen", "fake-vl"),
-            scene="editing_code" if image_bytes.startswith(b"a") else "watching_video",
+            scene="editing_code" if pixel[0] == 97 else "watching_video",
             application="Fake App",
             summary="local observation",
             confidence=0.8,

@@ -69,6 +69,7 @@ class TimelineSegmenter:
         self.segment_seconds = max(1, int(segment_seconds))
         self.min_scene_seconds = max(0, int(min_scene_seconds))
         self._pending: list[PerceptionRecord] = []
+        self._last_closed_records: tuple[PerceptionRecord, ...] = ()
 
     @property
     def pending_records(self) -> tuple[PerceptionRecord, ...]:
@@ -95,9 +96,16 @@ class TimelineSegmenter:
             return None
         return self._close(provisional=provisional)
 
+    def take_last_closed_records(self) -> tuple[PerceptionRecord, ...]:
+        """Return and clear records used by the most recently closed segment."""
+        records = self._last_closed_records
+        self._last_closed_records = ()
+        return records
+
     def _close(self, *, provisional: bool) -> TimelineSegment:
         records = self._pending
         self._pending = []
+        self._last_closed_records = tuple(records)
         first, last = records[0], records[-1]
         source_ids = tuple(record.record_id for record in records)
         scenes = [record.scene for record in records if record.scene]

@@ -27,28 +27,16 @@ class ScreenFrame:
     captured_at: datetime
 
     def to_png(self) -> bytes:
-        """Encode BGRA capture bytes for a vision model.
+        """Encode raw BGRA pixels as RGB PNG; reject corrupt frame buffers."""
+        from io import BytesIO
+        from PIL import Image
 
-        Capture backends keep raw pixels for cheap frame comparison.  Model
-        adapters consume an encoded image.  If a test or alternate backend
-        already supplies encoded bytes, preserve them unchanged.
-        """
-        if self.pixels.startswith((b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"RIFF")):
-            return self.pixels
-        try:
-            from io import BytesIO
-
-            from PIL import Image
-
-            expected = self.width * self.height * 4
-            if len(self.pixels) != expected:
-                return self.pixels
-            image = Image.frombytes("RGBA", (self.width, self.height), self.pixels, "raw", "BGRA")
-            output = BytesIO()
-            image.save(output, format="PNG")
-            return output.getvalue()
-        except Exception:
-            return self.pixels
+        if self.width <= 0 or self.height <= 0 or len(self.pixels) != self.width * self.height * 4:
+            raise ValueError("invalid BGRA frame dimensions or byte length")
+        image = Image.frombytes("RGB", (self.width, self.height), self.pixels, "raw", "BGRX")
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
 
 
 class MssScreenCapture:

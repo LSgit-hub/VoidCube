@@ -95,38 +95,17 @@ class LocalTimelineSummarizer:
     def _complete(self, messages: list[dict[str, Any]]) -> str:
         if self._completion is not None:
             return str(self._completion(messages=messages, model=self.model))
-        try:
-            from ...infrastructure.providers.runtime import resolve_runtime_provider
-            from ...infrastructure.providers.model_metadata import is_local_endpoint
-            import httpx
+        from .local_transport import complete_local
 
-            runtime = resolve_runtime_provider(requested="ollama")
-            base_url = str(runtime.get("base_url") or "").strip().rstrip("/")
-            if base_url.lower().endswith("/v1"):
-                base_url = base_url[:-3]
-            if not base_url or not is_local_endpoint(base_url):
-                raise TimelineSummaryError("Ollama summary endpoint is not local")
-            response = httpx.post(
-                f"{base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "stream": False,
-                    "think": False,
-                    "options": {"temperature": 0, "num_ctx": 4096},
-                    "messages": messages,
-                },
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            body = response.json()
-            content = body.get("message", {}).get("content") if isinstance(body, dict) else None
-            if not str(content or "").strip():
-                raise TimelineSummaryError("Ollama summary returned empty content")
-            return str(content)
-        except TimelineSummaryError:
-            raise
+        try:
+            return complete_local({
+                "model": self.model, "stream": False, "think": False,
+                "format": "json",
+                "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 2048},
+                "messages": messages,
+            }, timeout=self.timeout_seconds)
         except Exception as exc:
-            raise TimelineSummaryError(f"local timeline summary failed: {type(exc).__name__}: {exc}") from exc
+            raise TimelineSummaryError(f"local summary failed: {type(exc).__name__}") from exc
 
 
 def _strings(value: Any) -> tuple[str, ...]:
