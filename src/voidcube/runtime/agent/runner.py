@@ -32,7 +32,7 @@ import sys
 import time
 import threading
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from dataclasses import replace
@@ -98,17 +98,13 @@ from ...application.ports import CallbackEventPort, CallbackPersistencePort, Run
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
 from ...domain.events import CheckpointPersistFailed
 from ...infrastructure.llm.retry_policy import (
+    RetryDirective,
     RetryKind,
-    RetryRecoveryKind,
-    jittered_backoff,
-    wait_for_retry,
 )
 from ...infrastructure.llm.error_classifier import (
+    ClassifiedError,
     FailoverReason,
-    classify_api_error,
     clean_error_message,
-    is_stream_drop_error,
-    retry_after_seconds,
     summarize_api_error,
 )
 from .prompt_builder import (
@@ -136,7 +132,6 @@ from .client_initialization import (
     AgentClientInitializationPorts,
     AgentClientInitializationRuntime,
     build_client_kwargs_for_credentials,
-    build_qwen_portal_headers,
 )
 from ...infrastructure.llm.transport_runtime import ChatTransport
 from ...infrastructure.llm.stream_response import StreamChunkUpdate
@@ -148,6 +143,13 @@ from .tool_execution import (
 )
 from .tool_loop_service import ToolLoopService
 from .model_call_service import ModelCallService
+from .model_attempt_service import (
+    ModelAttemptAction,
+    ModelAttemptDecision,
+    ModelAttemptOutcome,
+    ModelAttemptPorts,
+    ModelAttemptService,
+)
 from .tool_turn import (
     context_pressure_tracker,
     execute_successful_tool_turn,
@@ -178,7 +180,6 @@ from ...infrastructure.providers.rate_limit import RateLimitState
 from ...domain.agent.response import (
     TruncationAction,
     decide_truncation_recovery,
-    inspect_chat_response,
     normalize_assistant_message,
     strip_thinking_blocks,
     strip_thinking_tags,
@@ -692,6 +693,9 @@ class AIAgent:
             events=self._event_port,
         )
         self._model_call_service = ModelCallService()
+        self._model_attempt_service = ModelAttemptService(
+            call_service=self._model_call_service,
+        )
 
         # Inject memory provider tool schemas into the tool surface
         if self.runtime_ports.memory and self.tools is not None:
@@ -3074,6 +3078,355 @@ class AIAgent:
             context_length_changed=context_length_changed,
         )
 
+    def _run_model_attempt(
+        self,
+        *,
+        turn_state: ConversationTurnState,
+        attempt_state: ApiAttemptState,
+        context: dict[str, Any],
+        system_message: str,
+        current_turn_user_idx: int,
+        user_contexts: list[str],
+        effective_task_id: str,
+        thinking_spinner: Any = None,
+    ) -> ModelAttemptOutcome:
+        """Run one model iteration through the explicit attempt state machine."""
+
+        def build_request() -> tuple[ChatRequestConfig, list[dict[str, Any]]]:
+            api_messages = prepare_chat_messages(
+                context["messages"],
+                system_prompt=context["active_system_prompt"] or "",
+                ephemeral_system_prompt=self.ephemeral_system_prompt or "",
+                prefill_messages=self.prefill_messages or (),
+                user_message_index=current_turn_user_idx,
+                user_contexts=user_contexts,
+                native_input_modalities=tuple(self._native_input_modalities()),
+            )
+            context["api_messages"] = api_messages
+            context["total_chars"] = sum(len(str(msg)) for msg in api_messages)
+            context["approx_tokens"] = estimate_messages_tokens_rough(api_messages)
+            return self._chat_request_config(), api_messages
+
+        def before_send(request: dict[str, Any]) -> None:
+            # A fallback, credential rotation, or ordinary retry starts a new
+            # stream. Reset delivery de-duplication for each transport call so
+            # a later provider's first delta is not mistaken for a duplicate.
+            self._reset_stream_delivery_tracking()
+            try:
+                from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
+
+                _invoke_hook(
+                    "pre_api_request",
+                    task_id=effective_task_id,
+                    session_id=self.session_id or "",
+                    platform=self.platform or "",
+                    model=self.model,
+                    provider=self.provider,
+                    base_url=self.base_url,
+                    api_call_count=turn_state.api_call_count,
+                    message_count=len(context["api_messages"]),
+                    tool_count=len(self.tools or []),
+                    approx_input_tokens=context["approx_tokens"],
+                    request_char_count=context["total_chars"],
+                    max_tokens=self.max_tokens,
+                )
+            except Exception:
+                pass
+            if env_var_enabled("VOIDCUBE_DUMP_REQUESTS"):
+                self._dump_api_request_debug(request, reason="preflight")
+
+        def stop_spinner() -> None:
+            nonlocal thinking_spinner
+            if thinking_spinner:
+                thinking_spinner.stop("")
+                thinking_spinner = None
+            if self.thinking_callback:
+                self.thinking_callback("")
+
+        def on_invalid_response(inspection: Any, state: ApiAttemptState) -> None:
+            stop_spinner()
+            details = ", ".join(inspection.errors)
+            self._vprint(
+                f"{self.log_prefix}⚠️  Invalid API response "
+                f"(attempt {state.retry_count}/{state.max_retries}): {details}",
+                force=True,
+            )
+            self._vprint(
+                f"{self.log_prefix}   🏢 Provider: {inspection.provider_name}",
+                force=True,
+            )
+            self._vprint(
+                f"{self.log_prefix}   📝 Provider message: "
+                f"{clean_error_message(inspection.provider_error)}",
+                force=True,
+            )
+            self._vprint(
+                f"{self.log_prefix}   ⏱️  {inspection.failure_hint}",
+                force=True,
+            )
+
+        def sanitize_for_retry(
+            _request_messages: list[dict[str, Any]],
+            error: Exception,
+        ) -> bool:
+            found = sanitize_messages_surrogates(context["messages"])
+            if not found and "ascii" in str(error).lower():
+                found = sanitize_messages_non_ascii(context["messages"])
+            return found
+
+        def recover_credentials(
+            classified: ClassifiedError,
+            _error: Exception,
+            state: ApiAttemptState,
+        ) -> bool:
+            recovered, state.rate_limit_retry_attempted = self._recover_with_credential_pool(
+                status_code=classified.status_code,
+                has_retried_429=state.rate_limit_retry_attempted,
+                classified_reason=classified.reason,
+                error_context=classified.error_context,
+            )
+            return recovered
+
+        def refresh_subscription(
+            classified: ClassifiedError,
+            _error: Exception,
+            state: ApiAttemptState,
+        ) -> bool:
+            if (
+                self.provider != "nous"
+                or classified.status_code != 401
+                or state.subscription_auth_retry_attempted
+            ):
+                return False
+            state.subscription_auth_retry_attempted = True
+            if self._try_refresh_nous_client_credentials(force=True):
+                self._vprint(
+                    f"{self.log_prefix}🔐 Nous agent key refreshed after 401. Retrying request..."
+                )
+                return True
+            return False
+
+        def activate_fallback(directive: Any) -> bool:
+            if directive.try_eager_fallback:
+                self._emit_status("⚠️ Rate limited — switching to fallback provider...")
+            elif directive.kind is RetryKind.abort_client_error:
+                self._emit_status(
+                    f"⚠️ Non-retryable error (HTTP {getattr(directive, 'status_code', '')}) — "
+                    "trying fallback..."
+                )
+            else:
+                self._emit_status(
+                    f"⚠️ Max retries ({attempt_state.max_retries}) exhausted — trying fallback..."
+                )
+            activated = self._try_activate_fallback()
+            if activated:
+                turn_state.compression_attempts = 0
+            return activated
+
+        def activate_invalid_fallback() -> bool:
+            if self._fallback_index < len(self._fallback_chain):
+                self._emit_status(
+                    "⚠️ Empty/malformed response — switching to fallback..."
+                )
+            activated = self._try_activate_fallback()
+            if activated:
+                turn_state.compression_attempts = 0
+            return activated
+
+        def recover_context(
+            directive: RetryDirective,
+            classified: ClassifiedError,
+            error: Exception,
+            state: ApiAttemptState,
+        ) -> ModelAttemptDecision:
+            recovery_kind = (
+                ContextRecoveryKind.payload_too_large
+                if directive.kind is RetryKind.compress_payload
+                else ContextRecoveryKind.context_overflow
+            )
+            expected_attempt = turn_state.compression_attempts + 1
+            self._emit_status(
+                (
+                    "⚠️ Request payload too large"
+                    if recovery_kind is ContextRecoveryKind.payload_too_large
+                    else f"🗜️ Context too large (~{context['approx_tokens']:,} tokens)"
+                )
+                + f" — recovery attempt {expected_attempt}/{state.max_compression_attempts}..."
+            )
+            recovery = execute_context_recovery(
+                recovery_kind,
+                error_message=str(error),
+                messages=context["messages"],
+                system_prompt=system_message or "",
+                approx_tokens=context["approx_tokens"],
+                task_id=effective_task_id,
+                previous_attempts=turn_state.compression_attempts,
+                max_attempts=state.max_compression_attempts,
+                compressor=self.context_compressor,
+                model=self.model,
+                base_url=self.base_url,
+                api_key=getattr(self, "api_key", ""),
+                provider=self.provider,
+                compress=self._compress_for_api_recovery,
+            )
+            turn_state.compression_attempts = recovery.attempt.number
+            if recovery.compression is not None:
+                context["messages"] = recovery.compression.messages
+                context["active_system_prompt"] = recovery.compression.system_prompt
+                context["conversation_history"] = None
+            if recovery.action is ContextRecoveryAction.fail:
+                return ModelAttemptDecision(
+                    ModelAttemptAction.failed,
+                    error=recovery.error or "Context recovery failed",
+                )
+            if recovery.output_token_limit is not None:
+                self._ephemeral_max_output_tokens = recovery.output_token_limit
+            return ModelAttemptDecision(
+                ModelAttemptAction.restart_context,
+                details={"recovery": recovery},
+            )
+
+        def recover_truncation(
+            assistant_message: Any,
+            finish_reason: str,
+            state: ApiAttemptState,
+        ) -> ModelAttemptDecision:
+            truncation = decide_truncation_recovery(
+                assistant_message,
+                finish_reason,
+                text_truncation_count=turn_state.length_continue_retries,
+                tool_truncation_count=turn_state.truncated_tool_call_retries,
+            )
+            if truncation.action is TruncationAction.fail_thinking_budget:
+                return ModelAttemptDecision(
+                    ModelAttemptAction.partial,
+                    error=(
+                        "Model used all output tokens on reasoning with none left "
+                        "for the response. Try lowering reasoning effort or increasing max_tokens."
+                    ),
+                    final_response=(
+                        "⚠️ **Thinking Budget Exhausted**\n\n"
+                        "The model used all its output tokens on reasoning and had none left "
+                        "for the actual response."
+                    ),
+                )
+            if truncation.action in {
+                TruncationAction.continue_text,
+                TruncationAction.return_partial_text,
+            }:
+                turn_state.length_continue_retries = truncation.text_truncation_count
+                context["messages"].append(
+                    self._build_assistant_message(assistant_message, finish_reason)
+                )
+                if truncation.content:
+                    turn_state.truncated_response_prefix += truncation.content
+                if truncation.action is TruncationAction.continue_text:
+                    context["messages"].append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "[System: Your previous response was truncated by the output "
+                                "length limit. Continue exactly where you left off. Do not "
+                                "restart or repeat prior text. Finish the answer directly.]"
+                            ),
+                        }
+                    )
+                    self._conversation_turn_runtime.save_progress(context["messages"])
+                    return ModelAttemptDecision(ModelAttemptAction.restart_continuation)
+                return ModelAttemptDecision(
+                    ModelAttemptAction.partial,
+                    error="Response remained truncated after 3 continuation attempts",
+                    final_response=strip_thinking_blocks(
+                        turn_state.truncated_response_prefix
+                    ).strip()
+                    or None,
+                )
+            if truncation.action is TruncationAction.retry_tool_call:
+                turn_state.truncated_tool_call_retries = truncation.tool_truncation_count
+                return ModelAttemptDecision(ModelAttemptAction.retry)
+            if truncation.action is TruncationAction.fail_tool_call:
+                turn_state.truncated_tool_call_retries = truncation.tool_truncation_count
+                return ModelAttemptDecision(
+                    ModelAttemptAction.partial,
+                    error="Response truncated due to output length limit",
+                )
+            return ModelAttemptDecision(ModelAttemptAction.failed, error="Unknown truncation action")
+
+        def on_error(
+            error: Exception,
+            classified: ClassifiedError,
+            state: ApiAttemptState,
+            config: ChatRequestConfig,
+        ) -> None:
+            summary = summarize_api_error(error)
+            logger.warning(
+                "API call failed (attempt %s/%s) error_type=%s summary=%s",
+                state.retry_count,
+                state.max_retries,
+                type(error).__name__,
+                summary,
+            )
+            self._vprint(
+                f"{self.log_prefix}⚠️ API call failed "
+                f"(attempt {state.retry_count}/{state.max_retries}): "
+                f"{type(error).__name__}"
+                f"{' [HTTP ' + str(classified.status_code) + ']' if classified.status_code else ''}",
+                force=True,
+            )
+            self._vprint(
+                f"{self.log_prefix}   🔌 Provider: {self.provider}  Model: {config.model}",
+                force=True,
+            )
+            self._vprint(f"{self.log_prefix}   📝 Error: {summary}", force=True)
+
+        def on_retry_wait(delay: float, rate_limited: bool) -> None:
+            self._emit_status(
+                (
+                    f"⏱️ Rate limit reached. Waiting {delay}s before retry"
+                    if rate_limited
+                    else f"⏳ Retrying in {delay:.1f}s"
+                )
+                + f" (attempt {attempt_state.retry_count + 1}/{attempt_state.max_retries})..."
+            )
+
+        outcome = self._model_attempt_service.execute(
+            ports=ModelAttemptPorts(
+                request_factory=build_request,
+                transport=self._chat_transport,
+                on_update=self._deliver_stream_update,
+                on_first_delta=stop_spinner,
+                before_send=before_send,
+                provider=lambda: self.provider or "",
+                context_length=lambda: getattr(
+                    self.context_compressor, "context_length", 200_000
+                ),
+                approx_tokens=lambda: context.get("approx_tokens", 0),
+                interrupted=lambda: self._interrupt_requested,
+                sanitize_messages=sanitize_for_retry,
+                recover_credentials=recover_credentials,
+                refresh_subscription=refresh_subscription,
+                fallback_available=lambda: self._fallback_index < len(self._fallback_chain),
+                credential_pool_may_recover=lambda classified: bool(
+                    classified.reason
+                    in (FailoverReason.rate_limit, FailoverReason.billing)
+                    and self._credential_pool is not None
+                    and self._credential_pool.has_available()
+                ),
+                activate_fallback=activate_fallback,
+                activate_fallback_for_invalid=activate_invalid_fallback,
+                recover_transport=lambda error, count, maximum: self._try_recover_primary_transport(
+                    error, retry_count=count, max_retries=maximum
+                ),
+                recover_context=recover_context,
+                recover_truncation=recover_truncation,
+                on_invalid_response=on_invalid_response,
+                on_error=on_error,
+                on_retry_wait=on_retry_wait,
+            ),
+            attempt=attempt_state,
+        )
+        return outcome
+
     def _execute_tool_calls(
         self,
         assistant_message,
@@ -3791,7 +4144,6 @@ class AIAgent:
         self._thinking_prefill_retries = 0
         self._last_content_with_tools = None
         self._mute_post_response = False
-        self._unicode_sanitization_passes = 0
 
         # Pre-turn connection health check: detect and clean up dead TCP
         # connections left over from provider outages or dropped streams.
@@ -4153,924 +4505,222 @@ class AIAgent:
             
             attempt_state = ApiAttemptState(started_at=time.time())
 
-            api_duration = 0.0
-            while attempt_state.can_retry:
-                try:
-                    self._reset_stream_delivery_tracking()
-                    def _before_model_send(request_kwargs):
-                        attempt_state.request_kwargs = request_kwargs
-                        try:
-                            from ...extensions.plugins.cli_adapter import invoke_hook as _invoke_hook
-                            _invoke_hook(
-                                "pre_api_request",
-                                task_id=effective_task_id,
-                                session_id=self.session_id or "",
-                                platform=self.platform or "",
-                                model=self.model,
-                                provider=self.provider,
-                                base_url=self.base_url,
-                                api_call_count=turn_state.api_call_count,
-                                message_count=len(api_messages),
-                                tool_count=len(self.tools or []),
-                                approx_input_tokens=approx_tokens,
-                                request_char_count=total_chars,
-                                max_tokens=self.max_tokens,
-                            )
-                        except Exception:
-                            pass
+            context = {
+                "messages": messages,
+                "active_system_prompt": active_system_prompt,
+                "api_messages": api_messages,
+                "total_chars": total_chars,
+                "approx_tokens": approx_tokens,
+                "conversation_history": conversation_history,
+            }
+            self._reset_stream_delivery_tracking()
 
-                        if env_var_enabled("VOIDCUBE_DUMP_REQUESTS"):
-                            self._dump_api_request_debug(
-                                attempt_state.request_kwargs,
-                                reason="preflight",
-                            )
+            outcome = self._run_model_attempt(
+                turn_state=turn_state,
+                attempt_state=attempt_state,
+                context=context,
+                system_message=system_message or "",
+                current_turn_user_idx=current_turn_user_idx,
+                user_contexts=user_contexts,
+                effective_task_id=effective_task_id,
+                thinking_spinner=thinking_spinner,
+            )
+            attempt_state = outcome.attempt
+            api_duration = outcome.duration_seconds
+            api_messages = context.get("api_messages", api_messages)
+            total_chars = context.get("total_chars", total_chars)
+            approx_tokens = context.get("approx_tokens", approx_tokens)
+            messages = context["messages"]
+            active_system_prompt = context["active_system_prompt"]
+            conversation_history = context.get("conversation_history", conversation_history)
 
-                    # Always prefer the streaming path — even without stream
-                    # consumers.  Streaming gives us fine-grained health
-                    # checking (configurable stale-stream and read timeouts)
-                    # that the non-streaming path lacks.  Without this,
-                    # subagents and other quiet-mode callers can hang
-                    # indefinitely when the provider keeps the connection
-                    # alive with SSE pings but never delivers a response.
-                    # The streaming path is a no-op for callbacks when no
-                    # consumers are registered, and falls back to non-
-                    # streaming automatically if the provider doesn't
-                    # support it.
-                    def _stop_spinner():
-                        nonlocal thinking_spinner
-                        if thinking_spinner:
-                            thinking_spinner.stop("")
-                            thinking_spinner = None
-                        if self.thinking_callback:
-                            self.thinking_callback("")
+            if thinking_spinner:
+                thinking_spinner.stop("")
+                thinking_spinner = None
+            if self.thinking_callback:
+                self.thinking_callback("")
 
-                    model_call = self._model_call_service.call(
-                        config=self._chat_request_config(),
-                        messages=api_messages,
-                        transport=self._chat_transport,
-                        on_update=self._deliver_stream_update,
-                        on_first_delta=_stop_spinner,
-                        before_send=_before_model_send,
-                    )
-                    attempt_state.request_kwargs = model_call.request_kwargs
-                    attempt_state.response = model_call.response
-                    api_duration = model_call.duration_seconds
-                    
-                    # Stop thinking spinner silently -- the response box or tool
-                    # execution messages that follow are more informative.
-                    if thinking_spinner:
-                        thinking_spinner.stop("")
-                        thinking_spinner = None
-                    if self.thinking_callback:
-                        self.thinking_callback("")
-                    
-                    if not self.quiet_mode:
-                        self._vprint(f"{self.log_prefix}⏱️  API 调用完成，耗时 {api_duration:.2f}s")
-                    
-                    if self.verbose_logging:
-                        # Log response with provider info if available
-                        resp_model = (
-                            getattr(attempt_state.response, "model", "N/A")
-                            if attempt_state.response
-                            else "N/A"
-                        )
-                        response_usage = (
-                            attempt_state.response.usage
-                            if hasattr(attempt_state.response, "usage")
-                            else "N/A"
-                        )
-                        logging.debug(
-                            "API Response received - Model: %s, Usage: %s",
-                            resp_model,
-                            response_usage,
-                        )
-                    
-                    attempt_state.response_inspection = inspect_chat_response(
-                        attempt_state.response,
-                        duration_seconds=api_duration,
-                    )
-                    if not attempt_state.response_inspection.valid:
-                        error_details = list(
-                            attempt_state.response_inspection.errors
-                        )
-                        # Stop spinner before printing error messages
-                        if thinking_spinner:
-                            thinking_spinner.stop("(´;ω;`) oops, retrying...")
-                            thinking_spinner = None
-                        if self.thinking_callback:
-                            self.thinking_callback("")
-                        
-                        # Invalid response — could be rate limiting, provider timeout,
-                        # upstream server error, or malformed response.
-                        attempt_state.record_failure()
-                        
-                        # Eager fallback: empty/malformed responses are a common
-                        # rate-limit symptom.  Switch to fallback immediately
-                        # rather than retrying with extended backoff.
-                        if self._fallback_index < len(self._fallback_chain):
-                            self._emit_status("⚠️ Empty/malformed response — switching to fallback...")
-                        if self._try_activate_fallback():
-                            attempt_state.reset_retry_cycle()
-                            turn_state.compression_attempts = 0
-                            continue
-
-                        error_msg = attempt_state.response_inspection.provider_error
-                        provider_name = attempt_state.response_inspection.provider_name
-                        _failure_hint = attempt_state.response_inspection.failure_hint
-
-                        self._vprint(f"{self.log_prefix}⚠️  Invalid API response (attempt {attempt_state.retry_count}/{attempt_state.max_retries}): {', '.join(error_details)}", force=True)
-                        self._vprint(f"{self.log_prefix}   🏢 Provider: {provider_name}", force=True)
-                        cleaned_provider_error = clean_error_message(error_msg)
-                        self._vprint(f"{self.log_prefix}   📝 Provider message: {cleaned_provider_error}", force=True)
-                        self._vprint(f"{self.log_prefix}   ⏱️  {_failure_hint}", force=True)
-                        
-                        if not attempt_state.can_retry:
-                            # Try fallback before giving up
-                            self._emit_status(f"⚠️ Max retries ({attempt_state.max_retries}) for invalid responses — trying fallback...")
-                            if self._try_activate_fallback():
-                                attempt_state.reset_retry_cycle()
-                                turn_state.compression_attempts = 0
-                                continue
-                            self._emit_status(f"❌ Max retries ({attempt_state.max_retries}) exceeded for invalid responses. Giving up.")
-                            logging.error(f"{self.log_prefix}Invalid API response after {attempt_state.max_retries} retries.")
-                            return self._conversation_turn_runtime.terminate(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                error=(
-                                    "Invalid API response after "
-                                    f"{attempt_state.max_retries} retries: "
-                                    f"{_failure_hint}"
-                                ),
-                                failed=True,
-                            )
-                        
-                        # Backoff before retry — jittered exponential: 5s base, 120s cap
-                        wait_time = jittered_backoff(attempt_state.retry_count, base_delay=5.0, max_delay=120.0)
-                        self._vprint(f"{self.log_prefix}⏳ Retrying in {wait_time:.1f}s ({_failure_hint})...", force=True)
-                        logging.warning(f"Invalid API response (retry {attempt_state.retry_count}/{attempt_state.max_retries}): {', '.join(error_details)} | Provider: {provider_name}")
-                        
-                        if not wait_for_retry(
-                            wait_time,
-                            interrupted=lambda: self._interrupt_requested,
-                        ):
-                            self._vprint(
-                                f"{self.log_prefix}🔧 Interrupt detected during "
-                                "retry wait, aborting.",
-                                force=True,
-                            )
-                            return self._conversation_turn_runtime.interrupted_result(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                final_response=(
-                                    "Operation interrupted during retry "
-                                    f"({_failure_hint}, attempt "
-                                    f"{attempt_state.retry_count}/"
-                                    f"{attempt_state.max_retries})."
-                                ),
-                            )
-                        continue  # Retry the API call
-
-                    # Check finish_reason before proceeding
-                    attempt_state.finish_reason = (
-                        attempt_state.response_inspection.finish_reason
-                    )
-
-                    if attempt_state.finish_reason == "length":
-                        self._vprint(f"{self.log_prefix}⚠️  Response truncated (finish_reason='length') - model hit max output tokens", force=True)
-                        assistant_message = attempt_state.response_inspection.message
-                        truncation = decide_truncation_recovery(
-                            assistant_message,
-                            attempt_state.finish_reason,
-                            text_truncation_count=turn_state.length_continue_retries,
-                            tool_truncation_count=turn_state.truncated_tool_call_retries,
-                        )
-
-                        if truncation.action is TruncationAction.fail_thinking_budget:
-                            _exhaust_error = (
-                                "Model used all output tokens on reasoning with none left "
-                                "for the response. Try lowering reasoning effort or "
-                                "increasing max_tokens."
-                            )
-                            self._vprint(
-                                f"{self.log_prefix}💭 Reasoning exhausted the output token budget — "
-                                f"no visible response was produced.",
-                                force=True,
-                            )
-                            # Return a user-friendly message as the response so
-                            # CLI (response box) and gateway (chat message) both
-                            # display it naturally instead of a suppressed error.
-                            _exhaust_response = (
-                                "⚠️ **Thinking Budget Exhausted**\n\n"
-                                "The model used all its output tokens on reasoning "
-                                "and had none left for the actual response.\n\n"
-                                "To fix this:\n"
-                                "→ Lower reasoning effort: `/thinkon low` or `/thinkon minimal`\n"
-                                "→ Increase the output token limit: "
-                                "set `model.max_tokens` in config.yaml"
-                            )
-                            return self._conversation_turn_runtime.partial_failure(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                final_response=_exhaust_response,
-                                error=_exhaust_error,
-                                cleanup_task_id=effective_task_id,
-                            )
-
-                        if truncation.action in {
-                            TruncationAction.continue_text,
-                            TruncationAction.return_partial_text,
-                        }:
-                            turn_state.length_continue_retries = (
-                                truncation.text_truncation_count
-                            )
-                            interim_msg = self._build_assistant_message(
-                                assistant_message,
-                                attempt_state.finish_reason,
-                            )
-                            messages.append(interim_msg)
-                            if truncation.content:
-                                turn_state.truncated_response_prefix += truncation.content
-
-                            if truncation.action is TruncationAction.continue_text:
-                                self._vprint(
-                                    f"{self.log_prefix}↻ Requesting continuation "
-                                    f"({turn_state.length_continue_retries}/3)..."
-                                )
-                                continue_msg = {
-                                    "role": "user",
-                                    "content": (
-                                        "[System: Your previous response was truncated by the output "
-                                        "length limit. Continue exactly where you left off. Do not "
-                                        "restart or repeat prior text. Finish the answer directly.]"
-                                    ),
-                                }
-                                messages.append(continue_msg)
-                                self._conversation_turn_runtime.save_progress(messages)
-                                attempt_state.request_length_continuation()
-                                break
-
-                            partial_response = strip_thinking_blocks(
-                                turn_state.truncated_response_prefix
-                            ).strip()
-                            return self._conversation_turn_runtime.partial_failure(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                final_response=partial_response or None,
-                                error=(
-                                    "Response remained truncated after 3 "
-                                    "continuation attempts"
-                                ),
-                                cleanup_task_id=effective_task_id,
-                            )
-
-                        if truncation.action is TruncationAction.retry_tool_call:
-                            turn_state.truncated_tool_call_retries = (
-                                truncation.tool_truncation_count
-                            )
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Truncated tool call detected — retrying API call...",
-                                force=True,
-                            )
-                            # Don't append the broken response to messages; rerun
-                            # the same request so incomplete arguments never execute.
-                            continue
-
-                        if truncation.action is TruncationAction.fail_tool_call:
-                            turn_state.truncated_tool_call_retries = (
-                                truncation.tool_truncation_count
-                            )
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Truncated tool call response detected again — refusing to execute incomplete tool arguments.",
-                                force=True,
-                            )
-                            return self._conversation_turn_runtime.partial_failure(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                final_response=None,
-                                error="Response truncated due to output length limit",
-                                cleanup_task_id=effective_task_id,
-                            )
-                    
-                    # Track actual token usage from response for context management
-                    if (
-                        hasattr(attempt_state.response, "usage")
-                        and attempt_state.response.usage
-                    ):
-                        canonical_usage = normalize_usage(
-                            attempt_state.response.usage
-                        )
-                        prompt_tokens = canonical_usage.prompt_tokens
-                        completion_tokens = canonical_usage.output_tokens
-                        total_tokens = canonical_usage.total_tokens
-                        usage_dict = {
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens,
-                            "total_tokens": total_tokens,
-                        }
-                        self.context_compressor.update_from_response(usage_dict)
-
-                        # Cache discovered context length after successful call.
-                        # Only persist limits confirmed by the provider (parsed
-                        # from the error message), not guessed probe tiers.
-                        if getattr(self.context_compressor, "_context_probed", False):
-                            ctx = self.context_compressor.context_length
-                            if getattr(self.context_compressor, "_context_probe_persistable", False):
-                                save_context_length(self.model, self.base_url, ctx)
-                                self._safe_print(f"{self.log_prefix}💾 Cached context length: {ctx:,} tokens for {self.model}")
-                            self.context_compressor._context_probed = False
-                            self.context_compressor._context_probe_persistable = False
-
-                        self.session_prompt_tokens += prompt_tokens
-                        self.session_completion_tokens += completion_tokens
-                        self.session_total_tokens += total_tokens
-                        self.session_api_calls += 1
-                        self.session_input_tokens += canonical_usage.input_tokens
-                        self.session_output_tokens += canonical_usage.output_tokens
-                        self.session_cache_read_tokens += canonical_usage.cache_read_tokens
-                        self.session_cache_write_tokens += canonical_usage.cache_write_tokens
-                        self.session_reasoning_tokens += canonical_usage.reasoning_tokens
-
-                        # Log API call details for debugging/observability
-                        _cache_pct = ""
-                        if canonical_usage.cache_read_tokens and prompt_tokens:
-                            _cache_pct = f" cache={canonical_usage.cache_read_tokens}/{prompt_tokens} ({100*canonical_usage.cache_read_tokens/prompt_tokens:.0f}%)"
-                        logger.info(
-                            "API call #%d: model=%s provider=%s in=%d out=%d total=%d latency=%.1fs%s",
-                            self.session_api_calls, self.model, self.provider or "unknown",
-                            prompt_tokens, completion_tokens, total_tokens,
-                            api_duration, _cache_pct,
-                        )
-
-                        cost_result = estimate_usage_cost(
-                            self.model,
-                            canonical_usage,
-                            provider=self.provider,
-                            base_url=self.base_url,
-                            api_key=getattr(self, "api_key", ""),
-                        )
-                        if cost_result.amount_usd is not None:
-                            self.session_estimated_cost_usd += float(cost_result.amount_usd)
-                        self.session_cost_status = cost_result.status
-                        self.session_cost_source = cost_result.source
-
-                        # Persist token counts to session DB for /insights.
-                        # Do this for every platform with a session_id so non-CLI
-                        # sessions (gateway and delegated runs) cannot lose
-                        # token/accounting data if a higher-level persistence path
-                        # is skipped or fails. Gateway/session-store writes use
-                        # absolute totals, so they safely overwrite these per-call
-                        # deltas instead of double-counting them.
-                        if self._session_db and self.session_id:
-                            try:
-                                self._session_db.update_token_counts(
-                                    self.session_id,
-                                    input_tokens=canonical_usage.input_tokens,
-                                    output_tokens=canonical_usage.output_tokens,
-                                    cache_read_tokens=canonical_usage.cache_read_tokens,
-                                    cache_write_tokens=canonical_usage.cache_write_tokens,
-                                    reasoning_tokens=canonical_usage.reasoning_tokens,
-                                    estimated_cost_usd=float(cost_result.amount_usd)
-                                    if cost_result.amount_usd is not None else None,
-                                    cost_status=cost_result.status,
-                                    cost_source=cost_result.source,
-                                    billing_provider=self.provider,
-                                    billing_base_url=self.base_url,
-                                    billing_mode="subscription_included"
-                                    if cost_result.status == "included" else None,
-                                    model=self.model,
-                                )
-                            except Exception:
-                                pass  # never block the agent loop
-                        
-                        if self.verbose_logging:
-                            logging.debug(f"Token usage: prompt={usage_dict['prompt_tokens']:,}, completion={usage_dict['completion_tokens']:,}, total={usage_dict['total_tokens']:,}")
-                        
-                    attempt_state.rate_limit_retry_attempted = False
-                    self._touch_activity(
-                        f"API call #{turn_state.api_call_count} completed"
-                    )
-                    break  # Success, exit retry loop
-
-                except InterruptedError:
-                    if thinking_spinner:
-                        thinking_spinner.stop("")
-                        thinking_spinner = None
-                    if self.thinking_callback:
-                        self.thinking_callback("")
-                    api_elapsed = time.time() - attempt_state.started_at
-                    self._vprint(f"{self.log_prefix}🔧 Interrupted during API call.", force=True)
-                    self._conversation_turn_runtime.persist(
-                        messages,
-                        conversation_history,
-                    )
-                    turn_state.interrupted = True
-                    turn_state.final_response = (
-                        "Operation interrupted: waiting for model response "
-                        f"({api_elapsed:.1f}s elapsed)."
-                    )
-                    break
-
-                except Exception as api_error:
-                    # Stop spinner before printing error messages
-                    if thinking_spinner:
-                        thinking_spinner.stop("(╥_╥) error, retrying...")
-                        thinking_spinner = None
-                    if self.thinking_callback:
-                        self.thinking_callback("")
-
-                    # -----------------------------------------------------------
-                    # UnicodeEncodeError recovery.  Two common causes:
-                    #   1. Lone surrogates (U+D800..U+DFFF) from clipboard paste
-                    #      (Google Docs, rich-text editors) — sanitize and retry.
-                    #   2. ASCII codec on systems with LANG=C or non-UTF-8 locale
-                    #      (e.g. Chromebooks) — any non-ASCII character fails.
-                    #      Detect via the error message mentioning 'ascii' codec.
-                    # We sanitize messages in-place and may retry twice:
-                    # first to strip surrogates, then once more for pure
-                    # ASCII-only locale sanitization if needed.
-                    # -----------------------------------------------------------
-                    if isinstance(api_error, UnicodeEncodeError) and getattr(self, '_unicode_sanitization_passes', 0) < 2:
-                        _err_str = str(api_error).lower()
-                        _is_ascii_codec = "'ascii'" in _err_str or "ascii" in _err_str
-                        _surrogates_found = sanitize_messages_surrogates(messages)
-                        if _surrogates_found:
-                            self._unicode_sanitization_passes += 1
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Stripped invalid surrogate characters from messages. Retrying...",
-                                force=True,
-                            )
-                            continue
-                        if _is_ascii_codec:
-                            # ASCII codec: the system encoding can't handle
-                            # non-ASCII characters at all. Sanitize all
-                            # non-ASCII content from messages and retry.
-                            if sanitize_messages_non_ascii(messages):
-                                self._unicode_sanitization_passes += 1
-                                self._vprint(
-                                    f"{self.log_prefix}⚠️  System encoding is ASCII — stripped non-ASCII characters from messages. Retrying...",
-                                    force=True,
-                                )
-                                continue
-                        # Nothing to sanitize in messages — might be in system
-                        # prompt or prefill. Fall through to normal error path.
-
-                    # ── Classify the error for structured recovery decisions ──
-                    _compressor = getattr(self, "context_compressor", None)
-                    _ctx_len = getattr(_compressor, "context_length", 200000) if _compressor else 200000
-                    classified = classify_api_error(
-                        api_error,
-                        provider=getattr(self, "provider", "") or "",
-                        model=getattr(self, "model", "") or "",
-                        approx_tokens=approx_tokens,
-                        context_length=_ctx_len,
-                        num_messages=len(api_messages) if api_messages else 0,
-                    )
-                    status_code = classified.status_code
-                    error_context = classified.error_context
-                    logger.debug(
-                        "Error classified: reason=%s status=%s retryable=%s compress=%s rotate=%s fallback=%s",
-                        classified.reason.value, classified.status_code,
-                        classified.retryable, classified.should_compress,
-                        classified.should_rotate_credential, classified.should_fallback,
-                    )
-
-                    (
-                        recovered_with_pool,
-                        attempt_state.rate_limit_retry_attempted,
-                    ) = self._recover_with_credential_pool(
-                        status_code=status_code,
-                        has_retried_429=attempt_state.rate_limit_retry_attempted,
-                        classified_reason=classified.reason,
-                        error_context=error_context,
-                    )
-                    if recovered_with_pool:
-                        continue
-                    if (
-                        self.provider == "nous"
-                        and status_code == 401
-                        and not attempt_state.subscription_auth_retry_attempted
-                    ):
-                        attempt_state.subscription_auth_retry_attempted = True
-                        if self._try_refresh_nous_client_credentials(force=True):
-                            print(f"{self.log_prefix}🔐 Nous agent key refreshed after 401. Retrying request...")
-                            continue
-                    attempt_state.record_failure()
-                    elapsed_time = time.time() - attempt_state.started_at
-                    
-                    error_type = type(api_error).__name__
-                    error_msg = str(api_error).lower()
-                    _error_summary = summarize_api_error(api_error)
-                    logger.warning(
-                        "API call failed (attempt %s/%s) error_type=%s %s summary=%s",
-                        attempt_state.retry_count,
-                        attempt_state.max_retries,
-                        error_type,
-                        self._client_lifecycle.log_context(),
-                        _error_summary,
-                    )
-
-                    _provider = getattr(self, "provider", "unknown")
-                    _base = getattr(self, "base_url", "unknown")
-                    _model = getattr(self, "model", "unknown")
-                    _status_code_str = f" [HTTP {status_code}]" if status_code else ""
-                    self._vprint(f"{self.log_prefix}⚠️  API call failed (attempt {attempt_state.retry_count}/{attempt_state.max_retries}): {error_type}{_status_code_str}", force=True)
-                    self._vprint(f"{self.log_prefix}   🔌 Provider: {_provider}  Model: {_model}", force=True)
-                    self._vprint(f"{self.log_prefix}   🌐 Endpoint: {_base}", force=True)
-                    self._vprint(f"{self.log_prefix}   📝 Error: {_error_summary}", force=True)
-                    if status_code and status_code < 500:
-                        _err_body = getattr(api_error, "body", None)
-                        _err_body_str = str(_err_body)[:300] if _err_body else None
-                        if _err_body_str:
-                            self._vprint(f"{self.log_prefix}   📋 Details: {_err_body_str}", force=True)
-                    self._vprint(f"{self.log_prefix}   ⏱️  Elapsed: {elapsed_time:.2f}s  Context: {len(api_messages)} msgs, ~{approx_tokens:,} tokens")
-
-                    # Actionable hint for OpenRouter "no tool endpoints" error.
-                    # This fires regardless of whether fallback succeeds — the
-                    # user needs to know WHY their model failed so they can fix
-                    # their provider routing, not just silently fall back.
-                    if (
-                        self._is_openrouter_url()
-                        and "support tool use" in error_msg
-                    ):
-                        self._vprint(
-                            f"{self.log_prefix}   💡 No OpenRouter providers for {_model} support tool calling with your current settings.",
-                            force=True,
-                        )
-                        if self.providers_allowed:
-                            self._vprint(
-                                f"{self.log_prefix}      Your provider_routing.only restriction is filtering out tool-capable providers.",
-                                force=True,
-                            )
-                            self._vprint(
-                                f"{self.log_prefix}      Try removing the restriction or adding providers that support tools for this model.",
-                                force=True,
-                            )
-                        self._vprint(
-                            f"{self.log_prefix}      Check which providers support tools: https://openrouter.ai/models/{_model}",
-                            force=True,
-                        )
-
-                    # Check for interrupt before deciding to retry
-                    if self._interrupt_requested:
-                        self._vprint(f"{self.log_prefix}🔧 Interrupt detected during error handling, aborting retries.", force=True)
-                        return self._conversation_turn_runtime.interrupted_result(
-                            messages=messages,
-                            conversation_history=conversation_history,
-                            api_call_count=turn_state.api_call_count,
-                            final_response=(
-                                "Operation interrupted: handling API error "
-                                f"({error_type}: "
-                                f"{clean_error_message(str(api_error))})."
-                            ),
-                        )
-                    
-                    fallback_available = self._fallback_index < len(self._fallback_chain)
-                    pool = self._credential_pool
-                    pool_may_recover = (
-                        fallback_available
-                        and classified.reason in (
-                            FailoverReason.rate_limit,
-                            FailoverReason.billing,
-                        )
-                        and pool is not None
-                        and pool.has_available()
-                    )
-                    def _activate_directive_fallback(retry_directive) -> bool:
-                        if retry_directive.try_eager_fallback:
-                            self._emit_status(
-                                "⚠️ Rate limited — switching to fallback provider..."
-                            )
-                        elif retry_directive.kind is RetryKind.abort_client_error:
-                            self._emit_status(
-                                f"⚠️ Non-retryable error (HTTP {status_code}) — "
-                                "trying fallback..."
-                            )
-                        else:
-                            self._emit_status(
-                                f"⚠️ Max retries ({attempt_state.max_retries}) "
-                                "exhausted — trying fallback..."
-                            )
-                        return self._try_activate_fallback()
-
-                    model_recovery = self._model_call_service.recover(
-                        attempt=attempt_state,
-                        classified=classified,
-                        error=api_error,
-                        fallback_available=fallback_available,
-                        credential_pool_may_recover=pool_may_recover,
-                        activate_fallback=_activate_directive_fallback,
-                        recover_transport=lambda error, count, maximum: (
-                            self._try_recover_primary_transport(
-                                error,
-                                retry_count=count,
-                                max_retries=maximum,
-                            )
-                        ),
-                    )
-                    retry_directive = model_recovery.directive
-                    is_rate_limited = retry_directive.is_rate_limited
-                    if model_recovery.recovery.kind is RetryRecoveryKind.fallback:
-                        turn_state.compression_attempts = 0
-                        continue
-                    if model_recovery.recovery.kind is RetryRecoveryKind.transport:
-                        continue
-
-                    if retry_directive.kind in {
-                        RetryKind.compress_payload,
-                        RetryKind.recover_context,
-                    }:
-                        recovery_kind = (
-                            ContextRecoveryKind.payload_too_large
-                            if retry_directive.kind is RetryKind.compress_payload
-                            else ContextRecoveryKind.context_overflow
-                        )
-                        expected_attempt = turn_state.compression_attempts + 1
-                        if recovery_kind is ContextRecoveryKind.payload_too_large:
-                            self._emit_status(
-                                "⚠️  Request payload too large (413) — compression "
-                                f"attempt {expected_attempt}/"
-                                f"{attempt_state.max_compression_attempts}..."
-                            )
-                        else:
-                            self._emit_status(
-                                f"🗜️ Context too large (~{approx_tokens:,} tokens) — "
-                                f"recovery attempt {expected_attempt}/"
-                                f"{attempt_state.max_compression_attempts}..."
-                            )
-
-                        recovery = execute_context_recovery(
-                            recovery_kind,
-                            error_message=error_msg,
-                            messages=messages,
-                            system_prompt=system_message or "",
-                            approx_tokens=approx_tokens,
-                            task_id=effective_task_id,
-                            previous_attempts=turn_state.compression_attempts,
-                            max_attempts=attempt_state.max_compression_attempts,
-                            compressor=self.context_compressor,
-                            model=self.model,
-                            base_url=self.base_url,
-                            api_key=getattr(self, "api_key", ""),
-                            provider=self.provider,
-                            compress=self._compress_for_api_recovery,
-                        )
-                        turn_state.compression_attempts = recovery.attempt.number
-
-                        if recovery.compression is not None:
-                            messages = recovery.compression.messages
-                            active_system_prompt = (
-                                recovery.compression.system_prompt
-                            )
-                            conversation_history = None
-
-                        if recovery.action is ContextRecoveryAction.fail:
-                            if recovery.attempt.exhausted:
-                                self._vprint(
-                                    f"{self.log_prefix}❌ Max compression attempts "
-                                    f"({attempt_state.max_compression_attempts}) "
-                                    "reached.",
-                                    force=True,
-                                )
-                            elif recovery_kind is ContextRecoveryKind.payload_too_large:
-                                self._vprint(
-                                    f"{self.log_prefix}❌ Payload too large and "
-                                    "cannot compress further.",
-                                    force=True,
-                                )
-                            else:
-                                self._vprint(
-                                    f"{self.log_prefix}❌ Context length exceeded "
-                                    "and cannot compress further.",
-                                    force=True,
-                                )
-                            self._vprint(
-                                f"{self.log_prefix}   💡 Try /new to start a "
-                                "fresh conversation, or /compress to retry "
-                                "compression.",
-                                force=True,
-                            )
-                            logging.error("%s%s", self.log_prefix, recovery.error)
-                            return self._conversation_turn_runtime.partial_failure(
-                                messages=messages,
-                                conversation_history=conversation_history,
-                                api_call_count=turn_state.api_call_count,
-                                error=recovery.error or "Context recovery failed",
-                            )
-
-                        if recovery.output_token_limit is not None:
-                            self._ephemeral_max_output_tokens = (
-                                recovery.output_token_limit
-                            )
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Output cap too large for "
-                                "current prompt — retrying with "
-                                f"max_tokens={recovery.output_token_limit:,} "
-                                f"(available_tokens="
-                                f"{recovery.available_output_tokens:,}; "
-                                "context_length unchanged at "
-                                f"{recovery.current_context_length:,})",
-                                force=True,
-                            )
-                            attempt_state.request_compressed_restart()
-                            break
-
-                        if recovery_kind is ContextRecoveryKind.context_overflow:
-                            if recovery.context_length_changed:
-                                if recovery.parsed_context_limit:
-                                    self._vprint(
-                                        f"{self.log_prefix}⚠️  Context limit "
-                                        "detected from API: "
-                                        f"{recovery.next_context_length:,} tokens "
-                                        f"(was {recovery.current_context_length:,})",
-                                        force=True,
-                                    )
-                                self._vprint(
-                                    f"{self.log_prefix}⚠️  Context length "
-                                    "exceeded — stepping down: "
-                                    f"{recovery.current_context_length:,} → "
-                                    f"{recovery.next_context_length:,} tokens",
-                                    force=True,
-                                )
-                            else:
-                                self._vprint(
-                                    f"{self.log_prefix}⚠️  Context length "
-                                    "exceeded at minimum tier — attempting "
-                                    "compression...",
-                                    force=True,
-                                )
-
-                        compression = recovery.compression
-                        if compression and compression.message_count_reduced:
-                            self._emit_status(
-                                f"🗜️ Compressed {compression.original_message_count} "
-                                f"→ {len(messages)} messages, retrying..."
-                            )
-                        time.sleep(2)
-                        attempt_state.request_compressed_restart()
-                        break
-
-                    if retry_directive.kind is RetryKind.abort_client_error:
-                        if attempt_state.request_kwargs is not None:
-                            self._dump_api_request_debug(
-                                attempt_state.request_kwargs,
-                                reason="non_retryable_client_error",
-                                error=api_error,
-                            )
-                        self._emit_status(
-                            f"❌ Non-retryable error (HTTP {status_code}): "
-                            f"{summarize_api_error(api_error)}"
-                        )
-                        self._vprint(f"{self.log_prefix}❌ Non-retryable client error (HTTP {status_code}). Aborting.", force=True)
-                        self._vprint(f"{self.log_prefix}   🔌 Provider: {_provider}  Model: {_model}", force=True)
-                        self._vprint(f"{self.log_prefix}   🌐 Endpoint: {_base}", force=True)
-                        # Actionable guidance for common auth errors
-                        if classified.is_auth or classified.reason == FailoverReason.billing:
-                            self._vprint(f"{self.log_prefix}   💡 Your API key was rejected by the provider. Check:", force=True)
-                            self._vprint(f"{self.log_prefix}      • Is the key valid? Run: /api", force=True)
-                            self._vprint(f"{self.log_prefix}      • Does your account have access to {_model}?", force=True)
-                            if "openrouter" in str(_base).lower():
-                                self._vprint(f"{self.log_prefix}      • Check credits: https://openrouter.ai/settings/credits", force=True)
-                        else:
-                            self._vprint(f"{self.log_prefix}   💡 This type of error won't be fixed by retrying.", force=True)
-                        logging.error(f"{self.log_prefix}Non-retryable client error: {api_error}")
-                        # Skip session persistence when the error is likely
-                        # context-overflow related (status 400 + large session).
-                        # Persisting the failed user message would make the
-                        # session even larger, causing the same failure on the
-                        # next attempt. (#1630)
-                        skip_failed_persistence = status_code == 400 and (
-                            approx_tokens > 50000 or len(api_messages) > 80
-                        )
-                        if skip_failed_persistence:
-                            self._vprint(
-                                f"{self.log_prefix}⚠️  Skipping session persistence "
-                                f"for large failed session to prevent growth loop.",
-                                force=True,
-                            )
-                        return self._conversation_turn_runtime.terminate(
-                            messages=messages,
-                            conversation_history=conversation_history,
-                            api_call_count=turn_state.api_call_count,
-                            final_response=None,
-                            failed=True,
-                            error=str(api_error),
-                            persist=not skip_failed_persistence,
-                        )
-
-                    if retry_directive.kind is RetryKind.exhausted:
-                        _final_summary = summarize_api_error(api_error)
-                        if is_rate_limited:
-                            self._emit_status(f"❌ Rate limited after {attempt_state.max_retries} retries — {_final_summary}")
-                        else:
-                            self._emit_status(f"❌ API failed after {attempt_state.max_retries} retries — {_final_summary}")
-                        self._vprint(f"{self.log_prefix}   💀 Final error: {_final_summary}", force=True)
-
-                        # Detect SSE stream-drop pattern (e.g. "Network
-                        # connection lost") and surface actionable guidance.
-                        # This typically happens when the model generates a
-                        # very large tool call (write_file with huge content)
-                        # and the proxy/CDN drops the stream mid-response.
-                        _is_stream_drop = is_stream_drop_error(api_error)
-                        if _is_stream_drop:
-                            self._vprint(
-                                f"{self.log_prefix}   💡 The provider's stream "
-                                f"connection keeps dropping. This often happens "
-                                f"when the model tries to write a very large "
-                                f"file in a single tool call.",
-                                force=True,
-                            )
-                            self._vprint(
-                                f"{self.log_prefix}      Try asking the model "
-                                f"to use execute_code with Python's open() for "
-                                f"large files, or to write the file in smaller "
-                                f"sections.",
-                                force=True,
-                            )
-
-                        logging.error(
-                            "%sAPI call failed after %s retries. %s | provider=%s model=%s msgs=%s tokens=~%s",
-                            self.log_prefix, attempt_state.max_retries, _final_summary,
-                            _provider, _model, len(api_messages), f"{approx_tokens:,}",
-                        )
-                        if attempt_state.request_kwargs is not None:
-                            self._dump_api_request_debug(
-                                attempt_state.request_kwargs,
-                                reason="max_retries_exhausted",
-                                error=api_error,
-                            )
-                        _final_response = f"API call failed after {attempt_state.max_retries} retries: {_final_summary}"
-                        if _is_stream_drop:
-                            _final_response += (
-                                "\n\nThe provider's stream connection keeps "
-                                "dropping — this often happens when generating "
-                                "very large tool call responses (e.g. write_file "
-                                "with long content). Try asking me to use "
-                                "execute_code with Python's open() for large "
-                                "files, or to write in smaller sections."
-                            )
-                        return self._conversation_turn_runtime.terminate(
-                            messages=messages,
-                            conversation_history=conversation_history,
-                            api_call_count=turn_state.api_call_count,
-                            final_response=_final_response,
-                            failed=True,
-                            error=_final_summary,
-                        )
-
-                    # For rate limits, respect the Retry-After header if present
-                    _retry_after = retry_after_seconds(api_error) if is_rate_limited else None
-                    wait_time = _retry_after if _retry_after else jittered_backoff(attempt_state.retry_count, base_delay=2.0, max_delay=60.0)
-                    if is_rate_limited:
-                        self._emit_status(f"⏱️ Rate limit reached. Waiting {wait_time}s before retry (attempt {attempt_state.retry_count + 1}/{attempt_state.max_retries})...")
-                    else:
-                        self._emit_status(f"⏳ Retrying in {wait_time}s (attempt {attempt_state.retry_count}/{attempt_state.max_retries})...")
-                    logger.warning(
-                        "Retrying API call in %ss (attempt %s/%s) %s error=%s",
-                        wait_time,
-                        attempt_state.retry_count,
-                        attempt_state.max_retries,
-                        self._client_lifecycle.log_context(),
-                        api_error,
-                    )
-                    if not wait_for_retry(
-                        wait_time,
-                        interrupted=lambda: self._interrupt_requested,
-                    ):
-                        self._vprint(
-                            f"{self.log_prefix}🔧 Interrupt detected during "
-                            "retry wait, aborting.",
-                            force=True,
-                        )
-                        return self._conversation_turn_runtime.interrupted_result(
-                            messages=messages,
-                            conversation_history=conversation_history,
-                            api_call_count=turn_state.api_call_count,
-                            final_response=(
-                                "Operation interrupted: retrying API call "
-                                f"after error (retry {attempt_state.retry_count}/"
-                                f"{attempt_state.max_retries})."
-                            ),
-                        )
-            
-            # If the API call was interrupted, skip response processing
-            if turn_state.interrupted:
+            if outcome.action is ModelAttemptAction.interrupted:
+                turn_state.interrupted = True
                 turn_state.exit_reason = "interrupted_during_api_call"
-                break
+                return self._conversation_turn_runtime.terminate(
+                    messages=messages,
+                    conversation_history=conversation_history,
+                    api_call_count=turn_state.api_call_count,
+                    final_response=outcome.final_response or "Operation interrupted during API call.",
+                    interrupted=True,
+                    clear_interrupt=True,
+                )
 
-            if attempt_state.restart_with_compressed_messages:
+            if outcome.action is ModelAttemptAction.restart_context:
                 turn_state.api_call_count -= 1
                 self.iteration_budget.refund()
-                # Compression attempts are retained by the turn state across
-                # the refunded outer-loop restart.
+                # Context compression/output-cap recovery owns its retry budget;
+                # refund the outer iteration so the recovered request is free.
                 continue
 
-            if attempt_state.restart_with_length_continuation:
+            if outcome.action is ModelAttemptAction.restart_continuation:
+                # Text continuation is a new model iteration and intentionally
+                # consumes the outer budget.
                 continue
+
+            if outcome.action is ModelAttemptAction.partial:
+                return self._conversation_turn_runtime.partial_failure(
+                    messages=messages,
+                    conversation_history=conversation_history,
+                    api_call_count=turn_state.api_call_count,
+                    final_response=outcome.final_response,
+                    error=outcome.error or "Model returned a partial response",
+                    cleanup_task_id=effective_task_id,
+                )
+
+            if outcome.action is ModelAttemptAction.failed:
+                if attempt_state.request_kwargs is not None:
+                    self._dump_api_request_debug(
+                        attempt_state.request_kwargs,
+                        reason="model_attempt_failed",
+                    )
+                failure = outcome.error or "API call failed after all retries."
+                status_code = (
+                    outcome.classified.status_code
+                    if outcome.classified is not None
+                    else None
+                )
+                skip_failed_persistence = status_code == 400 and (
+                    approx_tokens > 50000 or len(api_messages) > 80
+                )
+                return self._conversation_turn_runtime.terminate(
+                    messages=messages,
+                    conversation_history=conversation_history,
+                    api_call_count=turn_state.api_call_count,
+                    final_response=outcome.final_response or failure,
+                    failed=True,
+                    error=failure,
+                    persist=not skip_failed_persistence,
+                )
+
+            # A successful outcome is processed by the normal response/tool loop
+            # below.  The service has already validated the response and applied
+            # all request-level recovery transitions.
+            if outcome.action is not ModelAttemptAction.success:
+                turn_state.exit_reason = "model_attempt_unhandled"
+                return self._conversation_turn_runtime.terminate(
+                    messages=messages,
+                    conversation_history=conversation_history,
+                    api_call_count=turn_state.api_call_count,
+                    final_response=outcome.error or "Model attempt did not complete.",
+                    failed=True,
+                    error=outcome.error or "Unhandled model attempt outcome",
+                )
+
+            if not self.quiet_mode:
+                self._vprint(f"{self.log_prefix}⏱️  API 调用完成，耗时 {api_duration:.2f}s")
+
+            # Track actual token usage from response for context management
+            if (
+                hasattr(attempt_state.response, "usage")
+                and attempt_state.response.usage
+            ):
+                canonical_usage = normalize_usage(attempt_state.response.usage)
+                prompt_tokens = canonical_usage.prompt_tokens
+                completion_tokens = canonical_usage.output_tokens
+                total_tokens = canonical_usage.total_tokens
+                usage_dict = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                }
+                self.context_compressor.update_from_response(usage_dict)
+
+                # Cache discovered context length after successful call.
+                if getattr(self.context_compressor, "_context_probed", False):
+                    ctx = self.context_compressor.context_length
+                    if getattr(self.context_compressor, "_context_probe_persistable", False):
+                        save_context_length(self.model, self.base_url, ctx)
+                        self._safe_print(
+                            f"{self.log_prefix}💾 Cached context length: {ctx:,} tokens for {self.model}"
+                        )
+                    self.context_compressor._context_probed = False
+                    self.context_compressor._context_probe_persistable = False
+
+                self.session_prompt_tokens += prompt_tokens
+                self.session_completion_tokens += completion_tokens
+                self.session_total_tokens += total_tokens
+                self.session_api_calls += 1
+                self.session_input_tokens += canonical_usage.input_tokens
+                self.session_output_tokens += canonical_usage.output_tokens
+                self.session_cache_read_tokens += canonical_usage.cache_read_tokens
+                self.session_cache_write_tokens += canonical_usage.cache_write_tokens
+                self.session_reasoning_tokens += canonical_usage.reasoning_tokens
+
+                _cache_pct = ""
+                if canonical_usage.cache_read_tokens and prompt_tokens:
+                    _cache_pct = (
+                        f" cache={canonical_usage.cache_read_tokens}/{prompt_tokens} "
+                        f"({100*canonical_usage.cache_read_tokens/prompt_tokens:.0f}%)"
+                    )
+                logger.info(
+                    "API call #%d: model=%s provider=%s in=%d out=%d total=%d latency=%.1fs%s",
+                    self.session_api_calls,
+                    self.model,
+                    self.provider or "unknown",
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    api_duration,
+                    _cache_pct,
+                )
+
+                cost_result = estimate_usage_cost(
+                    self.model,
+                    canonical_usage,
+                    provider=self.provider,
+                    base_url=self.base_url,
+                    api_key=getattr(self, "api_key", ""),
+                )
+                if cost_result.amount_usd is not None:
+                    self.session_estimated_cost_usd += float(cost_result.amount_usd)
+                self.session_cost_status = cost_result.status
+                self.session_cost_source = cost_result.source
+
+                if self._session_db and self.session_id:
+                    try:
+                        self._session_db.update_token_counts(
+                            self.session_id,
+                            input_tokens=canonical_usage.input_tokens,
+                            output_tokens=canonical_usage.output_tokens,
+                            cache_read_tokens=canonical_usage.cache_read_tokens,
+                            cache_write_tokens=canonical_usage.cache_write_tokens,
+                            reasoning_tokens=canonical_usage.reasoning_tokens,
+                            estimated_cost_usd=(
+                                float(cost_result.amount_usd)
+                                if cost_result.amount_usd is not None
+                                else None
+                            ),
+                            cost_status=cost_result.status,
+                            cost_source=cost_result.source,
+                            billing_provider=self.provider,
+                            billing_base_url=self.base_url,
+                            billing_mode=(
+                                "subscription_included"
+                                if cost_result.status == "included"
+                                else None
+                            ),
+                            model=self.model,
+                        )
+                    except Exception:
+                        pass
+
+                if self.verbose_logging:
+                    logging.debug(
+                        "Token usage: prompt=%s, completion=%s, total=%s",
+                        f"{usage_dict['prompt_tokens']:,}",
+                        f"{usage_dict['completion_tokens']:,}",
+                        f"{usage_dict['total_tokens']:,}",
+                    )
+
+            attempt_state.rate_limit_retry_attempted = False
+            self._touch_activity(f"API call #{turn_state.api_call_count} completed")
 
             # Guard: if all retries exhausted without a successful response
             # (e.g. repeated context-length errors that exhausted retry_count),

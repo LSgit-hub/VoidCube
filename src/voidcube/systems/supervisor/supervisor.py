@@ -53,6 +53,7 @@ from .runtime_assemblers import (
     assemble_supervisor_execution_runtime,
     assemble_supervisor_runtime_state,
     assemble_supervisor_ui_runtime,
+    bootstrap_supervisor_runtime_storage,
 )
 from .scheduled_tasks import ScheduledTaskRuntimeMixin
 from .service_runtime import ServiceRuntimeMixin
@@ -1234,6 +1235,7 @@ class Supervisor(
     async def _app_lifespan(self, app: FastAPI):
         del app
         try:
+            bootstrap_supervisor_runtime_storage(self)
             self._recover_startup_state()
             service_id = await self.register_with_gateway()
             if not service_id:

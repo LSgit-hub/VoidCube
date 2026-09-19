@@ -44,13 +44,12 @@ class MemGovernorBridge:
         storage_root: str | Path,
         engine: GovernorDecisionEngine | None = None,
         governance_repo: Any | None = None,
+        defer_open: bool = False,
     ) -> None:
         self.storage_root = Path(storage_root).resolve()
-        self.storage_root.mkdir(parents=True, exist_ok=True)
         self.history_path = self.storage_root / "governor_history.jsonl"
         self.latest_path = self.storage_root / "governor_latest.json"
-        self._normalize_history_memory_domain()
-        self._normalize_latest_memory_domain()
+        self._opened = False
         if engine is not None:
             self._engine = engine
         else:
@@ -68,6 +67,22 @@ class MemGovernorBridge:
 
             repo_path = self.storage_root / "mem_governance.jsonl"
             self._governance_repo = GovernanceEventRepository(repo_path)
+        if not defer_open:
+            self.open()
+
+    def open(self) -> None:
+        """Open projection storage and apply legacy normalization explicitly."""
+        with self._lock:
+            if self._opened:
+                return
+            self.storage_root.mkdir(parents=True, exist_ok=True)
+            self._normalize_history_memory_domain()
+            self._normalize_latest_memory_domain()
+            self._opened = True
+
+    def _ensure_open(self) -> None:
+        if not self._opened:
+            self.open()
 
     @property
     def governance_repository(self) -> Any:
@@ -224,6 +239,7 @@ class MemGovernorBridge:
         )
 
     def list_history(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        self._ensure_open()
         if not self.history_path.exists():
             return []
         rows: list[Dict[str, Any]] = []
@@ -244,12 +260,14 @@ class MemGovernorBridge:
         return rows
 
     def get_latest(self) -> Optional[Dict[str, Any]]:
+        self._ensure_open()
         if not self.latest_path.exists():
             return None
         return json.loads(self.latest_path.read_text(encoding="utf-8"))
 
     def clear_runtime_projection(self) -> None:
         """Clear the legacy Governor projection without deleting Mem history."""
+        self._ensure_open()
         with self._lock:
             if self.history_path.exists():
                 self.history_path.write_text("", encoding="utf-8")
@@ -409,6 +427,7 @@ class MemGovernorBridge:
         }
 
     def _record(self, record: MemGovernorRecord) -> None:
+        self._ensure_open()
         gov_event = self._to_governance_event(record)
         self._governance_repo.append(gov_event)
 

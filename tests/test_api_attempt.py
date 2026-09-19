@@ -33,11 +33,10 @@ def test_attempt_retry_reset_clears_primary_recovery_only():
     assert state.rate_limit_retry_attempted is True
 
 
-def test_attempt_restart_transitions_are_explicit():
-    state = ApiAttemptState(started_at=10.0)
+def test_unicode_sanitization_budget_is_scoped_to_each_attempt():
+    first = ApiAttemptState(started_at=10.0)
+    first.unicode_sanitization_passes = 2
 
-    state.request_compressed_restart()
-    state.request_length_continuation()
+    second = ApiAttemptState(started_at=20.0)
 
-    assert state.restart_with_compressed_messages is True
-    assert state.restart_with_length_continuation is True
+    assert second.unicode_sanitization_passes == 0

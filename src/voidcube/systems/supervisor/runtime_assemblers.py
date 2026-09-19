@@ -118,13 +118,7 @@ from .ui_runtime import (
 logger = logging.getLogger("supervisor")
 
 
-def assemble_supervisor_runtime_state(supervisor: Any) -> None:
-    def record_ui_activity(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        return supervisor._ui_runtime.record_activity(*args, **kwargs)
-
-    def clear_ui_activity() -> None:
-        supervisor._ui_runtime.clear_activity()
-
+def _migrate_supervisor_runtime_storage(supervisor: Any) -> None:
     execution_config = supervisor.config.execution
     body_runtime_config = supervisor.config.body_runtime
     body_state_root = Path(body_runtime_config.state_root)
@@ -143,12 +137,6 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
                 body_result.files_verified,
                 body_result.linked_worktrees_repaired,
             )
-    supervisor._body_registry = BodyRegistryManager(
-        execution_config.git_repo_path,
-        state_root=body_state_root,
-        slot_ids=(body_runtime_config.slot_a_name, body_runtime_config.slot_b_name),
-    )
-    supervisor._body_registry.initialize_layout()
 
     runtime_root = Path(supervisor.config.soul_store_path)
     canonical_root = get_runtime_layout().supervisor_root
@@ -185,18 +173,51 @@ def assemble_supervisor_runtime_state(supervisor: Any) -> None:
                 governance_result.merged_events,
                 governance_result.duplicates_removed,
             )
+
+
+def bootstrap_supervisor_runtime_storage(supervisor: Any) -> None:
+    """Open runtime-owned stores during application startup."""
+    if getattr(supervisor, "_runtime_storage_bootstrapped", False):
+        return
+    supervisor._governor.open()
+    supervisor._autonomous_chain_store.open()
+    supervisor._runtime_storage_bootstrapped = True
+
+
+def assemble_supervisor_runtime_state(supervisor: Any) -> None:
+    def record_ui_activity(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return supervisor._ui_runtime.record_activity(*args, **kwargs)
+
+    def clear_ui_activity() -> None:
+        supervisor._ui_runtime.clear_activity()
+
+    execution_config = supervisor.config.execution
+    body_runtime_config = supervisor.config.body_runtime
+    body_state_root = Path(body_runtime_config.state_root)
+    supervisor._body_registry = BodyRegistryManager(
+        supervisor.config.execution.git_repo_path,
+        state_root=body_state_root,
+        slot_ids=(body_runtime_config.slot_a_name, body_runtime_config.slot_b_name),
+    )
+
+    runtime_root = Path(supervisor.config.soul_store_path)
     supervisor._runtime_root = runtime_root
+    supervisor._runtime_storage_bootstrapped = False
     governor_engine = None
     if not supervisor.config.service_runtime.governor_llm_advisory_enabled:
         governor_engine = GovernorDecisionEngine()
     supervisor._governor = MemGovernorBridge(
         storage_root=runtime_root,
         engine=governor_engine,
+        defer_open=True,
     )
     supervisor._autonomous_chain_store = AutonomousChainStore(
         supervisor.config.autonomous_chain_store_path
-        or (runtime_root / "autonomous_chain_store.json")
+        or (runtime_root / "autonomous_chain_store.json"),
+        defer_open=True,
     )
+    _migrate_supervisor_runtime_storage(supervisor)
+    supervisor._body_registry.initialize_layout()
 
     def load_mem_governance_events() -> list[Any]:
         return supervisor._governor.governance_repository.list_events()

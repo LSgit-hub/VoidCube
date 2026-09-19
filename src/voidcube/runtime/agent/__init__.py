@@ -18,6 +18,13 @@ from .prompt_builder import (
 from .turn_finalization import TurnFinalizationPorts, finalize_conversation_turn
 from .tool_loop_service import ToolLoopService
 from .model_call_service import ModelCallResult, ModelCallService
+from .model_attempt_service import (
+    ModelAttemptAction,
+    ModelAttemptDecision,
+    ModelAttemptOutcome,
+    ModelAttemptPorts,
+    ModelAttemptService,
+)
 
 __all__ = [
     "ContextPressureTracker",
@@ -37,4 +44,9 @@ __all__ = [
     "ToolLoopService",
     "ModelCallResult",
     "ModelCallService",
+    "ModelAttemptAction",
+    "ModelAttemptDecision",
+    "ModelAttemptOutcome",
+    "ModelAttemptPorts",
+    "ModelAttemptService",
 ]

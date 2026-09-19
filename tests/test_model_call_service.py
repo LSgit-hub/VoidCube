@@ -8,6 +8,12 @@ from voidcube.infrastructure.llm.retry_policy import RetryKind, RetryRecoveryKin
 
 from voidcube.infrastructure.llm.request import ChatRequestConfig
 from voidcube.runtime.agent.model_call_service import ModelCallService
+from voidcube.runtime.agent.model_attempt_service import (
+    ModelAttemptAction,
+    ModelAttemptDecision,
+    ModelAttemptPorts,
+    ModelAttemptService,
+)
 
 
 class _Transport:
@@ -164,3 +170,141 @@ def test_stream_callbacks_are_forwarded_without_replaying_delivery():
     )
     assert seen == ["start", update]
     assert result.response == "answer"
+
+
+class _AttemptTransport:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def stream(self, request, *, on_update, on_first_delta=None):
+        self.requests.append(dict(request))
+        value = self.responses.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+class _StatusError(RuntimeError):
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _valid_response(content="answer", finish_reason="stop"):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=content, tool_calls=None),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
+
+
+def test_model_attempt_service_rebuilds_request_after_fallback_and_returns_success():
+    transport = _AttemptTransport([_StatusError("rate limited", 429), _valid_response()])
+    configs = iter(
+        [
+            (ChatRequestConfig(model="primary"), [{"role": "user", "content": "a"}]),
+            (ChatRequestConfig(model="fallback"), [{"role": "user", "content": "b"}]),
+        ]
+    )
+    switched = []
+
+    def activate(_directive):
+        switched.append(True)
+        return True
+
+    outcome = ModelAttemptService().execute(
+        ports=ModelAttemptPorts(
+            request_factory=lambda: next(configs),
+            transport=transport,
+            on_update=lambda _update: None,
+            fallback_available=lambda: True,
+            activate_fallback=activate,
+            recover_transport=lambda *_args: False,
+            wait=lambda *_args, **_kwargs: True,
+        )
+    )
+
+    assert outcome.action is ModelAttemptAction.success
+    assert switched == [True]
+    assert [request["model"] for request in transport.requests] == [
+        "primary",
+        "fallback",
+    ]
+
+
+def test_model_attempt_service_returns_context_restart_without_mutating_turn_budget():
+    error = RuntimeError("context length exceeded")
+    transport = _AttemptTransport([error])
+    decisions = []
+    outcome = ModelAttemptService().execute(
+        ports=ModelAttemptPorts(
+            request_factory=lambda: (
+                ChatRequestConfig(model="demo"),
+                [{"role": "user", "content": "long"}],
+            ),
+            transport=transport,
+            on_update=lambda _update: None,
+            recover_context=lambda directive, classified, exc, attempt: (
+                decisions.append((directive.kind, classified.reason, exc))
+                or ModelAttemptDecision(ModelAttemptAction.restart_context)
+            ),
+            wait=lambda *_args, **_kwargs: True,
+        )
+    )
+
+    assert outcome.action is ModelAttemptAction.restart_context
+    assert decisions and decisions[0][1].value == "context_overflow"
+    assert outcome.attempt.retry_count == 1
+
+
+def test_model_attempt_service_honors_interrupt_during_retry_wait():
+    transport = _AttemptTransport([RuntimeError("temporary")])
+    waits = []
+
+    def wait(delay, *, interrupted):
+        waits.append(delay)
+        assert not interrupted()
+        return False
+
+    outcome = ModelAttemptService().execute(
+        ports=ModelAttemptPorts(
+            request_factory=lambda: (
+                ChatRequestConfig(model="demo"),
+                [{"role": "user", "content": "hello"}],
+            ),
+            transport=transport,
+            on_update=lambda _update: None,
+            interrupted=lambda: False,
+            wait=wait,
+        )
+    )
+
+    assert outcome.action is ModelAttemptAction.interrupted
+    assert outcome.final_response and "interrupted" in outcome.final_response.lower()
+    assert len(waits) == 1
+    assert len(transport.requests) == 1
+
+
+def test_model_attempt_service_preserves_partial_context_recovery_result():
+    transport = _AttemptTransport([RuntimeError("context length exceeded")])
+    outcome = ModelAttemptService().execute(
+        ports=ModelAttemptPorts(
+            request_factory=lambda: (ChatRequestConfig(model="demo"), []),
+            transport=transport,
+            on_update=lambda _update: None,
+            recover_context=lambda *_args: ModelAttemptDecision(
+                ModelAttemptAction.partial,
+                error="recovery exhausted",
+                final_response="partial answer",
+                details={"attempts": 3},
+            ),
+        )
+    )
+    assert outcome.action is ModelAttemptAction.partial
+    assert outcome.error == "recovery exhausted"
+    assert outcome.final_response == "partial answer"
+    assert outcome.details == {"attempts": 3}

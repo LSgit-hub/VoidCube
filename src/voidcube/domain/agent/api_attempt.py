@@ -21,8 +21,7 @@ class ApiAttemptState:
     primary_recovery_attempted: bool = False
     subscription_auth_retry_attempted: bool = False
     rate_limit_retry_attempted: bool = False
-    restart_with_compressed_messages: bool = False
-    restart_with_length_continuation: bool = False
+    unicode_sanitization_passes: int = 0
     finish_reason: str = "stop"
     response: Any = None
     response_inspection: ChatResponseInspection | None = None
@@ -39,9 +38,3 @@ class ApiAttemptState:
     def reset_retry_cycle(self) -> None:
         self.retry_count = 0
         self.primary_recovery_attempted = False
-
-    def request_compressed_restart(self) -> None:
-        self.restart_with_compressed_messages = True
-
-    def request_length_continuation(self) -> None:
-        self.restart_with_length_continuation = True

@@ -183,6 +183,8 @@ class BodyRegistryManager:
         self._registry_cache: tuple[int, BodyRegistry] | None = None
         self._slot_meta_cache: dict[str, tuple[int, BodySlotMeta]] = {}
         self._head_change_audit_cache: tuple[int | None, list[dict[str, Any]]] | None = None
+        self._initialized = False
+        self._initializing = False
 
     @staticmethod
     def _path_mtime_ns(path: Path) -> int | None:
@@ -193,73 +195,82 @@ class BodyRegistryManager:
 
     def initialize_layout(self) -> BodyRegistry:
         """Create independent child-agent slot directories and a default registry."""
-        self.slots_root.mkdir(parents=True, exist_ok=True)
+        self._initializing = True
+        try:
+            self.slots_root.mkdir(parents=True, exist_ok=True)
 
-        registry = self._load_or_create_registry()
+            registry = self._load_or_create_registry()
 
-        for idx, slot_id in enumerate(self.slot_ids):
-            slot_dir = self.slot_root(slot_id)
-            (slot_dir / "worktree").mkdir(parents=True, exist_ok=True)
-            (slot_dir / "runtime").mkdir(parents=True, exist_ok=True)
-            (slot_dir / "logs").mkdir(parents=True, exist_ok=True)
+            for idx, slot_id in enumerate(self.slot_ids):
+                slot_dir = self.slot_root(slot_id)
+                (slot_dir / "worktree").mkdir(parents=True, exist_ok=True)
+                (slot_dir / "runtime").mkdir(parents=True, exist_ok=True)
+                (slot_dir / "logs").mkdir(parents=True, exist_ok=True)
 
-            meta_path = self.slot_meta_path(slot_id)
-            if not meta_path.exists():
-                state: BodyState = "active" if idx == 0 else "shell"
-                meta = BodySlotMeta(
-                    slot_id=slot_id,
-                    body_state=state,
-                    generation=0,
-                    worktree_path=str((slot_dir / "worktree").resolve()),
-                    runtime_path=str((slot_dir / "runtime").resolve()),
-                    logs_path=str((slot_dir / "logs").resolve()),
-                    lease="active" if state == "active" else None,
-                )
-                self.save_slot_meta(meta)
+                meta_path = self.slot_meta_path(slot_id)
+                if not meta_path.exists():
+                    state: BodyState = "active" if idx == 0 else "shell"
+                    meta = BodySlotMeta(
+                        slot_id=slot_id,
+                        body_state=state,
+                        generation=0,
+                        worktree_path=str((slot_dir / "worktree").resolve()),
+                        runtime_path=str((slot_dir / "runtime").resolve()),
+                        logs_path=str((slot_dir / "logs").resolve()),
+                        lease="active" if state == "active" else None,
+                    )
+                    self.save_slot_meta(meta)
 
-        if registry.active_slot is None:
-            registry.active_slot = self.slot_ids[0]
-        if registry.shell_slot is None:
-            registry.shell_slot = next(
-                (
-                    slot_id
-                    for slot_id in self.slot_ids
-                    if slot_id != registry.active_slot
-                    and self.load_slot_meta(slot_id).body_state == "shell"
-                ),
-                None,
-            )
-        self.save_registry(registry)
-        if registry.active_slot:
-            active_meta = self.load_slot_meta(registry.active_slot)
-            if not self._slot_workspace_is_materialized(active_meta):
-                active_meta = self._prepare_slot_workspace_at_startup(
-                    registry.active_slot,
-                    source_path=self.source_root,
+            if registry.active_slot is None:
+                registry.active_slot = self.slot_ids[0]
+            if registry.shell_slot is None:
+                registry.shell_slot = next(
+                    (
+                        slot_id
+                        for slot_id in self.slot_ids
+                        if slot_id != registry.active_slot
+                        and self.load_slot_meta(slot_id).body_state == "shell"
+                    ),
+                    None,
                 )
-            active_meta.body_state = "active"
-            active_meta.lease = "active"
-            active_commit = self._git_head_for_path(Path(active_meta.worktree_path))
-            active_meta.active_ref = active_meta.active_ref or f"body/{registry.active_slot}"
-            active_meta.active_commit = active_meta.active_commit or active_commit
-            active_meta.current_healthy_commit = (
-                active_meta.current_healthy_commit or active_commit
-            )
-            self.save_slot_meta(active_meta)
-        if registry.shell_slot:
-            shell_meta = self.load_slot_meta(registry.shell_slot)
-            if shell_meta.body_state != "shell":
-                raise ValueError(
-                    f"Registry shell slot {registry.shell_slot} is in "
-                    f"{shell_meta.body_state!r} state."
+            self.save_registry(registry)
+            if registry.active_slot:
+                active_meta = self.load_slot_meta(registry.active_slot)
+                if not self._slot_workspace_is_materialized(active_meta):
+                    active_meta = self._prepare_slot_workspace_at_startup(
+                        registry.active_slot,
+                        source_path=self.source_root,
+                    )
+                active_meta.body_state = "active"
+                active_meta.lease = "active"
+                active_commit = self._git_head_for_path(Path(active_meta.worktree_path))
+                active_meta.active_ref = active_meta.active_ref or f"body/{registry.active_slot}"
+                active_meta.active_commit = active_meta.active_commit or active_commit
+                active_meta.current_healthy_commit = (
+                    active_meta.current_healthy_commit or active_commit
                 )
-            if not self._slot_workspace_is_materialized(shell_meta):
-                self._prepare_slot_workspace_at_startup(
-                    registry.shell_slot,
-                )
-        if registry.active_slot:
-            self.write_active_body_pointer(registry.active_slot)
-        return registry
+                self.save_slot_meta(active_meta)
+            if registry.shell_slot:
+                shell_meta = self.load_slot_meta(registry.shell_slot)
+                if shell_meta.body_state != "shell":
+                    raise ValueError(
+                        f"Registry shell slot {registry.shell_slot} is in "
+                        f"{shell_meta.body_state!r} state."
+                    )
+                if not self._slot_workspace_is_materialized(shell_meta):
+                    self._prepare_slot_workspace_at_startup(
+                        registry.shell_slot,
+                    )
+            if registry.active_slot:
+                self.write_active_body_pointer(registry.active_slot)
+            self._initialized = True
+            return registry
+        finally:
+            self._initializing = False
+
+    def _ensure_initialized(self) -> None:
+        if not self._initialized and not self._initializing:
+            self.initialize_layout()
 
     def list_slots(self) -> dict[str, BodySlotMeta]:
         return {slot_id: self.load_slot_meta(slot_id) for slot_id in self.slot_ids}
@@ -628,6 +639,7 @@ class BodyRegistryManager:
         return None
 
     def load_registry(self) -> BodyRegistry:
+        self._ensure_initialized()
         if not self.registry_path.exists():
             raise FileNotFoundError(f"Body registry not found: {self.registry_path}")
         mtime_ns = self._path_mtime_ns(self.registry_path)
@@ -641,6 +653,7 @@ class BodyRegistryManager:
         return registry
 
     def save_registry(self, registry: BodyRegistry) -> None:
+        self._ensure_initialized()
         atomic_json_write(
             self.registry_path,
             registry.model_dump(mode="json"),
@@ -650,6 +663,7 @@ class BodyRegistryManager:
             self._registry_cache = (mtime_ns, registry.model_copy(deep=True))
 
     def load_slot_meta(self, slot_id: str) -> BodySlotMeta:
+        self._ensure_initialized()
         self._validate_slot_id(slot_id)
         meta_path = self.slot_meta_path(slot_id)
         if not meta_path.exists():
@@ -665,6 +679,7 @@ class BodyRegistryManager:
         return meta
 
     def save_slot_meta(self, meta: BodySlotMeta) -> None:
+        self._ensure_initialized()
         self._validate_slot_id(meta.slot_id)
         atomic_json_write(
             self.slot_meta_path(meta.slot_id),
