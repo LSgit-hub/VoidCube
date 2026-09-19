@@ -1,9 +1,8 @@
 """Local, read-only computer perception primitives.
 
-The package deliberately contains no screen-capture backend, model download,
-network client, or computer-control tool.  Backends such as ``mss`` and
-OmniParser can be adapted to these contracts without changing the timeline or
-privacy boundaries.
+Includes optional mss capture and loopback-only Ollama analysis. Importing the
+package starts no capture, model download or worker. No computer-control tools
+are exposed; external screen parsers are optional adapters.
 """
 
 from .frame_change import FrameChangeDetector, FrameChangeResult

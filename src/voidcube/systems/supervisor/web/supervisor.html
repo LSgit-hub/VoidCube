@@ -3685,7 +3685,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
 .scene-mini-sync[data-state="stale"],
 .scene-mini-sync[data-state="connecting"] { color: var(--gold); }
 .scene-mini-sync[data-state="offline"] { color: var(--coral); }
-.stellar-mode-control {
+.perception-control {
   position: absolute;
   right: 18px; top: 18px;
   z-index: 21;
@@ -3697,7 +3697,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   border-radius: 6px;
   background: rgba(20,14,10,.78);
 }
-.stellar-mode-control button {
+.perception-control button {
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -3707,14 +3707,14 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
   font-weight: 700;
   cursor: pointer;
 }
-.stellar-mode-control button[aria-pressed="true"] {
+.perception-control button[aria-pressed="true"] {
   color: var(--text-primary);
   background: rgba(111,198,160,.22);
 }
-.stellar-mode-control button[data-mode="auto_evolution"][aria-pressed="true"] {
+.perception-control button[data-perception="on"][aria-pressed="true"] {
   background: rgba(226,176,74,.24);
 }
-.stellar-mode-control button:disabled { cursor: wait; opacity: .55; }
+.perception-control button:disabled { cursor: wait; opacity: .55; }
 .voice-controls {
   position: absolute;
   right: 158px; top: 18px;
@@ -4064,7 +4064,7 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
     border-radius: 0;
   }
   .scene-mini-title { left: 12px; top: 12px; max-width: 210px; }
-  .stellar-mode-control { right: 12px; top: 12px; }
+  .perception-control { right: 12px; top: 12px; }
   .voice-controls { right: 12px; top: 50px; }
   .companion-widget { left: 50%; bottom: 8%; width: min(360px, calc(100% - 24px)); }
   .bottom-dock { height: 44px; padding: 0 8px; gap: 0; }
@@ -4853,9 +4853,9 @@ body[data-action="write"]    .dcs-body-mini { background: linear-gradient(140deg
         <span class="scene-mini-sync" id="sceneSyncStatus" data-state="connecting" aria-live="polite">连接中 · 尚未同步</span>
       </div>
     </div>
-    <div class="stellar-mode-control" id="stellarModeControl" role="group" aria-label="星子模式">
-      <button type="button" data-mode="daily_companion" aria-pressed="true">日常</button>
-      <button type="button" data-mode="auto_evolution" aria-pressed="false">Auto</button>
+    <div class="perception-control" id="perceptionControl" role="group" aria-label="屏幕感知" title="本地理解屏幕并保存文本摘要；关闭后停止采集">
+      <button type="button" data-perception="off" aria-pressed="false" disabled>感知关</button>
+      <button type="button" data-perception="on" aria-pressed="false" disabled>感知开</button>
     </div>
     <div class="voice-controls" id="voiceControls">
       <button type="button" id="voiceOwnerTemplate" title="录入本机所有者声纹">◎</button>
@@ -5376,7 +5376,7 @@ const els = {
   sceneMiniText: $('#sceneMiniText'),
   sceneMiniSummary: $('#sceneMiniSummary'),
   sceneSyncStatus: $('#sceneSyncStatus'),
-  stellarModeControl: $('#stellarModeControl'),
+  perceptionControl: $('#perceptionControl'),
   voiceControls: $('#voiceControls'),
   voiceOwnerTemplate: $('#voiceOwnerTemplate'),
   voiceFingerprintToggle: $('#voiceFingerprintToggle'),
@@ -5527,10 +5527,10 @@ function syncCompanionCharacterLaunchers(open) {
     if (!daily) resetCompanionCharacterPose(character);
   });
 }
-if (els.stellarModeControl) {
-  els.stellarModeControl.addEventListener('click', event => {
-    const button = event.target.closest('button[data-mode]');
-    if (button) setStellarMode(button.dataset.mode);
+if (els.perceptionControl) {
+  els.perceptionControl.addEventListener('click', event => {
+    const button = event.target.closest('button[data-perception]');
+    if (button) setPerception(button.dataset.perception === 'on');
   });
 }
 if (els.voiceOwnerTemplate) {
@@ -8309,11 +8309,7 @@ function updateSceneMiniTitle(state) {
     els.sceneMiniSummary.title = els.sceneMiniSummary.textContent;
   }
   renderConnectionStatus();
-  if (els.stellarModeControl) {
-    $$('button[data-mode]', els.stellarModeControl).forEach(button => {
-      button.setAttribute('aria-pressed', String(button.dataset.mode === activeMode));
-    });
-  }
+  renderPerceptionControl();
   const voice = state.voice || {};
   const voiceUnavailable = activeMode === 'auto_evolution';
   if (els.voiceControls) {
@@ -8728,24 +8724,76 @@ async function sendCompanionText() {
   }
 }
 
-async function setStellarMode(mode) {
-  if (!els.stellarModeControl) return;
-  const buttons = $$('button[data-mode]', els.stellarModeControl);
-  buttons.forEach(button => { button.disabled = true; });
-  const path = mode === 'auto_evolution'
-    ? '/autonomous-chain-gate/activate'
-    : '/autonomous-chain-gate/deactivate';
+let perceptionSnapshot = null;
+let perceptionBusy = false;
+let perceptionPolling = false;
+let perceptionRevision = 0;
+
+function renderPerceptionControl() {
+  if (!els.perceptionControl) return;
+  const snapshot = perceptionSnapshot;
+  const runtime = snapshot?.runtime || {};
+  const stopping = runtime.state === 'stopping';
+  const autoMode = ((lastState || {}).stellar_mode || {}).mode === 'auto_evolution';
+  const allowed = snapshot?.allowed !== false && !autoMode;
+  els.perceptionControl.dataset.state = !snapshot ? 'unavailable' : stopping ? 'stopping' : runtime.last_error ? 'error' : runtime.enabled ? 'on' : 'off';
+  els.perceptionControl.setAttribute('aria-busy', String(perceptionBusy || stopping));
+  els.perceptionControl.title = !snapshot ? '感知服务未连接'
+    : stopping ? '正在停止采集，等待本次分析结束'
+    : runtime.last_error ? '感知异常，可关闭后重试：' + runtime.last_error
+    : !allowed ? 'Auto 模式下暂停屏幕感知；返回日常后可手动开启'
+    : runtime.enabled ? '正在本地感知屏幕；点击感知关停止'
+    : '开启后本地理解屏幕并保存文本摘要，不上传画面';
+  $$('button[data-perception]', els.perceptionControl).forEach(button => {
+    const on = button.dataset.perception === 'on';
+    button.setAttribute('aria-pressed', String(Boolean(snapshot) && !stopping && (on === Boolean(runtime.enabled))));
+    button.disabled = perceptionBusy || stopping || !snapshot || (on && !allowed);
+    button.textContent = on ? '感知开' : stopping ? '停止中' : '感知关';
+  });
+}
+
+async function refreshPerception() {
+  if (perceptionPolling || perceptionBusy) return;
+  perceptionPolling = true;
+  const revision = perceptionRevision;
   try {
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: '{}',
-    });
-    if (response.ok) await refresh();
+    const response = await fetch('/runtime/perception/status', {cache: 'no-store', signal: AbortSignal.timeout(5000)});
+    if (!response.ok) throw new Error('status unavailable');
+    const snapshot = await response.json();
+    if (!perceptionBusy && revision === perceptionRevision) perceptionSnapshot = snapshot;
+  } catch (_) {
+    if (!perceptionBusy && revision === perceptionRevision) perceptionSnapshot = null;
   } finally {
-    buttons.forEach(button => { button.disabled = false; });
+    perceptionPolling = false;
+    renderPerceptionControl();
   }
 }
+
+async function setPerception(enabled) {
+  if (perceptionBusy || !perceptionSnapshot || perceptionSnapshot.runtime?.state === 'stopping') return;
+  if (enabled === Boolean(perceptionSnapshot.runtime?.enabled)) return;
+  perceptionBusy = true;
+  perceptionRevision += 1;
+  renderPerceptionControl();
+  try {
+    const response = await fetch('/runtime/perception/' + (enabled ? 'start' : 'stop'), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(enabled ? {consent: true} : {}),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error('request failed');
+    perceptionSnapshot = await response.json();
+  } catch (_) {
+    showVoiceNotice('感知切换失败，请重试', 'error', 6000);
+  } finally {
+    perceptionBusy = false;
+    renderPerceptionControl();
+    await refreshPerception();
+  }
+}
+
+refreshPerception();
+setInterval(refreshPerception, 2000);
 
 async function postVoice(path, payload, options = {}) {
   const buttons = els.voiceControls ? $$('button', els.voiceControls) : [];

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from threading import Event, get_ident
 
 from voidcube.systems.perception import PerceptionRuntime, PerceptionWorker
 
@@ -45,3 +46,33 @@ def test_worker_refuses_runtime_without_authorization() -> None:
 
     assert worker.start() is False
     assert worker.status().running is False
+
+
+def test_stop_timeout_keeps_live_worker_and_defers_flush_until_step_finishes():
+    entered, release = Event(), Event()
+    events = []
+
+    class SlowRuntime(_Runtime):
+        def step(self):
+            events.append(("step", get_ident()))
+            entered.set()
+            assert release.wait(5)
+            events.append(("finished", get_ident()))
+
+        def stop(self, *, flush=True):
+            events.append(("stop", get_ident()))
+            super().stop(flush=flush)
+
+    worker = PerceptionWorker(SlowRuntime())
+    assert worker.start()
+    try:
+        assert entered.wait(3)
+        assert worker.stop(timeout_seconds=0) is False
+        assert worker.status().running
+        assert worker.start() is False
+        assert [e[0] for e in events] == ["step"]
+    finally:
+        release.set()
+        assert worker.stop(timeout_seconds=5)
+    assert [e[0] for e in events] == ["step", "finished", "stop"]
+    assert len({e[1] for e in events}) == 1

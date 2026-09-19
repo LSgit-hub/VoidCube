@@ -52,12 +52,12 @@ def test_timeline_store_deletes_expired_segments_without_frames(tmp_path) -> Non
         )
         assert deleted == 1
         assert store.count() == 1
-        table_columns = {
-            row[1]
-            for row in store._connect().execute(
-                "PRAGMA table_info(perception_timeline_segments)"
-            ).fetchall()
-        }
+        with store._connect() as connection:
+            table_columns = {
+                row[1] for row in connection.execute(
+                    "PRAGMA table_info(perception_timeline_segments)"
+                ).fetchall()
+            }
         assert "summary" in table_columns
         assert "frame_bytes" not in table_columns
 

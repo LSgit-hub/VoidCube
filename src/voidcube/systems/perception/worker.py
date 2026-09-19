@@ -35,6 +35,7 @@ class PerceptionWorker:
         self._lock = threading.RLock()
         self._iterations = 0
         self._last_error: str | None = None
+        self._flush_on_stop = True
 
     def start(self) -> bool:
         with self._lock:
@@ -44,6 +45,7 @@ class PerceptionWorker:
             if self.runtime.status().state != "running":
                 return False
             self._stop.clear()
+            self._flush_on_stop = True
             self._thread = threading.Thread(
                 target=self._run,
                 name="voidcube-perception",
@@ -52,15 +54,20 @@ class PerceptionWorker:
             self._thread.start()
             return True
 
-    def stop(self, *, flush: bool = True, timeout_seconds: float = 5.0) -> None:
+    def stop(self, *, flush: bool = True, timeout_seconds: float = 5.0) -> bool:
+        """Request shutdown. False means the original worker is still draining."""
         with self._lock:
             thread = self._thread
+            self._flush_on_stop = flush
             self._stop.set()
         if thread is not None and thread is not threading.current_thread():
             thread.join(max(0.0, float(timeout_seconds)))
         with self._lock:
-            self._thread = None
-        self.runtime.stop(flush=flush)
+            if thread is not None and thread.is_alive():
+                return False
+            if self._thread is thread:
+                self._thread = None
+        return True
 
     def status(self) -> PerceptionWorkerStatus:
         thread = self._thread
@@ -71,6 +78,20 @@ class PerceptionWorker:
         )
 
     def _run(self) -> None:
+        try:
+            self._sample()
+        finally:
+            try:
+                self.runtime.stop(flush=self._flush_on_stop)
+            except Exception as exc:
+                self._last_error = type(exc).__name__
+            finally:
+                source = getattr(getattr(self.runtime, "loop", None), "frame_source", None)
+                close = getattr(source, "close", None)
+                if callable(close):
+                    close()  # mss handles belong to the capture thread.
+
+    def _sample(self) -> None:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
@@ -78,7 +99,7 @@ class PerceptionWorker:
                 self._iterations += 1
                 self._last_error = None
             except Exception as exc:  # pragma: no cover - backend-specific
-                self._last_error = f"{type(exc).__name__}: {exc}"
+                self._last_error = type(exc).__name__
                 if self.on_error is not None:
                     try:
                         self.on_error(exc)

@@ -66,6 +66,7 @@ from .ui_routes import (
 from .ui_projection import format_supervisor_ui_event
 from .ui_stream_adapters import SSE_HEADERS
 from .perception_routes import mount_perception_routes
+from .perception_control import PerceptionControl
 from ..perception.query import PerceptionQueryService
 from ..perception.runtime import PerceptionRuntime
 from ..perception.timeline_store import TimelineStore
@@ -191,7 +192,7 @@ class Supervisor(
     def __init__(self, config: SupervisorConfig | None = None):
         init_started = time.perf_counter()
         self.config = config or SupervisorConfig()
-        self._perception_query_service = None
+        self._perception_control = PerceptionControl()
         self.app = FastAPI(
             title="VoidCube Supervisor",
             version="1.0",
@@ -275,7 +276,7 @@ class Supervisor(
         store: TimelineStore | None = None,
     ) -> None:
         """Inject an explicitly constructed read-only perception runtime."""
-        self._perception_query_service = PerceptionQueryService(runtime, store=store)
+        self._perception_control.install(PerceptionQueryService(runtime, store=store))
 
     def _setup_routes(self):
         async def execute_governor_review_request(request: dict):
@@ -286,7 +287,12 @@ class Supervisor(
                 raise HTTPException(status_code=400, detail=str(exc))
 
         self.app.add_api_route("/", self.health_check, methods=["GET"])
-        mount_perception_routes(self.app, get_service=lambda: self._perception_query_service)
+        mount_perception_routes(
+            self.app, get_service=lambda: self._perception_control.service,
+            control=self._perception_control,
+            is_auto=lambda: self._service_runtime.stellar_mode.value == "auto_evolution",
+            mode_lock=self._service_runtime.mode_transition_lock,
+        )
         mount_supervisor_ui_routes(
             SupervisorUIRoutePorts(
                 app=self.app,
@@ -1250,9 +1256,12 @@ class Supervisor(
             yield
         finally:
             try:
-                await self._stop_periodic_tasks()
+                await asyncio.to_thread(self._perception_control.close)
             finally:
-                self._scheduled_task_store.close()
+                try:
+                    await self._stop_periodic_tasks()
+                finally:
+                    self._scheduled_task_store.close()
 
     async def start(self):
         import uvicorn

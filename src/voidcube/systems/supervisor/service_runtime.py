@@ -2330,6 +2330,9 @@ class ServiceRuntimeMixin:
         Preserve live workers and repair missing workers on repeated activation.
         """
         async with self._service_runtime.mode_transition_lock:
+            perception = getattr(self, "_perception_control", None)
+            if perception is not None:
+                await asyncio.to_thread(perception.drain)
             voice_manager = getattr(self, "_voice_manager", None)
             if voice_manager is not None:
                 voice_manager.interrupt()

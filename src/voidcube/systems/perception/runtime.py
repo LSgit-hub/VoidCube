@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
+from threading import RLock
 from datetime import datetime, timezone
 from typing import Any
 
 from .loop import LocalPerceptionLoop, PerceptionStepResult
 from .timeline_store import TimelineStore
 from .summary import LocalTimelineSummarizer
+
+
+def _serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +37,8 @@ class PerceptionRuntime:
 
     def __init__(self, loop: LocalPerceptionLoop, *, store: TimelineStore | None = None,
                  summarizer: LocalTimelineSummarizer | None = None) -> None:
+        self._lock = RLock()
+        self._pending_commit = None
         self.loop = loop
         self.store = store
         self.summarizer = summarizer
@@ -37,43 +49,53 @@ class PerceptionRuntime:
         self._persisted_segments = 0
         self._last_observed_at: datetime | None = None
 
+    @_serialized
     def authorize(self) -> None:
         """Record explicit user consent; does not start capture."""
         self._authorized = True
 
+    @_serialized
     def revoke_authorization(self, *, clear: bool = True) -> None:
         self._authorized = False
         if clear:
             self.clear()
         self._state = "stopped"
 
+    @_serialized
     def start(self) -> None:
         if self._authorized and self._state == "stopped":
             self._state = "running"
 
+    @_serialized
     def pause(self) -> None:
         if self._state == "running":
             self._state = "paused"
 
+    @_serialized
     def resume(self) -> None:
         if self._state == "paused":
             self._state = "running"
 
+    @_serialized
     def stop(self, *, flush: bool = True) -> None:
+        self._state = "stopped"
         if flush:
             self.flush()
-        self._state = "stopped"
 
+    @_serialized
     def clear(self) -> None:
+        self._pending_commit = None
         self.loop.clear()
         self._samples = 0
         self._analyzed = 0
         self._persisted_segments = 0
         self._last_observed_at = None
 
+    @_serialized
     def step(self) -> PerceptionStepResult | None:
         if self._state != "running":
             return None
+        self._commit_pending()
         result = self.loop.step()
         self._samples += 1
         if result.record is not None:
@@ -82,11 +104,14 @@ class PerceptionRuntime:
         self._persist(result.closed_segments)
         return result
 
+    @_serialized
     def flush(self) -> None:
+        self._commit_pending()
         segment = self.loop.flush()
         if segment is not None:
             self._persist((segment,))
 
+    @_serialized
     def status(self) -> PerceptionRuntimeStatus:
         return PerceptionRuntimeStatus(
             state=self._state,
@@ -103,20 +128,23 @@ class PerceptionRuntime:
         )
 
     def _persist(self, segments: tuple[Any, ...]) -> None:
-        if self.store is None or not segments:
-            return
-        output = []
         for segment in segments:
-            if self.summarizer is not None:
-                records = self.loop.segmenter.take_last_closed_records()
-                if records:
-                    segment = self.summarizer.summarize(
-                        records,
-                        segment_id=segment.segment_id,
-                        provisional=segment.provisional,
-                    )
-            output.append(segment)
-        self._persisted_segments += self.store.put_many(output)
+            records = self.loop.segmenter.take_last_closed_records()
+            if self.store is not None:
+                self._pending_commit = (segment, records)
+                self._commit_pending()
+
+    def _commit_pending(self) -> None:
+        if self._pending_commit is None:
+            return
+        segment, records = self._pending_commit
+        if self.summarizer is not None and records:
+            segment = self.summarizer.summarize(
+                records, segment_id=segment.segment_id, provisional=segment.provisional,
+            )
+            self._pending_commit = (segment, ())
+        self._persisted_segments += int(self.store.put(segment))
+        self._pending_commit = None
 
 
 def build_default_perception_runtime(

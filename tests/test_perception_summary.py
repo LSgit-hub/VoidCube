@@ -49,3 +49,13 @@ def test_local_timeline_summarizer_rejects_empty_or_invalid_output() -> None:
         summarizer.summarize([], segment_id="empty")
     with pytest.raises(TimelineSummaryError, match="not valid JSON"):
         summarizer.summarize([_record("r1", 1)], segment_id="bad")
+
+
+def test_malformed_model_confidence_does_not_break_persistence_or_hide_gaps():
+    record = _record("r1", 1)
+    record.coverage_gaps = ("capture_failed",)
+    summarizer = LocalTimelineSummarizer(completion=lambda **_: '{"summary":"observed","confidence":[]}')
+    segment = summarizer.summarize([record], segment_id="s")
+    assert segment.confidence == 0.0
+    assert "summary_confidence_unavailable" in segment.unknowns
+    assert segment.coverage_gaps == ("capture_failed",)

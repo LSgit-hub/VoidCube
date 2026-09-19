@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import uuid4
 
 from .capture import ScreenFrame
 from .frame_change import FrameChangeDetector, FrameChangeResult
@@ -63,7 +64,7 @@ class LocalPerceptionLoop:
         self.change_detector = change_detector or FrameChangeDetector()
         self.buffer = buffer or PerceptionBuffer()
         self.segmenter = segmenter or TimelineSegmenter()
-        self.capture_session_id = capture_session_id
+        self.capture_session_id = capture_session_id or uuid4().hex
         self._sequence = 0
 
     def step(self) -> PerceptionStepResult:
@@ -80,13 +81,17 @@ class LocalPerceptionLoop:
                 scene=self.buffer.scene_state(now=frame.captured_at),
             )
 
-        analysis = self.analyzer.analyze(
-            frame.to_png(),
-            record_id=f"perception:{self.capture_session_id or 'session'}:{self._sequence}",
-            observed_at=frame.captured_at,
-            capture_session_id=self.capture_session_id,
-            sequence=self._sequence,
-        )
+        try:
+            analysis = self.analyzer.analyze(
+                frame.to_png(),
+                record_id=f"perception:{self.capture_session_id or 'session'}:{self._sequence}",
+                observed_at=frame.captured_at,
+                capture_session_id=self.capture_session_id,
+                sequence=self._sequence,
+            )
+        except Exception:
+            self.change_detector.reset()
+            raise
         record, model, escalated, escalation_reason = _normalize_analysis(analysis)
         self.buffer.append(record)
         closed = tuple(self.segmenter.append(record))
@@ -112,7 +117,8 @@ class LocalPerceptionLoop:
 
         self.change_detector.reset()
         self.buffer.clear()
-        self.segmenter.flush(provisional=False)
+        self.segmenter.clear()
+        self.capture_session_id = uuid4().hex
         self._sequence = 0
 
 

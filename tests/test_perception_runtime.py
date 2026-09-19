@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import pytest
 
 from voidcube.systems.perception import (
     LocalPerceptionLoop,
@@ -88,3 +89,25 @@ def test_runtime_summarizes_closed_records_before_persisting(tmp_path) -> None:
             start_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             end_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
         )[0].summary == "压缩后的摘要"
+
+
+def test_summary_failure_preserves_records_for_retry(tmp_path):
+    attempts = []
+    def complete(**kwargs):
+        attempts.append(kwargs["messages"])
+        if len(attempts) == 1:
+            raise RuntimeError("temporary")
+        return '{"summary":"retried"}'
+    with TimelineStore(tmp_path / "retry.sqlite3") as store:
+        runtime = PerceptionRuntime(LocalPerceptionLoop(_Source(), _Analyzer()), store=store,
+                                    summarizer=LocalTimelineSummarizer(completion=complete))
+        runtime.authorize()
+        runtime.start()
+        runtime.step()
+        with pytest.raises(RuntimeError):
+            runtime.stop()
+        assert runtime.status().state == "stopped"
+        assert store.count() == 0
+        runtime.flush()
+        assert store.count() == 1
+        assert attempts[0] == attempts[1]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager, closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ class TimelineStore:
     """Persist only timeline summaries, never frames or raw screen records."""
 
     def __init__(self, path: str | Path, *, owner: str = "perception-timeline-owner") -> None:
-        self.path = Path(path).expanduser()
+        self.path = Path(path).expanduser().resolve()
         self.owner = owner
         self._lock = threading.RLock()
         self._lease: SQLiteOwnerLease | None = None
@@ -31,7 +32,7 @@ class TimelineStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._lease = SQLiteOwnerLease(self.path, self.owner)
             try:
-                with sqlite3.connect(str(self.path), timeout=30.0) as connection:
+                with closing(sqlite3.connect(str(self.path), timeout=30.0)) as connection:
                     connection.executescript(
                         """
                         CREATE TABLE IF NOT EXISTS perception_timeline_segments (
@@ -80,29 +81,7 @@ class TimelineStore:
     def put(self, segment: TimelineSegment) -> bool:
         """Insert one segment idempotently; return whether a row was inserted."""
 
-        payload = segment.as_dict()
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock, self._connect() as connection:
-            cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO perception_timeline_segments (
-                    segment_id, start_at, end_at, scene, application, summary,
-                    key_events_json, source_record_ids_json, source_count,
-                    confidence, facts_json, inferences_json, unknowns_json,
-                    coverage_gaps_json, provisional, schema_version, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    payload["segment_id"], payload["start_at"], payload["end_at"],
-                    payload["scene"], payload["application"], payload["summary"],
-                    _dump(payload["key_events"]), _dump(payload["source_record_ids"]),
-                    int(payload["source_count"]), float(payload["confidence"]),
-                    _dump(payload["facts"]), _dump(payload["inferences"]),
-                    _dump(payload["unknowns"]), _dump(payload["coverage_gaps"]),
-                    int(bool(payload["provisional"])), payload["schema_version"], now,
-                ),
-            )
-            return cursor.rowcount == 1
+        return self.put_many((segment,)) == 1
 
     def query(
         self,
@@ -178,12 +157,17 @@ class TimelineStore:
                 inserted += max(0, int(cursor.rowcount))
         return inserted
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         if not self._opened:
             self.open()
         connection = sqlite3.connect(str(self.path), timeout=30.0)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
 
 def _utc(value: datetime) -> datetime:

@@ -79,3 +79,27 @@ def test_local_perception_loop_flushes_and_clears_without_persisting_frames() ->
     loop.clear()
     assert loop.buffer.records() == ()
     assert loop.buffer.scene_state().status == "unavailable"
+
+
+def test_failed_inference_is_retried_for_unchanged_screen():
+    import pytest
+    class Flaky(FakeAnalyzer):
+        calls = 0
+        def analyze(self, image_bytes, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary")
+            return super().analyze(image_bytes, **kwargs)
+    loop = LocalPerceptionLoop(FakeSource(), Flaky())
+    with pytest.raises(RuntimeError):
+        loop.step()
+    assert loop.step().record is not None
+
+
+def test_clear_removes_closed_raw_records_and_starts_unique_record_ids():
+    loop = LocalPerceptionLoop(FakeSource(), FakeAnalyzer())
+    first = loop.step().record.record_id
+    loop.flush()
+    loop.clear()
+    assert loop.segmenter.take_last_closed_records() == ()
+    assert loop.step().record.record_id != first

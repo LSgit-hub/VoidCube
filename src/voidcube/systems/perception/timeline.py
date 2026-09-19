@@ -102,6 +102,10 @@ class TimelineSegmenter:
         self._last_closed_records = ()
         return records
 
+    def clear(self) -> None:
+        self._pending.clear()
+        self._last_closed_records = ()
+
     def _close(self, *, provisional: bool) -> TimelineSegment:
         records = self._pending
         self._pending = []

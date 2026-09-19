@@ -151,6 +151,7 @@ Memory Service 内部负责全部 SQLite 细节：
 | 数据库/模式 | 业务域 | 当前或目标 owner |
 |---|---|---|
 | `state.db` | 会话、transcript、搜索投影 | Session owner：`SQLiteOwnerLease("session-owner")` 文件级独占 + `BEGIN IMMEDIATE` jitter 写门禁 + 启动恢复（阶段 5 已落实） |
+| 显式指定路径的 perception timeline SQLite | 有保留期限的屏幕观测文本摘要；不是长期记忆的第二份真相 | `TimelineStore`：`SQLiteOwnerLease("perception-timeline-owner")`，连接随操作关闭；上层通过查询服务访问，长期提升仍走 MemoryClient |
 | `actions.db` | 动作审计日志 | Action Journal owner：`SQLiteOwnerLease("action-journal-owner")`，全部写路径走 `_execute_write`（阶段 5 已落实） |
 | `scheduled_tasks.db` | Supervisor 定时任务 | Scheduled Task owner：`SQLiteOwnerLease("scheduled-task-owner")`，构造时启动恢复 expired claims（阶段 5 已落实） |
 | `scheduled_writebacks.db` | 调度回写传输队列 | 调度/写回 owner：`SQLiteOwnerLease("scheduled-writeback-owner")`（阶段 5 已落实） |
@@ -194,4 +195,3 @@ Memory Service 内部负责全部 SQLite 细节：
 - 请求协议、鉴权、技能或打包变更按 `AGENTS.md` 运行退役集成扫描和相关测试；
 - Skill Registry 变更运行 `pytest tests/test_skill_registry.py` 并核对 `added/reparsed/reused/removed` 统计；
 - `git diff --check`、`scripts/python_architecture.py`、文档契约和 wheel 契约检查通过。
-

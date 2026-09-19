@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
+import pytest
+from unittest.mock import AsyncMock, Mock
 
 from voidcube.systems.perception import LocalPerceptionLoop, PerceptionRecord, PerceptionRuntime, ScreenFrame
 from voidcube.systems.supervisor.config_models import (
@@ -36,3 +38,25 @@ def test_supervisor_perception_routes_are_unavailable_until_explicitly_injected(
     started = client.post("/runtime/perception/start", json={"consent": True})
     assert started.json()["runtime"]["state"] == "running"
     assert started.json()["runtime"]["authorized"] is True
+    supervisor._perception_control.close()
+
+
+@pytest.mark.asyncio
+async def test_entering_auto_drains_perception_before_mode_changes(tmp_path):
+    supervisor = Supervisor(SupervisorConfig(
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / '.soul-runtime'),
+        body_runtime=SupervisorBodyRuntimeConfig(state_root=str(tmp_path / 'body-state')),
+    ))
+    modes = []
+    supervisor._perception_control.drain = lambda: modes.append(supervisor._service_runtime.stellar_mode.value)
+    supervisor._voice_manager = Mock(interrupt=Mock(), stop_continuous=AsyncMock())
+    supervisor._stop_daily_companion_worker = AsyncMock()
+    supervisor._notify_gateway_autonomous_chain_gate = AsyncMock()
+    supervisor._start_autonomous_chain_workers = AsyncMock()
+    await supervisor._start_autonomous_chain_gate()
+    assert modes == ['daily_companion']
+    assert supervisor._service_runtime.stellar_mode.value == 'auto_evolution'
+    client = TestClient(supervisor.app)
+    assert client.post('/runtime/perception/start', json={'consent': True}).status_code == 409
+    supervisor._scheduled_task_store.close()

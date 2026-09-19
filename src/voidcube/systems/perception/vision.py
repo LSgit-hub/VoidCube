@@ -196,6 +196,9 @@ class LocalVisionAnalyzer:
             "confidence、uncertainties、coverage_gaps。"
             "confidence 是 0 到 1 的整体估计；无法确认的内容放入 uncertainties，"
             "不要猜测不可见的播放进度或用户意图。"
+            "summary 限制为一句话，最多100字。visible_text 最多5条，每条最多40字，"
+            "只摘录关键文字，不抄写整页；ui_objects 最多5项。"
+            "未知字段用空字符串或空数组，不要重复键名。整个JSON控制在500字以内。"
             f"{context}"
         )
         if parser_context:

@@ -1,0 +1,39 @@
+{
+  "scope": "local screen perception MVP verification",
+  "date": "2026-09-19",
+  "model_tag": "MiniCPM-V4.6:1b",
+  "real_screen_probe": {
+    "roi": [
+      0,
+      0,
+      960,
+      540
+    ],
+    "samples": 2,
+    "analyzed": 1,
+    "first_inference_seconds": 3.34,
+    "persisted_segments": 1,
+    "readback_nonempty": true
+  },
+  "real_worker_probe": {
+    "iterations": 1,
+    "stopped": true,
+    "persisted_segments": 1,
+    "last_error": null
+  },
+  "tests": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "1",
+    "skipped": "4",
+    "tests": "3318",
+    "time": "1505.757",
+    "timestamp": "2026-09-19T14:38:43.372535+08:00",
+    "hostname": "LI4-LSDETSDN"
+  },
+  "perception_testcases": 57,
+  "remaining_failure": "tests/test_doctor_diagnostics.py::test_doctor_reports_broken_body_registry",
+  "wheel_verified": true,
+  "screenshots_saved": false,
+  "remote_model_calls": false
+}
