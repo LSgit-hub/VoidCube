@@ -9,6 +9,7 @@ from voidcube.systems.supervisor.config_models import (
     SupervisorConfig, SupervisorExecutionConfig, SupervisorBodyRuntimeConfig,
 )
 from voidcube.systems.supervisor.supervisor import Supervisor
+from voidcube.systems.supervisor.service_runtime import StellarMode
 
 
 class _Source:
@@ -59,4 +60,18 @@ async def test_entering_auto_drains_perception_before_mode_changes(tmp_path):
     assert supervisor._service_runtime.stellar_mode.value == 'auto_evolution'
     client = TestClient(supervisor.app)
     assert client.post('/runtime/perception/start', json={'consent': True}).status_code == 409
+    supervisor._scheduled_task_store.close()
+
+
+def test_companion_perception_context_is_excluded_in_auto(tmp_path):
+    config = SupervisorConfig(
+        execution=SupervisorExecutionConfig(git_repo_path=str(tmp_path)),
+        soul_store_path=str(tmp_path / '.soul-runtime'),
+        body_runtime=SupervisorBodyRuntimeConfig(state_root=str(tmp_path / 'body-state')),
+    )
+    supervisor = Supervisor(config)
+    supervisor._service_runtime.stellar_mode = StellarMode.AUTO_EVOLUTION
+    payload = supervisor._companion_perception_context('我在看什么')
+    assert payload['status'] == 'excluded_in_auto'
+    assert payload['timeline_segments'] == []
     supervisor._scheduled_task_store.close()
