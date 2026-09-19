@@ -301,10 +301,27 @@ class EndogenousSelfRegulationService:
         persisted_learning_suppression = float(
             persisted_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
         )
+        cognitive_observation = float(
+            cognitive_self_regulation.get("dynamic_observation_bias_boost") or 0.0
+        )
+        cognitive_throttle = float(
+            cognitive_self_regulation.get("dynamic_candidate_throttle_boost") or 0.0
+        )
+        cognitive_learning_suppression = float(
+            cognitive_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
+        )
+        # A cleared historical window may still leave a fresh corrective
+        # regulation pass in the current snapshot. Treat that pass as
+        # carryover too; otherwise the first post-recovery deliberation can
+        # immediately re-enter observation even though the historical debt is
+        # already clear.
         if max(
             persisted_observation,
             persisted_throttle,
             persisted_learning_suppression,
+            cognitive_observation,
+            cognitive_throttle,
+            cognitive_learning_suppression,
         ) < 0.08:
             return adjusted
 
@@ -348,15 +365,9 @@ class EndogenousSelfRegulationService:
         if weak_channel_count > 1:
             return adjusted
 
-        observation_boost = float(
-            cognitive_self_regulation.get("dynamic_observation_bias_boost") or 0.0
-        )
-        throttle_boost = float(
-            cognitive_self_regulation.get("dynamic_candidate_throttle_boost") or 0.0
-        )
-        learning_suppression = float(
-            cognitive_self_regulation.get("dynamic_learning_expansion_suppression") or 0.0
-        )
+        observation_boost = cognitive_observation
+        throttle_boost = cognitive_throttle
+        learning_suppression = cognitive_learning_suppression
         if max(observation_boost, throttle_boost, learning_suppression) < 0.12:
             return adjusted
 

@@ -3842,6 +3842,7 @@ async def test_decayed_persistent_self_regulation_does_not_keep_runtime_stuck_in
     with patch("memai.model_config.resolve_mem_llm_client", return_value=(fake_client, "test-model")):
         result = await supervisor.evaluate_endogenous_drive({"record_activity": False})
 
+
     adaptive_policy = result["deliberation"]["adaptive_policy"]
 
     assert adaptive_policy["candidate_budget"] >= 2

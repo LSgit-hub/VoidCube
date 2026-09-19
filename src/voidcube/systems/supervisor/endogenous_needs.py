@@ -401,12 +401,15 @@ def detect_needs(
             )
         )
     if (
-        reflection.api_b_judgement_blockage_pressure >= 0.45
-        or reflection.autonomy_readiness <= 0.42
-        or adaptive_policy.observation_bias >= 0.58
-        or (
-            reflection.dominant_constraint == "historical_underdelivery"
-            and adaptive_policy.observation_bias >= 0.68
+        not learning_frontier_recovery_window
+        and (
+            reflection.api_b_judgement_blockage_pressure >= 0.45
+            or reflection.autonomy_readiness <= 0.42
+            or adaptive_policy.observation_bias >= 0.58
+            or (
+                reflection.dominant_constraint == "historical_underdelivery"
+                and adaptive_policy.observation_bias >= 0.68
+            )
         )
     ):
         observation_constraint_bonus = 0.0
