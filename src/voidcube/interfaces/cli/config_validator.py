@@ -645,7 +645,7 @@ def _diagnose_body_registry() -> AgentCheck:
                 suggestion="启动 Supervisor 后再次运行 doctor 检查 active/shell 基线。",
                 details=str(manager.registry_path),
             )
-        report = manager.inspect_layout()
+        report = manager.inspect_layout(auto_initialize=False)
     except Exception as exc:
         return AgentCheck(
             severity=Severity.ERROR,

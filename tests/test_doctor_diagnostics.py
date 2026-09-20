@@ -172,7 +172,8 @@ def test_doctor_reports_broken_body_registry(monkeypatch, tmp_path):
 
     manager = BodyRegistryManager(tmp_path, state_root=tmp_path)
     manager.initialize_layout()
-    manager.slot_worktree_manifest_path("slot-A").unlink()
+    manifest_path = manager.slot_worktree_manifest_path("slot-A")
+    manifest_path.unlink()
     _stub_body_system_config(monkeypatch, tmp_path)
 
     check = config_validator._diagnose_body_registry()
@@ -180,6 +181,7 @@ def test_doctor_reports_broken_body_registry(monkeypatch, tmp_path):
     assert check.severity == Severity.ERROR
     assert check.name == "body_registry"
     assert "slot_not_materialized" in check.details
+    assert manifest_path.exists() is False
 
 
 def _valid_api_a_api_b_config() -> dict:

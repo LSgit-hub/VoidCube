@@ -275,7 +275,7 @@ class BodyRegistryManager:
     def list_slots(self) -> dict[str, BodySlotMeta]:
         return {slot_id: self.load_slot_meta(slot_id) for slot_id in self.slot_ids}
 
-    def inspect_layout(self) -> dict[str, Any]:
+    def inspect_layout(self, *, auto_initialize: bool = True) -> dict[str, Any]:
         """Return a read-only integrity report for registry, slots, and pointer."""
         violations: list[dict[str, Any]] = []
 
@@ -286,7 +286,11 @@ class BodyRegistryManager:
             violations.append(item)
 
         try:
-            registry = self.load_registry()
+            registry = (
+                self.load_registry()
+                if auto_initialize
+                else self._load_registry_raw()
+            )
         except (OSError, ValueError, FileNotFoundError) as exc:
             add_violation("registry_unreadable", str(exc))
             return {
@@ -335,7 +339,11 @@ class BodyRegistryManager:
                 None,
             )
             try:
-                meta = self.load_slot_meta(slot_id)
+                meta = (
+                    self.load_slot_meta(slot_id)
+                    if auto_initialize
+                    else self._load_slot_meta_raw(slot_id)
+                )
             except (OSError, ValueError, FileNotFoundError) as exc:
                 add_violation("slot_meta_unreadable", str(exc), slot_id=slot_id)
                 slot_reports[slot_id] = {
@@ -465,7 +473,11 @@ class BodyRegistryManager:
                     self.active_body_pointer_path().read_text(encoding="utf-8")
                 )
                 pointer = BodyLaunchTarget.model_validate(pointer_data)
-                active_meta = self.load_slot_meta(active_slot)
+                active_meta = (
+                    self.load_slot_meta(active_slot)
+                    if auto_initialize
+                    else self._load_slot_meta_raw(active_slot)
+                )
                 pointer_report = {
                     "healthy": True,
                     "present": True,
@@ -640,6 +652,9 @@ class BodyRegistryManager:
 
     def load_registry(self) -> BodyRegistry:
         self._ensure_initialized()
+        return self._load_registry_raw()
+
+    def _load_registry_raw(self) -> BodyRegistry:
         if not self.registry_path.exists():
             raise FileNotFoundError(f"Body registry not found: {self.registry_path}")
         mtime_ns = self._path_mtime_ns(self.registry_path)
@@ -664,6 +679,9 @@ class BodyRegistryManager:
 
     def load_slot_meta(self, slot_id: str) -> BodySlotMeta:
         self._ensure_initialized()
+        return self._load_slot_meta_raw(slot_id)
+
+    def _load_slot_meta_raw(self, slot_id: str) -> BodySlotMeta:
         self._validate_slot_id(slot_id)
         meta_path = self.slot_meta_path(slot_id)
         if not meta_path.exists():
