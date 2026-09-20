@@ -13,15 +13,13 @@ DOCS = ROOT / "docs"
 pytestmark = [pytest.mark.smoke, pytest.mark.unit]
 
 ACTIVE_DOCS = {
-    "API配置双槽与模型调用点.md",
-    "CLI展示与gateway双槽设计.md",
-    "README.md",
-    "voidcube架构基线.md",
-    "内生驱动核心设计.md",
-    "全链路问题清单.md",
-    "开发与验证.md",
-    "项目架构与逻辑架构.md",
-    "项目文件架构说明.md",
+    "mem-integration-contract.md",
+    "mem-temporary-memory-contract.md",
+    "memory-resource-contract.md",
+    "operations.md",
+    "release.md",
+    "testing.md",
+    "troubleshooting.md",
 }
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
@@ -46,7 +44,7 @@ def _local_link_target(source: Path, raw_target: str) -> Path | None:
 
 
 def test_docs_directory_contains_active_documents() -> None:
-    assert ACTIVE_DOCS <= {path.name for path in DOCS.glob("*.md")}
+    assert {path.name for path in DOCS.glob("*.md")} == ACTIVE_DOCS
 
 
 def test_mainline_markdown_links_resolve() -> None:

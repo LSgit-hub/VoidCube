@@ -175,13 +175,6 @@ compile_commands.json
 # ==========================================
 # 🗂️ 其他临时文件和缓存
 # ==========================================
-/docs/*
-!/docs/memory-resource-contract.md
-!/docs/web组件改进文档.md
-!/docs/开发与验证.md
-!/docs/项目说明书/
-/docs/项目说明书/*
-!/docs/项目说明书/自进化内生驱动闭环问题补齐清单.md
 .arts/
 .test-tmp/
 .mypy_cache/

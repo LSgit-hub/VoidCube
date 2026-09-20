@@ -361,8 +361,8 @@ VoidCube 确实需要灵魂侧治理能力。
 
 ## 14. 相关文档
 
-- 项目宪章：[constitution.md](../../docs/constitution.md)
-- 架构基线：[voidcube架构基线.md](../../docs/voidcube架构基线.md)
-- 切换协议：[switch-protocol.md](../../docs/switch-protocol.md)
-- 主体生命周期：[body-lifecycle.md](../../docs/body-lifecycle.md)
-- 状态边界：[state-boundary.md](../../docs/state-boundary.md)
+- 当前系统架构：[ARCHITECTURE.md](../../ARCHITECTURE.md)
+- Mem 集成边界：[mem-integration-contract.md](../../docs/mem-integration-contract.md)
+- 临时记忆与上下文边界：[mem-temporary-memory-contract.md](../../docs/mem-temporary-memory-contract.md)
+- 记忆资源分类：[memory-resource-contract.md](../../docs/memory-resource-contract.md)
+- Mem 领域文档索引：[README.md](README.md)

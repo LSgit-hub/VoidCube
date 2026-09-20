@@ -6,8 +6,8 @@
   "released_at": "2026-07-23T14:17:43+08:00",
   "release_evidence": [
     "identity-revision-87970313-b4a5-4ea0-a28c-0db560925242",
-    "docs/内生驱动核心设计.md#10.2-认知常驻执行克制",
-    "docs/内生驱动核心设计.md#10.4-感知与判断常驻执行出口受限",
+    "ARCHITECTURE.md#模式与生命周期",
+    "ARCHITECTURE.md#Gateway-边界",
     "systems/supervisor/planning_runtime.py:5759"
   ],
   "memories": [
