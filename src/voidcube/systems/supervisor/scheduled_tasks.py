@@ -1134,6 +1134,18 @@ class ScheduledTaskStore:
             ).fetchall()
         return [self._run_from_row(row) for row in rows]
 
+    def latest_run(self, schedule_id: str) -> Dict[str, Any] | None:
+        schedule_key = str(schedule_id or "").strip()
+        if not schedule_key:
+            return None
+        with self._reader() as connection:
+            row = connection.execute(
+                "SELECT * FROM scheduled_task_runs WHERE schedule_id = ? "
+                "ORDER BY claimed_at DESC LIMIT 1",
+                (schedule_key,),
+            ).fetchone()
+        return self._run_from_row(row) if row is not None else None
+
 
 class ScheduledTaskRuntimeMixin:
     def _scheduled_store_call(self, method: str, *args: Any, **kwargs: Any) -> Any:

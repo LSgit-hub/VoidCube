@@ -267,7 +267,11 @@ class AutonomousEmployeeDispatchService:
     async def reconcile(self) -> list[Dict[str, Any]]:
         """Project employee queue and run outcomes back to autonomous tasks."""
         updates: list[Dict[str, Any]] = []
-        runs_by_schedule = self._latest_runs_by_schedule()
+        runs_by_schedule = (
+            {}
+            if getattr(self._scheduled_task_store, "latest_run", None) is not None
+            else self._latest_runs_by_schedule()
+        )
         for task in self._task_store.list_employee_execution_lane_tasks():
             schedule = self._find_schedule(task.task_id)
             if schedule is None and task.status in {"reconciling", "approved", "retry"}:
@@ -292,7 +296,8 @@ class AutonomousEmployeeDispatchService:
                 continue
             if schedule is None:
                 continue
-            run = runs_by_schedule.get(str(schedule.get("schedule_id") or ""), {})
+            schedule_id = str(schedule.get("schedule_id") or "")
+            run = self._latest_run_for_schedule(schedule_id, runs_by_schedule)
             run_status = str(run.get("status") or "").strip().lower()
             if run_status == "running" and task.status == "approved":
                 updated = self._task_state.update_status(
@@ -524,6 +529,20 @@ class AutonomousEmployeeDispatchService:
         for run in self._scheduled_task_store.recent_runs(limit=1000):
             latest.setdefault(str(run.get("schedule_id") or ""), dict(run))
         return latest
+
+    def _latest_run_for_schedule(
+        self,
+        schedule_id: str,
+        fallback_runs: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not schedule_id:
+            return {}
+        latest_run = getattr(self._scheduled_task_store, "latest_run", None)
+        if latest_run is not None:
+            run = latest_run(schedule_id)
+            if run is not None:
+                return dict(run)
+        return dict(fallback_runs.get(schedule_id) or {})
 
     def _record_assignment(
         self,

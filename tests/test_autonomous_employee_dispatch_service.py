@@ -181,6 +181,54 @@ async def test_reconcile_returns_auto_employee_result_to_supervisor_without_memo
 
 
 @pytest.mark.asyncio
+async def test_reconcile_uses_schedule_latest_run_when_global_recent_window_misses_it():
+    task = _task(status="approved")
+    state = SimpleNamespace(
+        update_status=Mock(return_value=SimpleNamespace(task_id="task-1", status="completed")),
+        update_metadata=Mock(),
+    )
+    schedule = {
+        "schedule_id": "employee-1",
+        "autonomous_task_id": "task-1",
+        "worker_role": "research-employee",
+        "created_at": "2026-08-19T00:00:00+00:00",
+    }
+    store = SimpleNamespace(
+        list=Mock(return_value=[schedule]),
+        recent_runs=Mock(
+            return_value=[
+                {
+                    "schedule_id": f"other-employee-{index}",
+                    "run_id": f"other-run-{index}",
+                    "status": "completed",
+                    "result_summary": "newer unrelated run",
+                }
+                for index in range(200)
+            ]
+        ),
+        latest_run=Mock(
+            return_value={
+                "schedule_id": "employee-1",
+                "run_id": "run-1",
+                "status": "completed",
+                "result_summary": "Recovered from precise schedule lookup.",
+            }
+        ),
+    )
+    service = _service(store)
+    service._task_state = state
+    service._task_store = SimpleNamespace(
+        list_employee_execution_lane_tasks=Mock(return_value=[task])
+    )
+
+    updates = await service.reconcile()
+
+    assert updates == [{"task_id": "task-1", "status": "completed"}]
+    store.latest_run.assert_called_once_with("employee-1")
+    assert state.update_status.call_args.kwargs["context"]["employee_run_id"] == "run-1"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_repairs_approved_task_without_employee_assignment():
     task = _task(status="approved")
     schedule = {

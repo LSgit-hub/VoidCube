@@ -171,3 +171,69 @@ def test_startup_recovery_keeps_live_claims_untouched(tmp_path):
         assert live["status"] == "running"
     finally:
         reopened.close()
+
+
+def test_latest_run_finds_schedule_result_outside_recent_display_window(tmp_path):
+    now = _now()
+    store = ScheduledTaskStore(tmp_path / "scheduled.db")
+    try:
+        target = store.create(
+            {
+                "title": "target employee task",
+                "instruction": "return the result",
+                "schedule_type": "once",
+                "run_at": now.isoformat(),
+                "created_by": "api_b",
+                "requested_via": "autonomous_worker",
+                "worker_role": "research",
+                "autonomous_task_id": "auto-target",
+            },
+            now=now,
+        )
+        target_claim = store.claim_due(owner_session_id="target-session", now=now)
+        assert target_claim is not None
+        store.finish_run(
+            target_claim["run"]["run_id"],
+            owner_session_id="target-session",
+            success=True,
+            result_summary="target result",
+            now=now + timedelta(seconds=1),
+        )
+
+        for index in range(201):
+            current = now + timedelta(minutes=index + 1)
+            store.create(
+                {
+                    "title": f"noise task {index}",
+                    "instruction": "finish later",
+                    "schedule_type": "once",
+                    "run_at": current.isoformat(),
+                    "created_by": "api_b",
+                    "requested_via": "autonomous_worker",
+                    "worker_role": "research",
+                    "autonomous_task_id": f"noise-{index}",
+                },
+                now=current,
+            )
+            claim = store.claim_due(
+                owner_session_id=f"noise-session-{index}",
+                now=current,
+            )
+            assert claim is not None
+            store.finish_run(
+                claim["run"]["run_id"],
+                owner_session_id=f"noise-session-{index}",
+                success=True,
+                result_summary="noise result",
+                now=current + timedelta(seconds=1),
+            )
+
+        assert all(
+            run["schedule_id"] != target["schedule_id"]
+            for run in store.recent_runs(limit=200)
+        )
+        latest = store.latest_run(target["schedule_id"])
+        assert latest is not None
+        assert latest["result_summary"] == "target result"
+    finally:
+        store.close()
