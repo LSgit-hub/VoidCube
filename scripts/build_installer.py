@@ -27,18 +27,47 @@ ENTRY = ROOT / "scripts" / "voidcube_entry.py"
 
 NIGHTLY_EXE = ROOT / "build" / "nuitka" / "voidcube.exe"
 
+VSWHERE = (
+    Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)"))
+    / "Microsoft Visual Studio"
+    / "Installer"
+    / "vswhere.exe"
+)
 
-def venv_python() -> str:
-    """Return the project virtualenv interpreter, required to run Nuitka."""
-    if sys.platform == "win32":
-        candidate = ROOT / ".venv" / "Scripts" / "python.exe"
-    else:
-        candidate = ROOT / ".venv" / "bin" / "python"
-    if not candidate.is_file():
-        raise FileNotFoundError(
-            f"Project virtualenv interpreter not found: {candidate}"
-        )
-    return str(candidate)
+
+def find_vs_dev_cmd() -> str:
+    """Locate ``VsDevCmd.bat`` of the newest Visual Studio with C++ tools.
+
+    ``-prerelease`` is required so Insider/Preview channels (e.g. Visual
+    Studio 2026 Insiders) are considered; Nuitka's bundled SCons queries
+    vswhere without it and therefore cannot see those installations.
+    """
+    if not VSWHERE.is_file():
+        raise FileNotFoundError(f"vswhere not found: {VSWHERE}")
+    result = subprocess.run(
+        [
+            str(VSWHERE),
+            "-all",
+            "-prerelease",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property",
+            "installationPath",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for line in result.stdout.splitlines():
+        install_path = line.strip()
+        if not install_path:
+            continue
+        candidate = Path(install_path) / "Common7" / "Tools" / "VsDevCmd.bat"
+        if candidate.is_file():
+            return str(candidate)
+    raise FileNotFoundError(
+        "No Visual Studio with C++ build tools (VC.Tools.x86.x64) found."
+    )
 
 
 def build_cli_executable(output_dir: Path) -> Path:
@@ -64,11 +93,53 @@ def build_cli_executable(output_dir: Path) -> Path:
         str(ENTRY),
     ]
     print("Compiling with Nuitka:", subprocess.list2cmdline(command), flush=True)
-    subprocess.run(command, cwd=ROOT, check=True)
+    run_with_msvc(command)
     exe = output_dir / "voidcube.exe"
     if not exe.is_file():
         raise FileNotFoundError(f"Nuitka output missing: {exe}")
     return exe
+
+
+def run_with_msvc(command: list[str]) -> None:
+    """Run ``command`` inside an x64 MSVC build environment.
+
+    Entering ``VsDevCmd.bat -arch=x64 -host_arch=x64`` puts the 64-bit
+    ``cl.exe`` on PATH and sets INCLUDE/LIB. With ``cl`` resolvable on PATH,
+    Nuitka skips its (prerelease-blind) MSVC version scan and uses that
+    compiler directly instead of falling back to the bundled zig backend,
+    whose linker fails on this project. Without a usable MSVC environment we
+    fall back to running the command in the current environment.
+    """
+    if sys.platform == "win32":
+        try:
+            vs_dev_cmd = find_vs_dev_cmd()
+        except (FileNotFoundError, subprocess.CalledProcessError) as error:
+            print(f"MSVC environment not available ({error}); running as-is.", flush=True)
+        else:
+            inner = subprocess.list2cmdline(
+                [vs_dev_cmd, "-arch=x64", "-host_arch=x64"]
+            )
+            cmdline = (
+                f'call "{inner}" >nul && '
+                + subprocess.list2cmdline(command)
+            )
+            print(f"Using MSVC environment: {vs_dev_cmd}", flush=True)
+            subprocess.run(["cmd", "/c", cmdline], cwd=ROOT, check=True)
+            return
+    subprocess.run(command, cwd=ROOT, check=True)
+
+
+def venv_python() -> str:
+    """Return the project virtualenv interpreter, required to run Nuitka."""
+    if sys.platform == "win32":
+        candidate = ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = ROOT / ".venv" / "bin" / "python"
+    if not candidate.is_file():
+        raise FileNotFoundError(
+            f"Project virtualenv interpreter not found: {candidate}"
+        )
+    return str(candidate)
 
 
 def stage_executable(exe: Path) -> Path:
