@@ -215,7 +215,7 @@ def test_execution_service_accepts_only_autonomous_chain_execution_handoff():
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == "autonomous_chain_execution_executed"
+    assert payload["status"] == "autonomous_chain_execution_handoff"
     assert payload["execution_metadata"]["trace_id"] == "trace-http-1"
     assert payload["execution_metadata"]["governance_task_type"] == "self_evolution"
     assert payload["execution_metadata"]["task_family"] == "general_self_evolution"

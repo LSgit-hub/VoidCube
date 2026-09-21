@@ -44,6 +44,17 @@ class PerceptionControl:
                 "last_error": worker.last_error if worker else None,
                 "iterations": worker.iterations if worker else 0,
                 "authorized": self._authorized,
+                # 健康状态独立于开关生命周期，退避不代表停止或撤销授权。
+                "health": worker.health if worker else "idle",
+                "backoff": worker.backoff if worker else False,
+                "backoff_seconds": worker.backoff_seconds if worker else 0.0,
+                "retry_after_seconds": worker.retry_after_seconds if worker else 0.0,
+                "consecutive_failures": worker.consecutive_failures if worker else 0,
+                "total_failures": worker.total_failures if worker else 0,
+                "last_success_at": worker.last_success_at if worker else None,
+                "last_error_at": worker.last_error_at if worker else None,
+                "active_error": worker.active_error if worker else None,
+                "last_failure": worker.last_failure if worker else None,
             }
 
     def start(self) -> dict:

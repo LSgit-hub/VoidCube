@@ -63,3 +63,38 @@ def test_initialization_failure_does_not_claim_enabled():
         assert client.post('/runtime/perception/start', json={'consent': True}).status_code == 503
         assert client.get('/runtime/perception/status').json()['runtime']['enabled'] is False
         assert client.post('/runtime/perception/resume').status_code == 403
+
+
+def test_health_is_exposed_without_changing_switch_lifecycle():
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from voidcube.systems.perception.worker import PerceptionWorkerStatus
+
+    control = PerceptionControl(factory=lambda: None)
+    initial = control.status()
+    assert initial['health'] == 'idle'
+    assert initial['total_failures'] == 0
+    assert initial['retry_after_seconds'] == 0
+    assert initial['authorized'] is False
+    snapshot = PerceptionWorkerStatus(
+        running=True, iterations=2, last_error='ValueError',
+        active_error='ValueError', last_failure='ValueError',
+        consecutive_failures=3, total_failures=5,
+        last_success_at=10, last_error_at=20,
+        health='degraded', backoff=True, backoff_seconds=4, retry_after_seconds=3,
+    )
+    control.worker = SimpleNamespace(status=lambda: snapshot)
+    status = control.status()
+    assert status['state'] == 'running'
+    assert status['enabled'] is True
+    for field in ('health', 'backoff', 'backoff_seconds', 'retry_after_seconds',
+                  'consecutive_failures', 'total_failures', 'last_success_at',
+                  'last_error_at', 'active_error', 'last_failure'):
+        assert status[field] == getattr(snapshot, field)
+    control._stopping = True
+    assert control.status()['state'] == 'stopping'
+    assert control.status()['enabled'] is False
+    snapshot = replace(snapshot, running=False, backoff=False, retry_after_seconds=0)
+    assert control.status()['state'] == 'stopped'
+    assert control.status()['health'] == 'degraded'
+    assert control.status()['last_failure'] == 'ValueError'

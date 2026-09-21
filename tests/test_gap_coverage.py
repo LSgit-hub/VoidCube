@@ -258,7 +258,7 @@ class TestCLIExecutorCanonicalPath:
                 target_slot_id="slot-B",
             )
             result = await facade.execute_autonomous_chain_request(req.model_dump(mode="json"))
-            assert result["status"] == "autonomous_chain_execution_executed"
+            assert result["status"] == "autonomous_chain_execution_handoff"
             assert result["execution_metadata"]["execution_kind"] == "general_self_evolution"
 
             req2 = AutonomousChainExecutionRequest(task_id="t2", kind="memory_maintenance")

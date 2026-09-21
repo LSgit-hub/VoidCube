@@ -25,6 +25,8 @@ from voidcube.systems.governor import GovernorRequest
 from voidcube.systems.governor import GovernorDecisionEngine
 from voidcube.systems.lifecycle import BodyLifecycleExecutor
 from voidcube.systems.probe import ProbeExecutor, ProbeRunner
+from voidcube.systems.supervisor.autonomous_chain_store import AutonomousChainStore
+from voidcube.systems.supervisor.autonomous_task_state import AutonomousTaskStateService
 from voidcube.systems.supervisor.supervisor import AgentInstance
 from memai.repository.governance import GovernanceEventRepository
 
@@ -141,9 +143,148 @@ def _make_body_lifecycle_runtime(tmp_path: Path) -> SimpleNamespace:
     )
 
 
+
+
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_execution_facade_delegates_to_current_adapters():
+async def test_execution_facade_writes_back_completed_canonical_task(tmp_path: Path):
+    store = AutonomousChainStore(tmp_path / "autonomous.json")
+    governance = GovernanceEventRepository(tmp_path / "governance.jsonl")
+    task_state = AutonomousTaskStateService(
+        store=store,
+        governance_repository=governance,
+    )
+    task = task_state.create_task(title="executor task", summary="test")
+    task_state.update_status(task.task_id, status="approved", reason="approved for test")
+
+    body_upgrade = SimpleNamespace(
+        execute_body_upgrade=AsyncMock(return_value={"status": "completed", "result_summary": "ok"})
+    )
+    facade = VoidCubeExecutionFacade(
+        watch_window=Mock(),
+        body_lifecycle=Mock(),
+        body_upgrade=body_upgrade,
+        memory_maintenance=Mock(),
+        supervisor=SimpleNamespace(
+            _autonomous_chain_store=store,
+            _autonomous_task_state=task_state,
+            _touch_gateway_activity=AsyncMock(),
+        ),
+    )
+
+    result = await facade.execute_autonomous_chain_request(
+        {
+            "task_id": task.task_id,
+            "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "source",
+                "candidate_commit": "candidate",
+                "rollback_commit": "source",
+                "changed_files": ["src/changed.py"],
+            },
+        }
+    )
+
+    persisted = store.get_task(task.task_id)
+    assert result["status"] == "autonomous_chain_execution_completed"
+    assert result["task_status"] == "completed"
+    assert persisted is not None and persisted.status == "completed"
+    facade.supervisor._touch_gateway_activity.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_execution_facade_writes_back_failed_adapter_exception(tmp_path: Path):
+    store = AutonomousChainStore(tmp_path / "autonomous.json")
+    governance = GovernanceEventRepository(tmp_path / "governance.jsonl")
+    task_state = AutonomousTaskStateService(
+        store=store,
+        governance_repository=governance,
+    )
+    task = task_state.create_task(title="failing executor task")
+    task_state.update_status(task.task_id, status="approved", reason="approved for test")
+
+    body_upgrade = SimpleNamespace(
+        execute_body_upgrade=AsyncMock(side_effect=RuntimeError("adapter down"))
+    )
+    facade = VoidCubeExecutionFacade(
+        watch_window=Mock(),
+        body_lifecycle=Mock(),
+        body_upgrade=body_upgrade,
+        memory_maintenance=Mock(),
+        supervisor=SimpleNamespace(
+            _autonomous_chain_store=store,
+            _autonomous_task_state=task_state,
+            _touch_gateway_activity=AsyncMock(),
+        ),
+    )
+
+    result = await facade.execute_autonomous_chain_request(
+        {
+            "task_id": task.task_id,
+            "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "source",
+                "candidate_commit": "candidate",
+                "rollback_commit": "source",
+                "changed_files": ["src/changed.py"],
+            },
+        }
+    )
+
+    persisted = store.get_task(task.task_id)
+    assert result["status"] == "autonomous_chain_execution_failed"
+    assert result["execution_phase"] == "failed"
+    assert persisted is not None and persisted.status == "failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_execution_facade_writes_back_probe_halt_as_failed_task(tmp_path: Path):
+    store = AutonomousChainStore(tmp_path / "autonomous.json")
+    governance = GovernanceEventRepository(tmp_path / "governance.jsonl")
+    task_state = AutonomousTaskStateService(
+        store=store,
+        governance_repository=governance,
+    )
+    task = task_state.create_task(title="halted executor task")
+    task_state.update_status(task.task_id, status="approved", reason="approved for test")
+
+    facade = VoidCubeExecutionFacade(
+        watch_window=Mock(),
+        body_lifecycle=Mock(),
+        body_upgrade=SimpleNamespace(
+            execute_body_upgrade=AsyncMock(return_value={"status": "upgrade_halted"})
+        ),
+        memory_maintenance=Mock(),
+        supervisor=SimpleNamespace(
+            _autonomous_chain_store=store,
+            _autonomous_task_state=task_state,
+        ),
+    )
+
+    result = await facade.execute_autonomous_chain_request(
+        {
+            "task_id": task.task_id,
+            "kind": "general_self_evolution",
+            "target_slot_id": "slot-B",
+            "git_lineage": {
+                "source_commit": "source",
+                "candidate_commit": "candidate",
+                "rollback_commit": "source",
+                "changed_files": ["src/changed.py"],
+            },
+        }
+    )
+
+    persisted = store.get_task(task.task_id)
+    assert result["status"] == "autonomous_chain_execution_failed"
+    assert result["execution_phase"] == "failed"
+    assert persisted is not None and persisted.status == "failed"
+
+
     body_lifecycle = SimpleNamespace(
         get_body_registry=Mock(return_value={"registry": {"active_slot": "slot-A"}}),
         get_active_body_target=Mock(return_value={"slot_id": "slot-A"}),
@@ -239,7 +380,7 @@ async def test_execution_facade_delegates_to_current_adapters():
         }
     )
     body_upgrade.confirm_body_switch.assert_awaited_once_with({"approved": True})
-    assert formal_result["status"] == "autonomous_chain_execution_executed"
+    assert formal_result["status"] == "autonomous_chain_execution_handoff"
     memory_maintenance.trigger_memory_compression.assert_awaited_once_with({})
     body_lifecycle.rollback_body_improvement.assert_awaited_once_with(
         "slot-B",
