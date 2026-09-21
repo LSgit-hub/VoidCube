@@ -194,6 +194,17 @@ button:focus-visible,
   height: 30px;
 }
 
+.window-controls .icon-button svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 1.6;
+}
+
+.window-controls .icon-button[aria-pressed="true"] {
+  color: var(--green);
+  background: var(--surface-soft);
+}
+
 .window-controls .close-button:hover {
   border-color: var(--coral);
   color: #fff;
@@ -247,8 +258,8 @@ button:focus-visible,
   position: absolute;
   top: 35px;
   right: 0;
-  width: min(390px, calc(100vw - 24px));
-  padding: 12px;
+  width: min(300px, calc(100vw - 24px));
+  padding: 10px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   color: var(--text);
@@ -260,8 +271,8 @@ button:focus-visible,
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 2px 10px;
+  gap: 8px;
+  padding: 0 2px 8px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -276,26 +287,38 @@ button:focus-visible,
 
 .plugin-list {
   display: grid;
-  gap: 5px;
+  gap: 2px;
   max-height: 300px;
-  padding: 7px 0 10px;
+  padding: 6px 0 8px;
   overflow: auto;
 }
 
 .plugin-row {
   display: grid;
-  grid-template-columns: 9px minmax(0, 1fr) auto auto;
+  grid-template-columns: 9px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 8px 4px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 6px;
   border: 1px solid transparent;
   border-radius: 4px;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
   background: #141920;
 }
 
-.plugin-row:hover {
+.plugin-row.plugin-openable {
+  cursor: pointer;
+}
+
+.plugin-row:hover,
+.plugin-row:focus-visible {
   border-color: var(--line);
+  outline: none;
+  background: var(--surface-soft);
 }
 
 .plugin-row .state-dot {
@@ -344,63 +367,12 @@ button:focus-visible,
   white-space: nowrap;
 }
 
-.plugin-heading small,
-.plugin-copy > span,
-.plugin-meta {
+.plugin-heading small {
   overflow: hidden;
   color: var(--muted);
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.plugin-copy > span {
-  max-width: 230px;
-}
-
-.plugin-meta {
-  max-width: 92px;
-  font-family: Consolas, monospace;
-  text-align: right;
-}
-
-.plugin-actions {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
-
-.plugin-action {
-  display: inline-grid;
-  place-items: center;
-  width: 25px;
-  height: 25px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-
-.plugin-action:hover:not(:disabled) {
-  border-color: var(--line-strong);
-  color: var(--text);
-  background: var(--surface-soft);
-}
-
-.plugin-action.plugin-open {
-  color: var(--green);
-}
-
-.plugin-action:disabled {
-  cursor: wait;
-  opacity: 0.45;
-}
-
-.plugin-action svg {
-  width: 14px;
-  height: 14px;
 }
 
 .plugins-empty,
@@ -1213,7 +1185,12 @@ body.resizing * {
   }
 
   .window-controls {
-    display: none;
+    gap: 0;
+  }
+
+  .window-controls .icon-button {
+    width: 28px;
+    height: 28px;
   }
 
   .pane-bar {

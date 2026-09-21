@@ -117,6 +117,9 @@ export interface VoidCubeDesktopApi {
   }
   window: {
     minimize: () => void
+    toggleMaximize: () => void
+    isMaximized: () => Promise<boolean>
+    onMaximizedChange: (listener: (maximized: boolean) => void) => () => void
     close: () => void
   }
   workspace: {

@@ -33,6 +33,7 @@ body {
 }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;
@@ -56,7 +57,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   justify-content: space-between;
   gap: 16px;
   border-bottom: 1px solid var(--line);
-  background: var(--toolbar);
+  background: linear-gradient(180deg, #142033 0%, var(--toolbar) 100%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .16);
 }
 .brand { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .brand-mark {
@@ -112,7 +114,7 @@ input { width: 100%; }
   color: var(--ink);
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 5px;
   padding: 0 12px;
   transition: border-color .18s ease, background .18s ease, transform .18s ease;
 }
@@ -133,8 +135,13 @@ input { width: 100%; }
 .icon-button {
   width: 30px;
   padding: 0;
-  font-size: 19px;
+  font-size: 22px;
   line-height: 1;
+}
+.icon-button:focus-visible,
+.button:focus-visible,
+.segment-button:focus-visible {
+  outline-offset: 1px;
 }
 .zoom-label {
   min-width: 42px;
@@ -364,6 +371,20 @@ input { width: 100%; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   scrollbar-gutter: stable;
+}
+
+.overview-wrap::-webkit-scrollbar,
+.detail-content::-webkit-scrollbar,
+.plugin-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.overview-wrap::-webkit-scrollbar-thumb,
+.detail-content::-webkit-scrollbar-thumb,
+.plugin-list::-webkit-scrollbar-thumb {
+  background: #31445b;
+  border-radius: 8px;
 }
 .overview-svg {
   width: max(100%, 1080px);
@@ -631,6 +652,7 @@ input { width: 100%; }
   .project-picker { grid-column: 1 / -1; }
   .project-picker span { flex: 0 0 auto; }
   .toolbar .button { padding-left: 9px; padding-right: 9px; }
+  .toolbar .icon-button { min-width: 30px; }
   .inline-form { grid-template-columns: 1fr; }
   .form-actions { justify-content: flex-start; }
   .workspace { gap: 12px; }

@@ -2,17 +2,12 @@ import {
   Box,
   Check,
   ChevronDown,
-  Copy,
   createIcons,
-  ExternalLink,
   FolderGit2,
   Monitor,
   Minus,
   PanelTop,
-  Play,
   Puzzle,
-  RefreshCw,
-  RotateCcw,
   Rows3,
   ShieldCheck,
   Square,
@@ -55,7 +50,7 @@ const closePluginViewButton = requiredElement<HTMLButtonElement>('close-plugin-v
 const terminalError = requiredElement<HTMLDivElement>('terminal-error')
 const terminalErrorMessage = requiredElement<HTMLElement>('terminal-error-message')
 const terminalMeta = requiredElement<HTMLElement>('terminal-meta')
-const copyTerminalButton = requiredElement<HTMLButtonElement>('copy-terminal')
+const maximizeWindowButton = requiredElement<HTMLButtonElement>('maximize-window')
 const executionContext = requiredElement<HTMLElement>('execution-context')
 const executionSelector = requiredElement<HTMLDetailsElement>('execution-selector')
 const executionSelectorSummary = requiredElement<HTMLElement>('execution-selector-summary')
@@ -90,14 +85,10 @@ createIcons({
     Box,
     Check,
     ChevronDown,
-    Copy,
     PanelTop,
     FolderGit2,
     Monitor,
-    Play,
     Puzzle,
-    RefreshCw,
-    RotateCcw,
     Rows3,
     ShieldCheck,
     Square,
@@ -227,10 +218,6 @@ function showTerminalError(message: string): void {
   terminalError.hidden = false
 }
 
-function syncCopyButtonState(): void {
-  copyTerminalButton.disabled = !terminal.hasSelection()
-}
-
 async function copySelectedTerminalText(): Promise<void> {
   const selection = terminal.getSelection()
   if (!selection) return
@@ -239,6 +226,12 @@ async function copySelectedTerminalText(): Promise<void> {
     error: error instanceof Error ? error.message : String(error)
   }))
   if (!result.ok) showTerminalError(result.error || '无法复制所选文本')
+}
+
+function updateMaximizeButton(maximized: boolean): void {
+  maximizeWindowButton.title = maximized ? '还原窗口' : '最大化'
+  maximizeWindowButton.setAttribute('aria-label', maximized ? '还原窗口' : '最大化')
+  maximizeWindowButton.setAttribute('aria-pressed', String(maximized))
 }
 
 async function pasteClipboardIntoTerminal(): Promise<void> {
@@ -533,55 +526,21 @@ function applyServiceResult(result: ServiceControlResult): void {
   }
 }
 
-function pluginStateLabel(plugin: PluginInfo): string {
-  if (!plugin.enabled) return '已禁用'
-  if (!plugin.service) return '工具插件'
-  if (plugin.service.state === 'healthy') {
-    return plugin.service.pid ? `PID ${plugin.service.pid}` : '运行中'
-  }
-  if (plugin.service.state === 'unhealthy') return '无响应'
-  return '已停止'
-}
-
 function pluginStateClass(plugin: PluginInfo): string {
   if (!plugin.enabled) return 'disabled'
   return plugin.service?.state ?? 'available'
 }
 
-function pluginCapabilitiesLabel(plugin: PluginInfo): string {
-  const labels: Record<string, string> = {
-    tools: '工具',
-    service: '服务',
-    web: '界面',
-    memory: '记忆'
-  }
-  return plugin.capabilities.map((capability) => labels[capability] ?? capability).join(' · ')
-}
-
-function pluginActionButton(
-  label: string,
-  icon: string,
-  action: PluginControlAction,
-  name: string
-): HTMLButtonElement {
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.className = 'plugin-action'
-  button.dataset.pluginAction = action
-  button.dataset.pluginName = name
-  button.title = `${label} ${name}`
-  button.setAttribute('aria-label', `${label} ${name}`)
-  const iconElement = document.createElement('i')
-  iconElement.dataset.lucide = icon
-  iconElement.setAttribute('aria-hidden', 'true')
-  button.append(iconElement)
-  return button
-}
-
 function renderPlugin(plugin: PluginInfo): HTMLElement {
-  const row = document.createElement('article')
-  row.className = `plugin-row ${pluginStateClass(plugin)}`
+  const row = document.createElement(plugin.uiPath && plugin.enabled ? 'button' : 'div') as HTMLElement
+  row.className = `plugin-row ${pluginStateClass(plugin)}${plugin.uiPath && plugin.enabled ? ' plugin-openable' : ''}`
   row.dataset.plugin = plugin.name
+  if (plugin.uiPath && plugin.enabled) {
+    row.setAttribute('type', 'button')
+    row.dataset.pluginOpen = plugin.name
+    row.title = `打开 ${plugin.displayName}`
+    row.setAttribute('aria-label', `打开 ${plugin.displayName}`)
+  }
 
   const stateDot = document.createElement('span')
   stateDot.className = 'state-dot'
@@ -596,44 +555,8 @@ function renderPlugin(plugin: PluginInfo): HTMLElement {
   const version = document.createElement('small')
   version.textContent = `v${plugin.version}`
   heading.append(name, version)
-  const detail = document.createElement('span')
-  detail.textContent = plugin.description || pluginCapabilitiesLabel(plugin)
-  detail.title = plugin.description || pluginCapabilitiesLabel(plugin)
-  copy.append(heading, detail)
-
-  const meta = document.createElement('small')
-  meta.className = 'plugin-meta'
-  meta.textContent = plugin.service
-    ? `${pluginStateLabel(plugin)} · ${plugin.service.port}`
-    : pluginStateLabel(plugin)
-
-  const actions = document.createElement('div')
-  actions.className = 'plugin-actions'
-  if (plugin.service && plugin.enabled) {
-    if (plugin.service.state === 'healthy') {
-      actions.append(
-        pluginActionButton('重启', 'refresh-cw', 'restart', plugin.name),
-        pluginActionButton('停止', 'square', 'stop', plugin.name)
-      )
-    } else {
-      actions.append(pluginActionButton('启动', 'play', 'start', plugin.name))
-    }
-  }
-  if (plugin.uiPath && plugin.enabled) {
-    const openButton = document.createElement('button')
-    openButton.type = 'button'
-    openButton.className = 'plugin-action plugin-open'
-    openButton.dataset.pluginOpen = plugin.name
-    openButton.title = `打开 ${plugin.displayName}`
-    openButton.setAttribute('aria-label', `打开 ${plugin.displayName}`)
-    const openIcon = document.createElement('i')
-    openIcon.dataset.lucide = 'external-link'
-    openIcon.setAttribute('aria-hidden', 'true')
-    openButton.append(openIcon)
-    actions.append(openButton)
-  }
-
-  row.append(stateDot, copy, meta, actions)
+  copy.append(heading)
+  row.append(stateDot, copy)
   return row
 }
 
@@ -657,9 +580,6 @@ function applyPluginResult(result: ServiceControlResult): void {
     : `${available.length}/${enabled.length} 可用`
   createIcons({
     icons: {
-      ExternalLink,
-      Play,
-      RefreshCw,
       Square
     }
   })
@@ -687,7 +607,7 @@ function setServiceBusy(action?: ServiceLifecycleAction): void {
 function setPluginBusy(name?: string): void {
   pluginActionPending = name
   pluginMenu.classList.toggle('busy', pluginActionPending !== undefined)
-  for (const button of pluginList.querySelectorAll<HTMLButtonElement>('.plugin-action')) {
+  for (const button of pluginList.querySelectorAll<HTMLButtonElement>('.plugin-openable')) {
     button.disabled = pluginActionPending !== undefined
   }
 }
@@ -888,7 +808,6 @@ function endSplitDrag(event: PointerEvent): void {
 terminal.onData((data) => api.terminal.write(data))
 const disposeTerminalData = api.terminal.onData((data) => terminal.write(data))
 const disposeTerminalState = api.terminal.onState(applyTerminalState)
-const disposeTerminalSelection = terminal.onSelectionChange(syncCopyButtonState)
 const resizeObserver = new ResizeObserver(() => requestAnimationFrame(fitTerminal))
 resizeObserver.observe(terminalHost)
 
@@ -901,29 +820,19 @@ monitorFrame.addEventListener('error', () => showMonitorFailure('请检查 Super
 pluginFrame.addEventListener('load', () => {
   pluginOverlay.hidden = true
 })
-requiredElement<HTMLButtonElement>('reload-monitor').addEventListener('click', () => void connectMonitor(true))
 retryMonitor.addEventListener('click', () => void connectMonitor(true))
 closePluginViewButton.addEventListener('click', closePluginView)
-requiredElement<HTMLButtonElement>('restart-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.restart()))
 requiredElement<HTMLButtonElement>('retry-terminal').addEventListener('click', async () => applyTerminalState(await api.terminal.start()))
-copyTerminalButton.addEventListener('click', () => void copySelectedTerminalText())
 requiredElement<HTMLButtonElement>('minimize-window').addEventListener('click', () => api.window.minimize())
+maximizeWindowButton.addEventListener('click', () => api.window.toggleMaximize())
 requiredElement<HTMLButtonElement>('close-window').addEventListener('click', () => api.window.close())
 requiredElement<HTMLButtonElement>('start-services').addEventListener('click', () => void runServiceAction('start'))
 requiredElement<HTMLButtonElement>('restart-services').addEventListener('click', () => void runServiceAction('restart'))
 requiredElement<HTMLButtonElement>('stop-services').addEventListener('click', () => void runServiceAction('stop'))
 pluginList.addEventListener('click', (event) => {
   const target = event.target as HTMLElement
-  const actionButton = target.closest<HTMLButtonElement>('[data-plugin-action]')
-  if (actionButton?.dataset.pluginName && actionButton.dataset.pluginAction) {
-    const action = actionButton.dataset.pluginAction
-    if (action === 'start' || action === 'stop' || action === 'restart') {
-      void runPluginAction(actionButton.dataset.pluginName, action)
-    }
-    return
-  }
-  const openButton = target.closest<HTMLButtonElement>('[data-plugin-open]')
-  if (openButton?.dataset.pluginOpen) void openPlugin(openButton.dataset.pluginOpen)
+  const openRow = target.closest<HTMLElement>('[data-plugin-open]')
+  if (openRow?.dataset.pluginOpen) void openPlugin(openRow.dataset.pluginOpen)
 })
 for (const button of backendButtons) {
   button.addEventListener('click', () => {
@@ -961,13 +870,27 @@ splitter.addEventListener('keydown', (event) => {
   setSplitPercent(splitPercent + (event.key === 'ArrowDown' ? 2 : -2), true)
 })
 
+window.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) return
+  const key = event.key.toLowerCase()
+  if (key === 'r') {
+    event.preventDefault()
+    void connectMonitor(true)
+  } else if (key === 't') {
+    event.preventDefault()
+    void api.terminal.restart().then(applyTerminalState)
+  } else if (key === 'c' && terminal.hasSelection()) {
+    event.preventDefault()
+    void copySelectedTerminalText()
+  }
+})
+
 window.addEventListener('beforeunload', () => {
   if (monitorTimer !== undefined) window.clearTimeout(monitorTimer)
   if (servicePollTimer !== undefined) window.clearTimeout(servicePollTimer)
   resizeObserver.disconnect()
   disposeTerminalData()
   disposeTerminalState()
-  disposeTerminalSelection.dispose()
 })
 
 // 监听 Supervisor iframe 的 postMessage（账号中心 cookie 刷新等）
@@ -996,7 +919,9 @@ window.addEventListener('message', (event) => {
 async function startDesktop(): Promise<void> {
   setLayoutMode(layoutMode)
   setSplitPercent(splitPercent)
-  syncCopyButtonState()
+  updateMaximizeButton(await api.window.isMaximized())
+  const disposeWindowState = api.window.onMaximizedChange(updateMaximizeButton)
+  window.addEventListener('beforeunload', disposeWindowState, { once: true })
   await runServiceAction('start')
   applyTerminalState(await api.terminal.start())
   scheduleServicePoll()

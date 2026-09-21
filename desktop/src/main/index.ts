@@ -62,6 +62,11 @@ function createWindow(): BrowserWindow {
   })
 
   window.once('ready-to-show', () => window.show())
+  const sendWindowState = (): void => {
+    if (!window.isDestroyed()) window.webContents.send('window:maximized-state', window.isMaximized())
+  }
+  window.on('maximize', sendWindowState)
+  window.on('unmaximize', sendWindowState)
   window.webContents.setWindowOpenHandler(({ url }) => {
     const protocol = new URL(url).protocol
     if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(url)
@@ -186,6 +191,12 @@ function registerIpc(): void {
     return loginToPlatform(mainWindow, platform)
   })
   ipcMain.on('window:minimize', () => mainWindow?.minimize())
+  ipcMain.handle('window:is-maximized', () => mainWindow?.isMaximized() ?? false)
+  ipcMain.on('window:toggle-maximize', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMaximized()) mainWindow.unmaximize()
+    else mainWindow.maximize()
+  })
   ipcMain.on('window:close', () => mainWindow?.close())
   ipcMain.handle('workspace:open', async () => {
     const path = services?.currentWorkspacePath()

@@ -36,6 +36,13 @@ const api: VoidCubeDesktopApi = {
   },
   window: {
     minimize: () => ipcRenderer.send('window:minimize'),
+    toggleMaximize: () => ipcRenderer.send('window:toggle-maximize'),
+    isMaximized: () => ipcRenderer.invoke('window:is-maximized') as Promise<boolean>,
+    onMaximizedChange: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, maximized: boolean): void => listener(maximized)
+      ipcRenderer.on('window:maximized-state', handler)
+      return () => ipcRenderer.removeListener('window:maximized-state', handler)
+    },
     close: () => ipcRenderer.send('window:close')
   },
   workspace: {
