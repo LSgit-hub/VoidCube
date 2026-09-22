@@ -27,6 +27,7 @@ class CandidateStreamEligibility:
     governance_hygiene_review: bool
     body_improvement: bool
     governance_signal_present: bool
+    repeated_learning_blocked: bool = False
 
 
 def resolve_candidate_stream_eligibility(
@@ -45,6 +46,7 @@ def resolve_candidate_stream_eligibility(
     body_growth_blocked: bool,
     body_growth_quota: int,
     memory_maintenance_status: Mapping[str, Any] | None = None,
+    repeated_learning_blocked: bool = False,
     now: Optional[datetime] = None,
 ) -> CandidateStreamEligibility:
     task_list = list(api_b_judgement_tasks)
@@ -126,6 +128,7 @@ def resolve_candidate_stream_eligibility(
             and body_growth_quota > 0
         ),
         governance_signal_present=governance_signal_present,
+        repeated_learning_blocked=bool(repeated_learning_blocked),
     )
 
 

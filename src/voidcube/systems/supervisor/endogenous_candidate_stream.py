@@ -115,6 +115,9 @@ def prepare_candidate_stream(
         memory_maintenance_status=dict(
             drive_input.get("memory_maintenance_status") or {}
         ),
+        repeated_learning_blocked=bool(
+            drive_input.get("self_iteration_repetition_blocked")
+        ),
     )
     backlog_pressure_penalties = build_backlog_pressure_penalties(drive_context)
     intents_by_kind = {
@@ -321,7 +324,11 @@ def build_candidate_stream(
             if generated_count >= 2:
                 break
 
-        if generated_count == 0 and cognitive_assessment_memory.get("available"):
+        if (
+            generated_count == 0
+            and cognitive_assessment_memory.get("available")
+            and not eligibility.repeated_learning_blocked
+        ):
             target = str(
                 cognitive_assessment_memory.get("self_iteration_target")
                 or self_iteration_trend_memory.get("dominant_target")

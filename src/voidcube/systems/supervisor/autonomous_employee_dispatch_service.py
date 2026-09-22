@@ -379,9 +379,22 @@ class AutonomousEmployeeDispatchService:
                 },
             }
             if success and self._task_profile_policy.runtime_family(task) == "self_learning":
+                tool_trace = result_context.get("tool_trace") or run.get("tool_trace") or []
+                tools_used = sorted(
+                    {
+                        str(item.get("tool") or "").strip()
+                        for item in tool_trace
+                        if isinstance(item, dict) and str(item.get("tool") or "").strip()
+                    }
+                )
+                source_urls = result_context.get("source_urls") or run.get("source_urls") or []
                 assessment = assess_autonomous_learning_quality(
                     task,
-                    {"response": result_summary},
+                    {
+                        "response": result_summary,
+                        "tools_used": tools_used,
+                        "source_urls": source_urls,
+                    },
                 )
                 metadata["quality_score"] = assessment["score"]
                 metadata["learning_quality_assessment"] = assessment
@@ -630,6 +643,8 @@ class AutonomousEmployeeDispatchService:
             "execution_provider": run.get("execution_provider"),
             "execution_model": run.get("execution_model"),
             "result_summary": str(run.get("result_summary") or "")[:12000],
+            "tool_trace": list(run.get("tool_trace") or []),
+            "source_urls": list(run.get("source_urls") or []),
             "error": str(run.get("error") or "")[:2000],
             "elapsed_ms": run.get("elapsed_ms"),
         }

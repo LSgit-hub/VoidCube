@@ -156,6 +156,20 @@ async def evaluate_endogenous_drive(
         *api_b_judgement_tasks,
         *employee_execution_lane_tasks,
     ]
+    history_snapshot = context.load_drive_history()
+    recent_outcomes = [
+        item for item in list(dict(history_snapshot or {}).get("outcomes") or [])
+        if isinstance(item, dict)
+        and str(item.get("event_type") or "").strip().lower()
+        in {"decision", "execution_finalize", "employee_execution_completed"}
+        and str(item.get("task_family") or "").strip().lower() == "self_learning"
+    ][:4]
+    drive_input["self_iteration_repetition_blocked"] = len(recent_outcomes) >= 3 and all(
+        str(item.get("result_status") or item.get("status") or "").strip().lower()
+        in {"cancelled", "failed", "deferred"}
+        or float(item.get("quality_score") or 0.0) < 0.4
+        for item in recent_outcomes
+    )
     drive_input["endogenous_drive_policy"] = build_endogenous_drive_policy(
         context.runtime_config
     )

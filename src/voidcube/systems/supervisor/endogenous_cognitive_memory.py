@@ -180,7 +180,10 @@ def build_switch_self_regulation_memory(drive_context: Dict[str, Any]) -> Dict[s
         decision = str(normalized.get("stay_or_switch") or "").strip().lower()
         if decision not in {"stay", "switch"}:
             continue
-        quality_score = _clamp01(float(outcome.get("quality_score") or 0.0))
+        raw_quality = outcome.get("quality_score")
+        if raw_quality is None:
+            continue
+        quality_score = _clamp01(float(raw_quality))
         alignment_score = _alignment_score(outcome)
         reference_score = _reference_score(outcome)
         result_status = str(outcome.get("result_status") or "").strip().lower()
@@ -260,7 +263,10 @@ def build_post_task_effect_memory(drive_context: Dict[str, Any]) -> Dict[str, An
         if event_type in {"", "planned"}:
             continue
         normalized = _normalized_assessment(outcome)
-        quality_score = _clamp01(float(outcome.get("quality_score") or 0.0))
+        raw_quality = outcome.get("quality_score")
+        if raw_quality is None:
+            continue
+        quality_score = _clamp01(float(raw_quality))
         cognitive_score = _alignment_score(outcome)
         reference_score = _reference_score(outcome)
         target = str(normalized.get("self_iteration_target") or "").strip()

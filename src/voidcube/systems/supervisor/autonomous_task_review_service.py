@@ -172,9 +172,26 @@ class AutonomousTaskReviewService:
                     normalized == "completed"
                     and self._task_profile_policy.runtime_family(task) == "self_learning"
                 ):
+                    tool_trace = request.get("tool_trace") or request.get("execution_trace") or []
+                    if not tool_trace:
+                        tool_trace = decision_context.get("tool_trace") or []
+                    tools_used = sorted(
+                        {
+                            str(item.get("tool") or "").strip()
+                            for item in tool_trace
+                            if isinstance(item, dict) and str(item.get("tool") or "").strip()
+                        }
+                    )
+                    tools_used = list(request.get("tools_used") or decision_context.get("tools_used") or tools_used)
+                    source_urls = request.get("source_urls") or decision_context.get("source_urls") or []
                     assessment = assess_autonomous_learning_quality(
                         task,
-                        {**decision_context, "response": final_response},
+                        {
+                            **decision_context,
+                            "response": final_response,
+                            "tools_used": tools_used,
+                            "source_urls": source_urls,
+                        },
                     )
                     decision_context["quality_score"] = assessment["score"]
                     decision_context["learning_quality_assessment"] = assessment
