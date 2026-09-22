@@ -55,7 +55,7 @@ grep "2026-08-2X H:MM" C:/Users/<user>/.VoidCube/logs/errors.log | grep -iE "err
 要点：
 - **会话 lease 自动恢复**：gateway 重启后 CLI 会话不丢，`active_cli_executor` 里 session 仍存活（stale_after_seconds=90 内的短暂中断可恢复），记忆有持久化不受影响。
 - 重启属环境动作（会中断 gateway/播放器/supervisor companion 循环约 10-30s），执行前向用户说明。
-- memory `/health` 的 `commit_revision` 在重启后递增说明新代码已加载。
+- memory `/health` 的 `commit_revision` 是记忆数据库写入修订号，递增不能证明新代码已加载。部署核验须结合服务 PID/启动时间、模块来源路径及构建版本或源码提交标识；数据库 revision 只用于观察数据写入。
 
 ### 第 2 层：记忆数据库完整性
 **表结构速查（实测 2026-08-26）**：`turns` 的正文列是 `text`（无 `content`）；
@@ -80,10 +80,11 @@ sqlite3 "$DB" "SELECT COUNT(*) as stale_7d FROM turns WHERE compression_status='
 sqlite3 "$DB" "SELECT COUNT(*) as stale_14d FROM turns WHERE compression_status='pending' AND timestamp < datetime('now','-14 days');"
 ```
 
-**关键阈值**（来自 memory-system-diagnostics 技能）：
-- turns.pending > 200 → 压缩流水线明显停滞
-- compressed_memories 最新日期落后 turns 最新日期 > 数小时 → 压缩进程停滞
-- quality_quarantined > 0 → 事件提取质量门禁拦截，需排查提取逻辑
+**调查触发条件，不是故障判据**：
+- pending 数量大、候选年龄长或 Tier2 时间落后只触发调查；不能凭单次快照判定流水线停滞。按 scope 比较至少两个周期的候选量、处理量、入库量、last_succeeded_at 和新流入速度。
+- partially_compressed 可以是合法的质量隔离结果，整批 quality_evidence.passed=false 不代表已接受事件绕过门禁；需检查 accepted/rejected event 和覆盖 turn 的实际写入边界。
+- quality_quarantined 非零不等于新故障或持续增长。turn.timestamp 是原始对话时间，不是进入隔离的时间；统计拒绝/隔离趋势应使用 audit 的 evaluated_at 或实际状态变更时间（查询前 PRAGMA 确认字段）。
+- 标题包含“评估/审计”的可见记忆只是待人工核验候选，不凭 LIKE 命中量断言污染，也不据此自动修改生产库。
 
 **时区混用检测（2026-09-08 新增）**：
 ```bash
@@ -625,6 +626,24 @@ event_coverage=0.684   failed_checks=['event_coverage','validated_event_coverage
 
 ### 单次 `/tier2/compress` 的 403 未复现（2026-09-10）
 曾观察到 `workspace_id='default'` + `memory_actor='api_a'` 返回 HTTP 403，复查时 `default` 与 `VoidCube` 均返回 200（`no_candidates` / `no_events_generated`）。结论：**不可复现**，疑似发生在服务重启窗口内（actor/workspace 尚未就绪）。遇到 403 时先确认服务启动是否已完成，再判断是否真是授权缺陷；不要据此改鉴权逻辑。
+
+## 大规模更新后审计：证据分层与反证检查
+
+适用于服务 healthy、全量测试通过，但怀疑功能没有真正闭环的复查。先做只读检查，不因诊断直接重启服务、修改生产库或启用屏幕采集。
+
+1. **锁定版本和审计基线**：记录 `git rev-parse HEAD`、`git status --short`、近期 diff 和构建目录的检查前状态。终端/文件搜索优先使用专用工具，勿机械照搬历史技能里的 grep/ls/sed。
+2. **按入口追完整链**：入口 → composition root → adapter → 结果归一化 → canonical writeback → UI/health 投影。检查主路径、错误返回、异步 accepted、重复请求和恢复重试。facade 内未调用 writeback 仅证明本层未写回；还须检查调用方、adapter 和 reconcile 是否拥有写回职责。用 fake adapter 返回 failed/accepted/completed 做无生产副作用的复现，不仅凭“executed”字面量判定已发生假成功。
+3. **区分计数生命周期**：gateway activity 的进程计数可能重启清零，而 last_execute_at/recent_metadata 保留历史事件。plan 可能统计空规划轮次，execute 可能仅在终态 reconcile 时增加。把 counter 含义、启动时间、task/run 当前状态一起核验；plan>0 且 execute=0 不能单独证明执行链断裂。
+4. **按消费分支核查 perception**：分别检查普通 CLI Agent、Supervisor companion 和 Auto 分支。全局查 `perception_context`、`_companion_perception_context`、`PerceptionQueryService` 及 payload 构造。在本次复查中，子审查曾误称 perception 完全未接模型，但主审查找到 `service_runtime.py` 的 companion payload 接线；正确结论只能限定到已检查的分支。默认 parser=None、懒加载或 Auto 排除也可能是产品/隐私设计，先核对契约再判缺陷。端到端测试应断言 fake model transport 实际收到上下文，不能只验证 HTTP 查询可用。
+5. **对子审查执行反证核验**：零引用搜索不是动态调用不存在的证明。报告持久化重复/无限积压前，先读 store 的主键、upsert/事务和 runtime 的先重试后采集顺序；未经复现的风险标为待验证，不升级为确定故障。报告普通 Agent 缺功能前先确认这是用户要求而非未来扩展。
+6. **验证不能被工具超时或管道掩盖**：用项目虚拟环境直接运行 `.venv/Scripts/python.exe scripts/run_ci_tests.py`，长任务设置 `background=true, notify_on_complete=true`，等待真实结束。不要使用 `pytest | tail; echo ...` 的最终 exit code 判断测试成功；管道可能掩盖 pytest 非零退出。120 秒工具超时不能证明测试死锁；本次相关套件延长等待后完整通过。只读审计也要明确全量、定向和未执行的验证范围。
+7. **卫生检查排除自我污染**：wheel 构建会创建 build/egg-info 等，必须与检查前快照比较，不把本轮构建产物归为历史问题。__pycache__ 内 pyc 的源码在父目录，可用 `importlib.util.source_from_cache()` 求路径；普通 CPython import 通常不会仅凭无源码的 __pycache__/name.cpython-*.pyc 加载模块。孤儿缓存是卫生问题，除非证明 loader/import 路径确实使用它，否则不宣称旧代码正在运行。构建成功与 wheel verifier 通过不证明技能资产或干净安装交付完整，还须检查 wheel 条目和安装后资源解析。
+
+8. **execution facade 必须做状态闭环**：正式 execute 入口不能把 adapter 返回统一包装成 `executed/completed`。先验证 canonical task 是否存在、状态是否可 claim，再建立 execution lease；adapter 结果归一化为 `completed/failed/running/awaiting_user_consent/handoff/rejected`，异常也必须写回 `failed`，不能留下永久 `running`。canonical task writeback 是权威状态，Gateway activity 只是观测投影。测试至少覆盖 standalone handoff、canonical success、adapter failure、不可 claim、lease 复用和 activity 记录；只断言 HTTP 200 或响应字面量不算执行闭环。
+
+9. **perception 接线审计必须按消费分支反证**：分别核查普通 CLI Agent、Supervisor companion、Auto 分支；发现 `PerceptionQueryService` 或 `perception_context` 不等于所有分支都未接入。对已经接线的 companion，应断言 fake model transport 实际收到 payload，而不是只断言 HTTP 查询可用。可选 parser/backend 未配置时先标为“能力未启用/设计待确认”，不要为了消除 `parser=None` 自动安装模型或改变屏幕隐私授权；优先补 worker 的失败计数、退避、最后成功时间和结构化健康状态。
+
+交付按“已复现缺陷 / 静态风险 / 设计待确认 / 改进建议”分栏；附当前版本、证据、影响范围和验证限制。不要将所有假设写成持久故障基线。
 
 ## 复用建议
 - 每次系统自检后，将新发现的模式追加到 `endogenous-failure-analysis` 或 `memory-system-diagnostics` 技能的"已知根因模式"部分
