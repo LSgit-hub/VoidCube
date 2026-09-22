@@ -19,6 +19,7 @@ category: devops
 3. 删除前必须确认技能**不在 `.bundled_manifest`** 中，否则删了会被重新物化。
 4. 删除统一走 `skill_manage(action='delete', name=...)`，它会同步清 registry（行数应减少对应数量）。
 5. 参考型技能（mlops/*，声明 torch/vllm/peft 等第三方依赖但未安装）**不是无效技能**，依赖按需安装，禁止以"依赖未安装"为由删除。
+6. **入库/提交时的守卫坑**：仓库暂存区里可能残留其它会话的文件（尤其 `src/`），此时直接 `git commit` 会把它们裹进技能提交，被 `.githooks/pre-commit` 拒绝。做法：先 `git add -- <技能路径>`（未跟踪路径必须先 add，否则不能当 pathspec 用），再 `git commit -F <msgfile> -- <技能路径>`——pathspec 形式是 `--only` 语义，只提交这些路径、忽略暂存区其它内容，守卫也只会看到技能路径。别用 `--no-verify` 硬闯。
 
 ## 步骤
 
