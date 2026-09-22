@@ -1412,25 +1412,6 @@ class PlanningRuntimeMixin:
                 keys.add(key)
         return keys
 
-    def _endogenous_repetition_blocked(self) -> bool:
-        history = self._load_drive_history() if hasattr(self, "_load_drive_history") else {}
-        outcomes = list((history or {}).get("outcomes") or [])
-        recent = [
-            item for item in outcomes
-            if isinstance(item, dict)
-            and str(item.get("event_type") or "").strip().lower()
-            in {"decision", "execution_finalize", "employee_execution_completed"}
-            and str(item.get("task_family") or "").strip().lower() == "self_learning"
-        ][:4]
-        if len(recent) < 3:
-            return False
-        return all(
-            str(item.get("result_status") or item.get("status") or "").strip().lower()
-            in {"cancelled", "failed", "deferred"}
-            or float(item.get("quality_score") or 0.0) < 0.4
-            for item in recent
-        )
-
     async def evaluate_endogenous_drive(self, request: dict | None = None):
         """Evaluate endogenous cognition state and API-B judgement projections."""
 
