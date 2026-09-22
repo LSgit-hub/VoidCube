@@ -294,6 +294,9 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
   提交信息写清"新增 N 个 + 对齐 M 个"
 - 改完 bundled 技能后 manifest 必须同步更新，保持 **repo == runtime == manifest** 三者一致，
   否则下次 sync 会把该技能判为 user-modified 并永久停止下发
+- **暂存区有别人的文件时用 pathspec 提交**：仓库暂存区常残留其它会话的 `src/` 改动，直接 `git commit` 会把它们裹进技能提交并被 `.githooks/pre-commit` 拒绝。做法：先 `git add -- <技能路径>`（未跟踪路径必须先 add，否则不能当 pathspec 用），再 `git commit -F <msgfile> -- <技能路径>`——pathspec 是 `--only` 语义，只提交这些路径、忽略暂存区其它内容，守卫也只看得到技能路径；`git commit --amend -F <msg> -- <path>` 同样安全（实测暂存区其它文件不受影响）。不要用 `--no-verify` 硬闯。
+- **`sync._hash` 必须传技能目录，不能传 SKILL.md 文件**：它内部 `rglob("*")`，传文件会空转，返回 `md5("")` = `d41d8cd98f00b204e9800998ecf8427e`；写进 manifest 后三方对账会静默失真（"仓库 == 运行时 == manifest" 其实都等于空 hash）。写 manifest 前断言 hash != 该空值。
+- **判 EOL 别用 `grep -c $'\r'`**：git-bash 里 `$'\r'` 常展开失败 → 空模式匹配所有行，读数恰好等于行数，会把纯 LF 文件误判成"整文件 CRLF"。用 Python 数字节：`p.read_bytes().count(b"\r\n")`。
 
 
 ## 自审清单：改完技能后逐项验证（每项都要有命令证据）
