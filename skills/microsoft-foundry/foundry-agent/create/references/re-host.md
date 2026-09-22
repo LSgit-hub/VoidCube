@@ -28,7 +28,7 @@ After scaffolding, you must use `azd ai agent sample list --language <language> 
 
 For reference, here are some awesome samples for re-hosting scenarios:
 1. Re-host agents built with the OpenAI Agents SDK: https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/bring-your-own/responses/openai-agents-sdk
-2. Re-host agents built with the Claude Agent SDK: https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/bring-your-own/invocations/claude-agent-sdk
+2. Re-host agents built with the external-agent Agent SDK: https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/bring-your-own/invocations/external-agent-sdk
 
 If users use a Foundry model, you must wire the Foundry model to the agent.
 
@@ -47,3 +47,4 @@ azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME "<model name>"
 ## Foundry Model Reference
 
 Read [Foundry Model Reference](./foundry-model.md) and follow the steps in it when you want to query model related data.
+

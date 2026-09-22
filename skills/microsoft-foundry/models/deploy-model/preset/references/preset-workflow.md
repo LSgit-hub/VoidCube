@@ -139,7 +139,7 @@ MODEL_VERSION="<version-or-latest>"
 **Detect model format:**
 
 ```bash
-# Get model format from model catalog (e.g., OpenAI, Anthropic, Meta-Llama, Mistral, Cohere)
+# Get model format from model catalog (e.g., OpenAI, external-model-provider, Meta-Llama, Mistral, Cohere)
 MODEL_FORMAT=$(az cognitiveservices account list-models \
   --name "$ACCOUNT_NAME" \
   --resource-group "$RESOURCE_GROUP" \
@@ -153,7 +153,7 @@ echo "Model format: $MODEL_FORMAT"
 
 > 💡 **Model format determines the deployment path:**
 > - `OpenAI` — Standard CLI deployment, TPM-based capacity, RAI policies apply
-> - `Anthropic` — REST API deployment with `modelProviderData`, capacity=1, no RAI
+> - `external-model-provider` — REST API deployment with `modelProviderData`, capacity=1, no RAI
 > - All other formats (`Meta-Llama`, `Mistral`, `Cohere`, etc.) — Standard CLI deployment, capacity=1 (MaaS), no RAI
 
 ---
@@ -420,9 +420,9 @@ else
 fi
 ```
 
-### If MODEL_FORMAT is NOT "Anthropic" — Standard CLI Deployment
+### If MODEL_FORMAT is NOT "external-model-provider" — Standard CLI Deployment
 
-> 💡 **Note:** The Azure CLI supports all non-Anthropic model formats directly.
+> 💡 **Note:** The Azure CLI supports all non-external-model-provider model formats directly.
 
 *Bash version:*
 ```bash
@@ -456,7 +456,7 @@ az cognitiveservices account deployment create `
 
 > 💡 **Note:** For non-OpenAI MaaS models (Meta-Llama, Mistral, Cohere, etc.), `$DEPLOY_CAPACITY` is `1` (set in capacity calculation above).
 
-### If MODEL_FORMAT is "Anthropic" — REST API Deployment with modelProviderData
+### If MODEL_FORMAT is "external-model-provider" — REST API Deployment with modelProviderData
 
 The Azure CLI does not support `--model-provider-data`. You must use the ARM REST API directly.
 
@@ -486,7 +486,7 @@ Present the following list and ask the user to choose one:
 19. Other                   (API value: other)
 ```
 
-> ⚠️ **Do NOT pick a default industry or hardcode a value. Always ask the user.** This is required by Anthropic's terms of service. The industry list is static — there is no REST API that provides it.
+> ⚠️ **Do NOT pick a default industry or hardcode a value. Always ask the user.** This is required by external-model-provider's terms of service. The industry list is static — there is no REST API that provides it.
 
 Store selection as `SELECTED_INDUSTRY` (use the API value, e.g., `technology`).
 
@@ -515,7 +515,7 @@ $orgName = $tenantInfo.displayName
 
 *Bash version:*
 ```bash
-echo "Creating Anthropic model deployment via REST API..."
+echo "Creating external-model-provider model deployment via REST API..."
 
 az rest --method PUT \
   --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$ACCOUNT_NAME/deployments/$DEPLOYMENT_NAME?api-version=2024-10-01" \
@@ -526,7 +526,7 @@ az rest --method PUT \
     },
     \"properties\": {
       \"model\": {
-        \"format\": \"Anthropic\",
+        \"format\": \"external-model-provider\",
         \"name\": \"$MODEL_NAME\",
         \"version\": \"$MODEL_VERSION\"
       },
@@ -541,7 +541,7 @@ az rest --method PUT \
 
 *PowerShell version:*
 ```powershell
-Write-Host "Creating Anthropic model deployment via REST API..."
+Write-Host "Creating external-model-provider model deployment via REST API..."
 
 $body = @{
     sku = @{
@@ -550,7 +550,7 @@ $body = @{
     }
     properties = @{
         model = @{
-            format = "Anthropic"
+            format = "external-model-provider"
             name = $MODEL_NAME
             version = $MODEL_VERSION
         }
@@ -567,7 +567,7 @@ az rest --method PUT `
   --body $body
 ```
 
-> 💡 **Note:** Anthropic models use `capacity: 1` (MaaS billing model), not TPM-based capacity.
+> 💡 **Note:** external-model-provider models use `capacity: 1` (MaaS billing model), not TPM-based capacity.
 
 **Monitor deployment progress:**
 ```bash
@@ -692,3 +692,4 @@ echo "• Click the link above to test in Microsoft Foundry playground"
 echo "• Integrate into your application"
 echo "• Set up monitoring and alerts"
 ```
+

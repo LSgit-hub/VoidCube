@@ -31,10 +31,10 @@
 **Config:** gpt-4o / GlobalStandard / 20K TPM / Dynamic Quota / Spillover → `gpt-4o-backup`
 **Result:** Primary handles up to 20K TPM; overflow auto-redirects to backup deployment.
 
-## Example 6: Anthropic Model Deployment (claude-sonnet-4-6)
+## Example 6: external-model-provider Model Deployment (external-model-v1)
 
-**Scenario:** Deploy claude-sonnet-4-6 with customized settings.
-**Config:** claude-sonnet-4-6 / GlobalStandard / capacity 1 (MaaS) / Industry: Healthcare / No RAI policy (Anthropic manages content filtering)
+**Scenario:** Deploy external-model-v1 with customized settings.
+**Config:** external-model-v1 / GlobalStandard / capacity 1 (MaaS) / Industry: Healthcare / No RAI policy (external-model-provider manages content filtering)
 **Result:** User selected "Healthcare" as industry → tenant country code (US) and org name fetched automatically → deployed via ARM REST API with `modelProviderData` in ~2 min.
 
 ---
@@ -48,7 +48,7 @@
 | Ex 3 | gpt-4o | ProvisionedManaged | 200 PTU | - | ✓ | - | Predictable workload |
 | Ex 4 | gpt-4o-mini | Standard | 1K TPM | - | - | - | Dev/testing |
 | Ex 5 | gpt-4o | GlobalStandard | 20K TPM | ✓ | - | ✓ | Peak load |
-| Ex 6 | claude-sonnet-4-6 | GlobalStandard | 1 (MaaS) | - | - | - | Anthropic model |
+| Ex 6 | external-model-v1 | GlobalStandard | 1 (MaaS) | - | - | - | external-model-provider model |
 
 ## Common Patterns
 
@@ -88,3 +88,4 @@
 | `QuotaExceeded` | Check usage with `az cognitiveservices usage list`, reduce capacity, try different SKU, check other regions, or use the [quota skill](../../../quota/quota.md) to request an increase |
 | Version not available for SKU | Check `az cognitiveservices account list-models --query "[?name=='gpt-4o'].version"`, use latest |
 | Deployment name exists | Skill auto-generates unique name (e.g., `gpt-4o-2`), or specify custom name |
+

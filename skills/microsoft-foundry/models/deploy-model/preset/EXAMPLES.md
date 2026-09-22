@@ -38,9 +38,9 @@
 **Scenario:** Deploy "latest gpt-4o" when multiple versions exist.
 **Result:** Latest stable version auto-selected. Capacity aggregated across versions.
 
-## Example 8: Anthropic Model (claude-sonnet-4-6)
+## Example 8: external-model-provider Model (external-model-v1)
 
-**Scenario:** Deploy claude-sonnet-4-6 (Anthropic model requiring modelProviderData).
+**Scenario:** Deploy external-model-v1 (external-model-provider model requiring modelProviderData).
 **Result:** User prompted for industry selection → tenant country code and org name fetched automatically → deployed via ARM REST API with `modelProviderData` payload in ~2 min. Capacity set to 1 (MaaS billing).
 
 ---
@@ -56,7 +56,7 @@
 | **5: First-Time** | ~5m | Complete onboarding |
 | **6: Name Conflict** | ~1m | Auto-retry with suffix |
 | **7: Multi-Version** | ~1m | Latest version auto-selected |
-| **8: Anthropic** | ~2m | Industry prompt, tenant info, REST API deploy |
+| **8: external-model-provider** | ~2m | Industry prompt, tenant info, REST API deploy |
 
 ## Common Patterns
 
@@ -66,3 +66,4 @@ B: Region Select    Auth → Get Project → Region (✗) → Query All → Sele
 C: Full Onboarding  Auth → No Projects → Create Project → Deploy
 D: Error Recovery   Deploy (✗) → Analyze → Fix → Retry
 ```
+

@@ -169,7 +169,7 @@ If the user's original prompt was generic (no specific agent purpose described),
 
 ### Step 6 — Write the agent instruction file (required)
 
-Do **not** skip this. The project needs a marker in its `AGENTS.md` (or `CLAUDE.md` in Claude Code) so future prompts reload this skill. If no such file exists, create it with the marker below. If the file already exists, weave the marker into the existing content naturally so it matches the file's structure and tone, rather than bluntly appending a standalone line that reads as out of place. Never overwrite the file or create a second one.
+Do **not** skip this. The project needs a marker in its `AGENTS.md` (or `external-agent.md` in external-agent Code) so future prompts reload this skill. If no such file exists, create it with the marker below. If the file already exists, weave the marker into the existing content naturally so it matches the file's structure and tone, rather than bluntly appending a standalone line that reads as out of place. Never overwrite the file or create a second one.
 
 ```
 This project was built with the microsoft-foundry skill. Before working on or answering questions about foundry agents, read the microsoft-foundry skill first.
@@ -361,3 +361,4 @@ azd down                                    # tear down all resources when done
 ## Escape Hatch
 
 If any step fails in a way not covered above, the output looks unexpected, or the user's request drifts outside what this quickstart covers → **stop improvising**. Read [create-hosted.md](create-hosted.md) and follow its full workflow.
+
