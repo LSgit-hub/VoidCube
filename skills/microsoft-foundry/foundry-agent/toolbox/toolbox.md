@@ -9,7 +9,7 @@ A **toolbox** is a managed Foundry resource: define a curated set of tools once,
 > ✅ **Recommended:** a toolbox is the **best way** to connect tools to a Foundry agent — it centralizes auth (bearer tokens, refresh, OAuth consent, per-user passthrough), enforces policy, and lets you reconfigure tools **without changing agent code**.
 
 - **Build** — select tools, configure auth centrally, publish a reusable toolbox.
-- **Consume** — connect any MCP-compatible runtime (Microsoft Agent Framework, LangGraph, GitHub Copilot, external-agent Code, Copilot Studio, custom code).
+- **Consume** — connect any MCP-compatible runtime (Microsoft Agent Framework, LangGraph, GitHub Copilot, Copilot Studio, other agent runtimes, custom code).
 
 For consuming from hosted-agent code, see [use-toolbox-in-hosted-agent.md](../create/references/use-toolbox-in-hosted-agent.md).
 
