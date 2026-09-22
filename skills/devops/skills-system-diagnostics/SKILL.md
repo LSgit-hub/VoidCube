@@ -299,6 +299,31 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
 - **判 EOL 别用 `grep -c $'\r'`**：git-bash 里 `$'\r'` 常展开失败 → 空模式匹配所有行，读数恰好等于行数，会把纯 LF 文件误判成"整文件 CRLF"。用 Python 数字节：`p.read_bytes().count(b"\r\n")`。
 
 
+## 三方对账的权威口径与两个实测坑（2026-09-22）
+
+1. **权威口径只有两个**：`sync_skills(quiet=True)` 的返回字典 + 仓库/运行时两侧技能目录的 `_hash` 逐一比对。
+   自己手搓 `manifest.get(name)` 查询会产出**假告警**：manifest 的键是 frontmatter `name`，而目录名常与
+   之不同（如目录 `archive-agent-notes` vs frontmatter `dsh-archive-agent-notes`），用目录名去查必得 None
+   → 会被误报成"manifest 未对齐"。先跑 sync 看分类，再比逐目录 hash。
+2. **`_hash` 必须传技能目录**：传 `SKILL.md` 文件会让内部 `rglob("*")` 空转，返回
+   `md5("")` = `d41d8cd98f00b204e9800998ecf8427e`；写进 manifest 后三方对账会**静默失真**
+   （repo/runtime/manifest "都相等"，其实都是空 hash）。写 manifest 前断言 hash != 该空值。
+3. **更新父技能会连带覆盖嵌套子技能**：`sync_skills` 更新一个技能是 `copytree` 整个技能目录。若该目录
+   内嵌独立技能（如 `skills/microsoft-foundry/` 下有 `models/deploy-model/customize/`），父技能一次更新就把
+   子技能文件一起覆盖 → 子技能的 manifest 条目随即过期，sync 把它们判成 `user_modified`，**而此刻 repo 与
+   runtime 内容其实完全一致**。处置：核对子技能两侧 hash 相等后，直接把该条目重写为当前 hash。改嵌套技能
+   文件时要有"父技能条目也会被卷进同步流程"的预期。
+4. **别做全库 EOL 归一**：为消 CRLF 而"遍历 `skills/` 全部文本文件转 LF"会一次改动上百个文件；本机
+   `core.autocrlf=true`，`git checkout` 又把工作区还原成 CRLF → raw hash 反复变 → manifest 反复过期
+   （本次一次制造 5 个假 `user_modified`）。正确做法：**逐文件保留原 EOL 编辑**——读 bytes 判 EOL →
+   编辑期归一为 `\n` → 按原 EOL 写回；要归一就只针对目标文件。
+5. **脱敏/改名类改动的连带损伤必须核对**：把第三方产品名换成通用名时，**机器可判读的字面量必须保持事实
+   正确**：外部 API 的返回值/payload 字段（如 `MODEL_FORMAT == "Anthropic"`、`"format": "..."`）、真实
+   URL、真实文件名。核验方式：`curl -o /dev/null -w "%{http_code}"` 比对改前改后链接；对每个字面量追问
+   "它来自哪个外部契约"。原则：**泛化措辞可以留，事实字面量必须还原**。本次实测：34 处 `Anthropic` 被
+   改成 `external-model-provider` 后，分支条件永不成立、部署 payload 字段值错误（功能实际失效），
+   示例链接 404。
+
 ## 自审清单：改完技能后逐项验证（每项都要有命令证据）
 1. 提交范围纯净：`git show --name-only --format="" <sha>` 里非 `skills/` 的文件数必须为 0
 2. EOL 真的落盘：`git cat-file -p HEAD:<path>` 统计 `\r\n`，应为 0

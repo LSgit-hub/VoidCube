@@ -21,6 +21,16 @@ category: devops
 5. 参考型技能（mlops/*，声明 torch/vllm/peft 等第三方依赖但未安装）**不是无效技能**，依赖按需安装，禁止以"依赖未安装"为由删除。
 6. **入库/提交时的守卫坑**：仓库暂存区里可能残留其它会话的文件（尤其 `src/`），此时直接 `git commit` 会把它们裹进技能提交，被 `.githooks/pre-commit` 拒绝。做法：先 `git add -- <技能路径>`（未跟踪路径必须先 add，否则不能当 pathspec 用），再 `git commit -F <msgfile> -- <技能路径>`——pathspec 形式是 `--only` 语义，只提交这些路径、忽略暂存区其它内容，守卫也只会看到技能路径。别用 `--no-verify` 硬闯。
 
+7. **删除前必查四项（任一命中即不删）**：
+   - **活跃周期任务是否依赖它**：`scheduled_task(action='list')` 看任务 instruction 是否指向该技能。
+     实测：「技能库每周清理」任务依赖 `skill-library-weekly-cleanup` 自身，删它等于自伤。
+   - **是否有其它技能交叉引用**：`grep -rl "<技能名>" skills/ ~/.VoidCube/skills/ | grep -v "/<技能名>/"`。
+   - **与既有技能是否真重复**：difflib 逐对相似度；本库常态 <0.05 即互补，>0.45 才需人工裁决。
+     （实测 manual-skill-validation vs skills-system-diagnostics 仅 0.039，不是重复品。）
+   - **历史上是否被专门重建过**：任务运行记录/变更记录里若出现过"该技能消失后被重建"，说明它有实际负载。
+   四项都不命中才进入删除流程。2026-09-22 实测：6 个候选全部通过"可加载 + 内容与代码一致 + 有复用场景"，
+   **删除数 = 0 是合格结论**。
+
 ## 步骤
 
 ### 0. 计数基线
