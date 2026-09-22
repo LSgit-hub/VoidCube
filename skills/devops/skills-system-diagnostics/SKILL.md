@@ -351,6 +351,11 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
    .venv/Scripts/python.exe -m pytest tests/test_integration_policy.py -q
    ```
    触发场景：任何涉及第三方产品名 / 厂商字面量 / 示例链接的技能改动（含"脱敏"与"还原事实"两个方向）。
+   注意扫描面**不止 `skills/`**：`tests/test_integration_policy.py` 的 `_SURFACE_ROOTS` 覆盖
+   `docs` / `Mem/src` / `plugins` / `scripts` / `skills` / `tests` / `src/voidcube`，另有运行面
+   `_RUNTIME_SURFACE_ROOTS` = `.body-slots` / `.soul-runtime` / `state`，外加若干根文件
+   （`.body-active.json` / `.body-registry.json` / `.env.example` / `config.yaml` 等）——改这些位置里的
+   任何文本（**含文件名，大小写不敏感**）都要跑同一测试，不能只扫 `skills/`。
    实测教训：一次"把事实字面量还原"的改动直接让全量门禁 1 failed（3352 passed / 1 failed），
    最终改用"运行时变量 + 可判定描述"方案（见上文第 5 条）才同时满足功能正确与策略合规。
 
