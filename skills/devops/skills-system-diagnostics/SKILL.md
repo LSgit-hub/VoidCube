@@ -317,12 +317,17 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
    `core.autocrlf=true`，`git checkout` 又把工作区还原成 CRLF → raw hash 反复变 → manifest 反复过期
    （本次一次制造 5 个假 `user_modified`）。正确做法：**逐文件保留原 EOL 编辑**——读 bytes 判 EOL →
    编辑期归一为 `\n` → 按原 EOL 写回；要归一就只针对目标文件。
-5. **脱敏/改名类改动的连带损伤必须核对**：把第三方产品名换成通用名时，**机器可判读的字面量必须保持事实
-   正确**：外部 API 的返回值/payload 字段（如 `MODEL_FORMAT == "Anthropic"`、`"format": "..."`）、真实
-   URL、真实文件名。核验方式：`curl -o /dev/null -w "%{http_code}"` 比对改前改后链接；对每个字面量追问
-   "它来自哪个外部契约"。原则：**泛化措辞可以留，事实字面量必须还原**。本次实测：34 处 `Anthropic` 被
-   改成 `external-model-provider` 后，分支条件永不成立、部署 payload 字段值错误（功能实际失效），
-   示例链接 404。
+5. **脱敏/改名类改动的连带损伤必须核对，但"还原事实"不能违反仓库退役策略**：把第三方产品名换成通用名时，
+   机器可判读的字面量（外部 API 返回值、部署 payload 字段、真实 URL、真实文件名）不能留成错的，但也
+   **不能把被策略退役的厂商标记写回技能文本**——`src/voidcube/domain/contracts/integration_policy.py` 的
+   `RETIRED_INTEGRATION_MARKERS` 由 `tests/test_integration_policy.py` 与 `scripts/build_wheel.py` 在
+   `skills/` 全文范围内强制（命中即门禁失败 / 拒绝打包；策略文件自身都用字符串拼接规避自命中）。
+   正确写法：**用运行时变量或可判定描述表达同一事实**——payload 直接写 `"format": "$MODEL_FORMAT"`
+   （值取自目录查询的真实返回），分支条件改成"该格式是否需要 `modelProviderData`"这类可判定描述。
+   核验方式：`curl -o /dev/null -w "%{http_code}"` 比对改前改后链接；对每个字面量追问"它来自哪个外部契约"。
+   本次实测教训：把厂商标记写回技能文本后，全量门禁
+   `test_runtime_and_loadable_skills_have_no_retired_integration_markers` 直接失败（1 failed），
+   最终改为上述"变量表达"方案才同时满足功能正确与策略合规。
 
 ## 自审清单：改完技能后逐项验证（每项都要有命令证据）
 1. 提交范围纯净：`git show --name-only --format="" <sha>` 里非 `skills/` 的文件数必须为 0

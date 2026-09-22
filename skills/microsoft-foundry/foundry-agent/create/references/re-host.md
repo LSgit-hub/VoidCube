@@ -28,7 +28,7 @@ After scaffolding, you must use `azd ai agent sample list --language <language> 
 
 For reference, here are some awesome samples for re-hosting scenarios:
 1. Re-host agents built with the OpenAI Agents SDK: https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/bring-your-own/responses/openai-agents-sdk
-2. Re-host agents built with a third-party agent SDK (reference sample): https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/bring-your-own/invocations/claude-agent-sdk
+2. Re-host agents built with a third-party agent SDK. Reference samples live in the bring-your-own folder: https://github.com/microsoft-foundry/foundry-samples/tree/main/samples/python/hosted-agents/bring-your-own
 
 If users use a Foundry model, you must wire the Foundry model to the agent.
 

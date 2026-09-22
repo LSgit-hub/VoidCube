@@ -31,10 +31,10 @@
 **Config:** gpt-4o / GlobalStandard / 20K TPM / Dynamic Quota / Spillover → `gpt-4o-backup`
 **Result:** Primary handles up to 20K TPM; overflow auto-redirects to backup deployment.
 
-## Example 6: Anthropic Model Deployment (external-model-v1)
+## Example 6: Third-party MaaS Model Deployment (external-model-v1)
 
 **Scenario:** Deploy external-model-v1 with customized settings.
-**Config:** external-model-v1 / GlobalStandard / capacity 1 (MaaS) / Industry: Healthcare / No RAI policy (Anthropic manages content filtering)
+**Config:** external-model-v1 / GlobalStandard / capacity 1 (MaaS) / Industry: Healthcare / No RAI policy (the model provider manages content filtering)
 **Result:** User selected "Healthcare" as industry → tenant country code (US) and org name fetched automatically → deployed via ARM REST API with `modelProviderData` in ~2 min.
 
 ---
@@ -48,7 +48,7 @@
 | Ex 3 | gpt-4o | ProvisionedManaged | 200 PTU | - | ✓ | - | Predictable workload |
 | Ex 4 | gpt-4o-mini | Standard | 1K TPM | - | - | - | Dev/testing |
 | Ex 5 | gpt-4o | GlobalStandard | 20K TPM | ✓ | - | ✓ | Peak load |
-| Ex 6 | external-model-v1 | GlobalStandard | 1 (MaaS) | - | - | - | Anthropic model |
+| Ex 6 | external-model-v1 | GlobalStandard | 1 (MaaS) | - | - | - | third-party MaaS model |
 
 ## Common Patterns
 

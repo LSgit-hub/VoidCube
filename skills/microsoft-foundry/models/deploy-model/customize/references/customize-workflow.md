@@ -63,7 +63,7 @@ Present sorted unique list. Allow custom model name entry.
 **Detect model format:**
 
 ```bash
-# Get model format (e.g., OpenAI, Anthropic, Meta-Llama, Mistral, Cohere)
+# Get model format (e.g., OpenAI, Meta-Llama, Mistral, Cohere, or another third-party MaaS format)
 MODEL_FORMAT=$(az cognitiveservices account list-models \
   --name "$ACCOUNT_NAME" \
   --resource-group "$RESOURCE_GROUP" \
@@ -75,7 +75,7 @@ echo "Model format: $MODEL_FORMAT"
 
 > 💡 **Model format determines the deployment path:**
 > - `OpenAI` — Standard CLI, TPM-based capacity, RAI policies, version upgrade policies
-> - `Anthropic` — REST API with `modelProviderData`, capacity=1, no RAI, no version upgrade
+> - a third-party MaaS format requiring `modelProviderData` — REST API with `modelProviderData`, capacity=1, no RAI, no version upgrade
 > - All other formats (`Meta-Llama`, `Mistral`, `Cohere`, etc.) — Standard CLI, capacity=1 (MaaS), no RAI, no version upgrade
 
 ---
@@ -121,7 +121,7 @@ Quota key pattern: `OpenAI.<SKU>.<model-name>`. Calculate `available = limit - c
 
 ## Phase 7: Configure Capacity
 
-> ⚠️ **Non-OpenAI models (MaaS):** If `MODEL_FORMAT != "OpenAI"`, capacity is always `1` (pay-per-token billing). Skip capacity configuration and set `DEPLOY_CAPACITY=1`. Proceed to Phase 7c (Anthropic) or Phase 8.
+> ⚠️ **Non-OpenAI models (MaaS):** If `MODEL_FORMAT != "OpenAI"`, capacity is always `1` (pay-per-token billing). Skip capacity configuration and set `DEPLOY_CAPACITY=1`. Proceed to Phase 7c (third-party `modelProviderData` formats) or Phase 8.
 
 **For OpenAI models only — query capacity via REST API:**
 ```bash
@@ -166,11 +166,11 @@ If no region has capacity: fail with guidance to request quota increase, check e
 
 ---
 
-## Phase 7c: Anthropic Model Provider Data (Anthropic models only)
+## Phase 7c: Third-party Model Provider Data (formats requiring `modelProviderData`)
 
-> ⚠️ **Only execute this phase if `MODEL_FORMAT == "Anthropic"`.** For OpenAI and other models, skip to Phase 8.
+> ⚠️ **Only execute this phase if the detected `MODEL_FORMAT` is a third-party MaaS format that requires `modelProviderData`.** For OpenAI and other models, skip to Phase 8.
 
-Anthropic models require `modelProviderData` in the deployment payload. Collect this before deployment.
+These models require `modelProviderData` in the deployment payload. Collect this before deployment.
 
 **Step 1: Prompt user to select industry**
 
@@ -198,7 +198,7 @@ Present the following list and ask the user to choose one:
 19. Other                   (API value: other)
 ```
 
-> ⚠️ **Do NOT pick a default industry or hardcode a value. Always ask the user.** This is required by Anthropic's terms of service. The industry list is static — there is no REST API that provides it.
+> ⚠️ **Do NOT pick a default industry or hardcode a value. Always ask the user.** This is required by the model provider's terms of service. The industry list is static — there is no REST API that provides it.
 
 Store selection as `SELECTED_INDUSTRY` (use the API value, e.g., `technology`).
 
@@ -229,7 +229,7 @@ Store `COUNTRY_CODE` and `ORG_NAME` for use in Phase 13.
 
 ## Phase 8: Select RAI Policy (Content Filter)
 
-> ⚠️ **Note:** RAI policies only apply to OpenAI models. Skip this phase if `MODEL_FORMAT != "OpenAI"` (Anthropic, Meta-Llama, Mistral, Cohere, etc. do not use RAI policies).
+> ⚠️ **Note:** RAI policies only apply to OpenAI models. Skip this phase if `MODEL_FORMAT != "OpenAI"` (Meta-Llama, Mistral, Cohere, etc. do not use RAI policies).
 
 Present options:
 1. `Microsoft.DefaultV2` — Balanced filtering (recommended). Filters hate, violence, sexual, self-harm.
@@ -310,7 +310,7 @@ User confirms or cancels.
 
 > 💡 `MODEL_FORMAT` was already detected in Phase 4. Use the stored value here.
 
-### Standard CLI deployment (non-Anthropic models):
+### Standard CLI deployment (formats that do not require modelProviderData):
 
 **Create deployment:**
 ```bash
@@ -327,14 +327,14 @@ az cognitiveservices account deployment create \
 
 > 💡 **Note:** For non-OpenAI MaaS models, `$DEPLOY_CAPACITY` is `1` (set in Phase 7).
 
-### Anthropic model deployment (requires modelProviderData):
+### third-party model deployment (requires modelProviderData):
 
 The Azure CLI does not support `--model-provider-data`. Use the ARM REST API directly.
 
 > ⚠️ Industry, country code, and organization name should have been collected in Phase 7c.
 
 ```bash
-echo "Creating Anthropic model deployment via REST API..."
+echo "Creating third-party model deployment via REST API..."
 
 az rest --method PUT \
   --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$ACCOUNT_NAME/deployments/$DEPLOYMENT_NAME?api-version=2024-10-01" \
@@ -345,7 +345,7 @@ az rest --method PUT \
     },
     \"properties\": {
       \"model\": {
-        \"format\": \"Anthropic\",
+        \\"format\\": \\"$MODEL_FORMAT\\",
         \"name\": \"$MODEL_NAME\",
         \"version\": \"$MODEL_VERSION\"
       },
@@ -360,7 +360,7 @@ az rest --method PUT \
 
 *PowerShell version:*
 ```powershell
-Write-Host "Creating Anthropic model deployment via REST API..."
+Write-Host "Creating third-party model deployment via REST API..."
 
 $body = @{
     sku = @{
@@ -369,7 +369,7 @@ $body = @{
     }
     properties = @{
         model = @{
-            format = "Anthropic"
+            format = $MODEL_FORMAT
             name = $MODEL_NAME
             version = $MODEL_VERSION
         }
@@ -386,7 +386,7 @@ az rest --method PUT `
   --body $body
 ```
 
-> 💡 **Note:** Anthropic models use `capacity: 1` (MaaS billing model), not TPM-based capacity. RAI policy is not applicable for Anthropic models.
+> 💡 **Note:** these models use `capacity: 1` (MaaS billing model), not TPM-based capacity. RAI policy is not applicable for them.
 
 ### Monitor deployment status:
 ```bash
