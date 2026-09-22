@@ -52,6 +52,8 @@ for f in <被改文件...>; do grep -n "logger = logging.getLogger" "$f"; done
 
 长门禁必须等待真实结束后再下结论。工具前台超时或中途只看到“仍在运行/已到某百分比”都不能算失败；改用后台任务并等待最终退出码和汇总行。不要用 `pytest | tail; echo $?` 判断结果，因为管道可能掩盖 pytest 的非零退出。
 
+**后台跑门禁必须落盘日志**：`... > .test-tmp/gate.log 2>&1; status=$?; printf '\nEXIT=%s\n' "$status" >> .test-tmp/gate.log`。只写 `| tail -N` 时，一旦 process 轮询失败（实测会返回 `duplicate_or_in_flight_action`）就拿不到退出码和 `N passed` 汇总行，只能整轮重跑（本会话因此白跑 15 分钟）。等待进度用 `tasklist | grep <pid>` 或读日志尾部，不要只会 poll。
+
 ## 步骤 6：区分“确定性回归” vs “flaky / 环境”
 对每个失败用例单独复跑：
 ```bash

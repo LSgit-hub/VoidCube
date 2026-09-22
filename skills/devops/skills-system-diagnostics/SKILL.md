@@ -182,7 +182,7 @@ for i in range(7): print(f'parents[{i}]:', f.parents[i])
 ### EOL 陷阱（本机实测，最容易被忽略）
 `.gitattributes` 规定 `*.md` / `*.py` 为 `eol=lf`，但 Agent 在 Windows 上写文件常落 CRLF。
 `_hash()` 读的是**原始字节** → CRLF 副本与 LF 基线 hash 必然不同 → 被永久误判为 `user-modified`。
-修法：两侧统一归一化为 LF，并让 manifest 与之一致。
+修法：两侧统一归一化为 LF，并让 manifest 与之一致。 本机另实测：`core.autocrlf=true` 时 `git checkout -- skills/` 会把工作区还原成 CRLF，raw hash 随之再变 → 下一次 sync 自动下发一次并保持 0 分叉。这是自动收敛，不要手动重算 manifest，也别当成新的漂移去查。
 
 ### Agent 自改 bundled 技能的副作用
 用 `skill_manage` 改的是运行时副本，改完 hash 与 manifest 不符 → 之后仓库侧的更新**再也不会同步到运行时**。
