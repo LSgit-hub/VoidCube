@@ -342,6 +342,18 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
    实测过：提交 `21:56:12` 之后，`21:57:09` 有外部进程改了仓库+运行时+manifest 却**不提交**，
    于是"工作区干净"只是瞬时结论——收尾必须再查一次 `git status --short`。
 
+7. **技能文本不含退役集成分标记**：`src/voidcube/domain/contracts/integration_policy.py` 的
+   `RETIRED_INTEGRATION_MARKERS` 由 `tests/test_integration_policy.py` 与 `scripts/build_wheel.py`
+   在 `skills/` 全文（**含文件名**，大小写不敏感）强制，命中即全量门禁失败 / 拒绝打包。策略文件
+   自身用字符串拼接规避自命中，所以**不要照抄标记词来做人工自查**——那会把自查文本本身变成违规项；
+   一律跑测试判定：
+   ```bash
+   .venv/Scripts/python.exe -m pytest tests/test_integration_policy.py -q
+   ```
+   触发场景：任何涉及第三方产品名 / 厂商字面量 / 示例链接的技能改动（含"脱敏"与"还原事实"两个方向）。
+   实测教训：一次"把事实字面量还原"的改动直接让全量门禁 1 failed（3352 passed / 1 failed），
+   最终改用"运行时变量 + 可判定描述"方案（见上文第 5 条）才同时满足功能正确与策略合规。
+
 ### 6. 章节合并去重（同一技能被多写者反复追加后）
 
 触发：一个技能文件被多次追加，长到十几个二级标题、内容互相重叠
