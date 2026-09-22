@@ -72,9 +72,12 @@ for r in c.execute("select file_path,deprecated,supersedes,source from skills wh
 ### 4. 查重复 / 子集
 ```python
 import difflib,itertools
-# 对全部 SKILL.md 正文两两算 difflib.SequenceMatcher ratio，>0.45 才需人工判
+# 对全部 SKILL.md 正文两两算 difflib.SequenceMatcher ratio，**从 0.30 起看**
+# 再用"子集占比"判决：a 的长行(>25字符)中有多少比例原样出现在 b
+#   子集占比 >=0.6 → 疑似真冗余（可删冗余版本）；0.30~0.45 且子集占比低 → 互补，保留
 ```
 互补组合（保留）：guidance/outlines、llama-cpp/gguf-quantization、axolotl/trl/peft/fsdp、voidcube-architecture 系列四个、bilibili/browser-silence/media-display。
+2026-09-22 全库实测：唯一 ≥0.30 的是 `github/*` 四件套（0.30~0.34、子集占比 ≤0.26）→ 互补，非重复。
 
 ### 5. 查工具依赖存在性
 - 正则提取技能正文里的 `src/voidcube/...`、`tests/...`、`plugins/...` 路径，在 worktree（`~/.VoidCube/runtime/body/slots/slot-A/worktree/`）与主仓库双查存在性；命令示例里的假文件名（test_auth.py 等）忽略。
@@ -84,6 +87,33 @@ import difflib,itertools
 ### 6. 落盘报告
 写 `~/.VoidCube/skills_audit_report.md`：审计前后数量表、逐步骤结果、删除清单（含依据）、保留确认、遗留观察、验证结论。
 删除数必须与 registry 行数变化一致。
+
+## 冲突/重复专项体检（2026-09-22 实测，配套脚本 scripts/skill_conflict_scan.py）
+
+每周清理除"deprecated / 待补全 / 依赖"外，再跑一轮**接口与重复**体检。配套只读脚本：
+
+```bash
+.venv/Scripts/python.exe skills/devops/skill-library-weekly-cleanup/scripts/skill_conflict_scan.py
+```
+
+1. **名称口径三方一致性（最容易漏、危害最直接）**：同一批技能名在三个面口径不同——
+   系统提示词清单用**目录名**，`skills_list()` 用 frontmatter **name**，`skill_view()` **只认目录名**。
+   目录名 != frontmatter name 时，agent 从 `skills_list` 拿到名字去 `skill_view` → `not found`
+   （技能"看得见但打不开"）。**实测：79 个技能里 20 个违例（25%）**——11 个 dsh-* 前缀类
+   （目录 `doc` / name `dsh-doc`）+ 9 个 mlops/* 类（目录 `peft` / name `peft-fine-tuning`、
+   目录 `vllm` / name `serving-llms-vllm`）。修法属产品决策（先报告再动）：把 frontmatter name
+   改成与目录名一致（**必须重算 manifest 键，避免留孤儿键**），或改目录名（影响路径与外部引用）。
+2. **重复 vs 互补**：见步骤 4 的 0.30 阈值 + 子集占比判定。
+3. **注册类一致性**：`deprecated=1` 残留；`supersedes` 指向不存在的技能；同名 home/repo 两条记录
+   `content_hash` 不一致（= 同名不同内容冲突）。2026-09-22 实测三项均为 0。
+4. **技能名 vs 工具名重合**：从 `src/voidcube/extensions/tools/**` 抽 `name="..."` 全集比对
+   （实测 50 个工具名），重合会造成调用语义混淆。实测 0。
+5. **触发语重合**：抽描述里的"当…时"短语，被多个技能声明即候选冲突。实测 0（仅
+   github-issues vs github-repo-management 描述词 jaccard 0.35，低危）。
+
+**判定"该不该删"的三问**（与关键事实 7 互补，用于用户直接问"这技能有用吗/没用就删"时）：
+① 有没有调用方（其它技能/脚本引用）② 有没有活跃周期任务依赖（查 scheduled_task 指令文本）
+③ 有没有重复品（子集占比 ≥0.6）。三问全"无"才考虑删；任一命中即保留并说明理由。
 
 ## 校验
 - 删除后：`skills_list` 可见数 == 文件数（无 deprecated 隐藏项）
@@ -99,4 +129,5 @@ import difflib,itertools
 - 运行时 79 SKILL.md / 仓库 73 / manifest 73 条目 / registry 152 行（home 79 + repo 73，双根索引是设计非 bug）
 - 运行时独有（不在仓库/manifest，手工或 Agent 专属）6 个：bilibili-media-playback、browser-media-silence、manual-skill-validation、skill-library-weekly-cleanup、voidcube-change-regression-review、voidcube-cli-command-refactor
 - `sync_skills()` 的 `user_modified` 列表需逐项判"manifest 陈旧"还是"真实分叉"，判别方法见 `manual-skill-validation` 第 2 步（raw / LF 归一化双 hash 对照）
+- **冲突体检实测（2026-09-22）**：名称口径违例 20 个（P1，见体检章节第 1 条）；frontmatter 重名 0；目录重名 0；内容重复 0（唯一 ≥0.30 的 github/* 为互补）；deprecated 0；supersedes 失效 0；同名 home/repo 内容不一致 0；技能名与工具名重合 0；触发语完全重合 0
 - 数量每次清理都会变，以本节命令实测为准，不要引用本节的数字当结论
