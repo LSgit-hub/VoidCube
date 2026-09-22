@@ -328,6 +328,15 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
    本次实测教训：把厂商标记写回技能文本后，全量门禁
    `test_runtime_and_loadable_skills_have_no_retired_integration_markers` 直接失败（1 failed），
    最终改为上述"变量表达"方案才同时满足功能正确与策略合规。
+   替代写法对照（本次逐类落地，可直接照做）：
+     · 部署/请求 payload 字段 → 用运行时变量：`"format": "$MODEL_FORMAT"`、`format = $MODEL_FORMAT`
+     · 分支条件（值来自外部 API）→ 改成可判定描述："该格式是否需要 `modelProviderData`"
+     · 外部文档链接 → 指向上级无标记目录或示例索引 URL（先 `curl -w "%{http_code}"` 实测 200 再落笔）
+     · 平台专用文件名 → "该平台约定的等价标记文件"这类描述，不要编造具体文件名
+     · 示例数据（模型名/表格标签）→ 通用占位名 + 中性标签（如 `external-model-v1` / "third-party MaaS model"）
+   反例（本次踩过两次）：① 把厂商名换成自造同类词（`external-model-provider`）——字面量对不上外部契约，
+   分支永不成立、payload 字段值错；② 把厂商名原样写回——文件里的事实正确了，但直接违反仓库退役策略、
+   门禁变红。两者的共同解法是：**让事实由运行时值承载，而不是由文本常量承载**。
 
 ## 自审清单：改完技能后逐项验证（每项都要有命令证据）
 1. 提交范围纯净：`git show --name-only --format="" <sha>` 里非 `skills/` 的文件数必须为 0
