@@ -313,6 +313,9 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
    子技能文件一起覆盖 → 子技能的 manifest 条目随即过期，sync 把它们判成 `user_modified`，**而此刻 repo 与
    runtime 内容其实完全一致**。处置：核对子技能两侧 hash 相等后，直接把该条目重写为当前 hash。改嵌套技能
    文件时要有"父技能条目也会被卷进同步流程"的预期。
+   倒向风险同样要防：`sync_skills` 更新父技能是**先把运行时父目录整体移开、再从仓库复制**，所以若某个
+   子技能只改过**运行时副本**（未同步回仓库），这次父技能更新会把该改动一起丢掉，且不报错。改嵌套技能时
+   必须仓库与运行时同步改（改完跑 `sync_skills()` 复核 `user_modified` 为空）。
 4. **别做全库 EOL 归一**：为消 CRLF 而"遍历 `skills/` 全部文本文件转 LF"会一次改动上百个文件；本机
    `core.autocrlf=true`，`git checkout` 又把工作区还原成 CRLF → raw hash 反复变 → manifest 反复过期
    （本次一次制造 5 个假 `user_modified`）。正确做法：**逐文件保留原 EOL 编辑**——读 bytes 判 EOL →
