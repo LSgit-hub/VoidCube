@@ -70,6 +70,13 @@ def test_candidate_stream_projection_applies_active_existing_and_quota_gates():
     assert eligibility.body_improvement is False
 
 
+def test_candidate_stream_blocks_learning_families_after_repeated_failures():
+    eligibility = _eligibility(repeated_learning_blocked=True)
+    assert eligibility.shell_baseline_learning is False
+    assert eligibility.exploratory_learning is False
+    assert eligibility.truthfulness_review is True
+    assert eligibility.governance_hygiene_review is True
+
 def test_candidate_stream_projection_requires_signal_and_body_readiness():
     eligibility = _eligibility(
         governance_signal_present=False,

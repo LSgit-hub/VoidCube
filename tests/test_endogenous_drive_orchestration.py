@@ -8,6 +8,8 @@ from voidcube.systems.supervisor.endogenous_drive_orchestration import (
     EndogenousDriveEvaluationContext,
     build_endogenous_drive_policy,
     evaluate_endogenous_drive,
+    analyze_repeated_self_learning_outcomes,
+    repeated_self_learning_outcomes_blocked,
 )
 from voidcube.systems.supervisor.endogenous_policy import (
     HISTORICAL_OBSERVATION_CARRYOVER_RELEASED,
@@ -42,6 +44,56 @@ def test_drive_orchestration_owner_projects_runtime_policy_defaults_and_override
         "body_improvement_max_files": 2,
     }
 
+
+def test_repetition_block_requires_three_newest_bad_outcomes():
+    def outcome(status=None, quality=None):
+        item = {"event_type": "decision", "task_family": "self_learning"}
+        if status is not None:
+            item["result_status"] = status
+        if quality is not None:
+            item["quality_score"] = quality
+        return item
+
+    assert repeated_self_learning_outcomes_blocked(
+        [outcome(quality=0.2), outcome(status="failed"), outcome(status="cancelled")]
+    ) is True
+    assert repeated_self_learning_outcomes_blocked(
+        [outcome(quality=0.2), outcome(quality=None), outcome(status="failed")]
+    ) is False
+    assert repeated_self_learning_outcomes_blocked(
+        [outcome(status="failed"), outcome(status="cancelled"), outcome(status="deferred"), outcome(quality=0.9)]
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_repetition_audit_orders_deduplicates_and_reports_unknowns():
+    def outcome(task_id, event_type, recorded_at, **values):
+        return {"task_id": task_id, "event_type": event_type, "task_family": "self_learning", "recorded_at": recorded_at, **values}
+
+    audit = analyze_repeated_self_learning_outcomes([
+        outcome("a", "decision", "2026-09-01T01:00:00+00:00", status="failed"),
+        outcome("a", "execution_finalize", "2026-09-01T02:00:00+00:00", status="completed", quality_score=0.9),
+        outcome("b", "decision", "2026-09-01T03:00:00+00:00", status="failed"),
+        outcome("c", "decision", "2026-09-01T04:00:00+00:00", quality_score="invalid"),
+        outcome("d", "decision", "2026-09-01T05:00:00+00:00", quality_score=0.2),
+    ])
+    assert audit["blocked"] is False
+    assert audit["deduplicated_count"] == 4
+    assert audit["sampled_task_ids"][:2] == ["d", "c"]
+    assert audit["reason"] == "newest_outcome_unknown"
+
+
+def test_repetition_audit_requires_distinct_final_failed_tasks():
+    events = []
+    for task_id in ("a", "b", "c"):
+        events.extend([
+            {"task_id": task_id, "event_type": "decision", "task_family": "self_learning", "status": "failed"},
+            {"task_id": task_id, "event_type": "execution_finalize", "task_family": "self_learning", "status": "completed", "quality_score": 0.8},
+        ])
+    audit = analyze_repeated_self_learning_outcomes(events)
+    assert audit["blocked"] is False
+    assert audit["consecutive_negative_count"] == 0
+    assert audit["reason"] == "newest_outcome_success"
 
 @pytest.mark.asyncio
 async def test_drive_orchestration_owner_runs_explicit_callback_pipeline():

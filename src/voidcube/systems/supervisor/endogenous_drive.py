@@ -227,5 +227,6 @@ class EndogenousDriveEngine:
             cognitive_assessment=dict(generation_state["context"]).get(
                 "cognitive_assessment"
             ),
+            repeated_learning_blocked=bool(drive_input.get("self_iteration_repetition_blocked")),
         )
 

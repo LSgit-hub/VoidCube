@@ -114,10 +114,11 @@ def resolve_candidate_stream_eligibility(
         active_candidate_kinds=active,
         memory_maintenance=memory_available,
         truthfulness_review=truthfulness_available,
-        shell_baseline_learning=shell_baseline_available,
+        shell_baseline_learning=(shell_baseline_available and not repeated_learning_blocked),
         exploratory_learning=(
             self_learning_planning_eligible
             and "exploratory_learning" not in active
+            and not repeated_learning_blocked
         ),
         governance_hygiene_review=governance_available,
         body_improvement=(

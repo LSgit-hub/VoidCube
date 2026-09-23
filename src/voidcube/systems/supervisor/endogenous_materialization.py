@@ -145,6 +145,7 @@ def eligible_lm_candidate_kinds(
     body_projection_available: bool,
     body_growth_quota: int,
     governance_signal_present: bool,
+    repeated_learning_blocked: bool = False,
 ) -> set[str]:
     eligible = set(LM_CANDIDATE_KIND_SPECS) - set(active_candidate_kinds)
     if (
@@ -155,6 +156,9 @@ def eligible_lm_candidate_kinds(
         eligible.discard("body_improvement")
     if not governance_signal_present:
         eligible.discard("governance_hygiene_review")
+    if repeated_learning_blocked:
+        eligible.discard("exploratory_learning")
+        eligible.discard("shell_baseline_learning")
     return eligible
 
 
@@ -168,6 +172,7 @@ def resolve_lm_candidate_eligibility(
     stale_backlog_count: int,
     api_b_judgement_count: int,
     historical_outcomes: List[Dict[str, Any]],
+    repeated_learning_blocked: bool = False,
 ) -> set[str]:
     active_candidate_kinds = active_api_b_judgement_candidate_kinds(
         api_b_judgement_tasks
@@ -183,6 +188,7 @@ def resolve_lm_candidate_eligibility(
         body_projection_available=body_projection_available,
         body_growth_quota=body_growth_quota,
         governance_signal_present=governance_signal_present,
+        repeated_learning_blocked=repeated_learning_blocked,
     )
 
 
@@ -195,6 +201,7 @@ def build_lm_materialization_context(
     pending_review_count: int,
     stale_backlog_count: int,
     api_b_judgement_count: int,
+    repeated_learning_blocked: bool = False,
 ) -> Dict[str, Any]:
     body_projection = build_body_improvement_projection(
         drive_context=drive_context,
@@ -216,6 +223,7 @@ def build_lm_materialization_context(
         historical_outcomes=list(
             dict(drive_context.get("drive_history") or {}).get("outcomes") or []
         ),
+        repeated_learning_blocked=repeated_learning_blocked,
     )
     return {
         "evidence_graph": dict(evidence_packet.get("evidence_graph") or {}),
@@ -242,6 +250,7 @@ def materialize_lm_proposals_for_deliberation(
     drive_context: Dict[str, Any],
     evidence_packet: Dict[str, Any],
     cognitive_assessment: Any = None,
+    repeated_learning_blocked: bool = False,
 ) -> List[EndogenousTaskCandidate]:
     from .endogenous_drive_judgement import (
         build_drive_judgement_metadata,
@@ -262,6 +271,7 @@ def materialize_lm_proposals_for_deliberation(
         pending_review_count=perception.pending_review_count,
         stale_backlog_count=perception.stale_backlog_count,
         api_b_judgement_count=perception.api_b_judgement_count,
+        repeated_learning_blocked=repeated_learning_blocked,
     )
 
     def backlog_pressure(

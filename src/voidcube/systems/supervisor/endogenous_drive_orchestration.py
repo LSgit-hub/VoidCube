@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from .endogenous_candidate_pipeline import CORE_VALUES
@@ -21,7 +22,196 @@ from .endogenous_drive_context import build_drive_context, get_shell_slot_meta
 
 JsonDict = Dict[str, Any]
 Candidate = Any
+_REPETITION_EVENT_TYPES = {
+    "decision",
+    "execution_finalize",
+    "employee_execution_completed",
+}
+_REPETITION_NEGATIVE_STATUSES = {"cancelled", "failed", "deferred"}
+_REPETITION_TERMINAL_EVENT_PREFIX = "employee_execution_"
+_REPETITION_QUALITY_THRESHOLD = 0.4
 
+
+def _outcome_timestamp(item: JsonDict) -> datetime | None:
+    for key in (
+        "recorded_at",
+        "completed_at",
+        "updated_at",
+        "timestamp",
+        "decided_at",
+        "created_at",
+    ):
+        raw = item.get(key)
+        if not raw:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
+
+
+def _outcome_timestamp_value(item: JsonDict) -> Any:
+    for key in (
+        "recorded_at",
+        "completed_at",
+        "updated_at",
+        "timestamp",
+        "decided_at",
+        "created_at",
+    ):
+        value = item.get(key)
+        if value:
+            return value
+    return None
+
+
+def _outcome_event_authority(item: JsonDict) -> int:
+    event_type = str(item.get("event_type") or "").strip().lower()
+    if event_type.startswith(_REPETITION_TERMINAL_EVENT_PREFIX):
+        return 3
+    if event_type in {"execution_finalize", "execution_timeout", "execution_reconcile"}:
+        return 3
+    if event_type == "decision":
+        return 2
+    return 0
+
+
+def _outcome_result(item: JsonDict) -> tuple[str, str]:
+    status = str(item.get("result_status") or item.get("execution_outcome_status") or item.get("status") or "").strip().lower()
+    if status in _REPETITION_NEGATIVE_STATUSES or status in {"timeout", "timed_out", "degraded"}:
+        return "negative", f"status:{status}"
+    raw_quality = item.get("quality_score")
+    if raw_quality is None:
+        return "unknown", "quality_score_missing"
+    try:
+        quality = float(raw_quality)
+    except (TypeError, ValueError, OverflowError):
+        return "unknown", "quality_score_invalid"
+    if not math.isfinite(quality) or not 0.0 <= quality <= 1.0:
+        return "unknown", "quality_score_invalid"
+    if quality < _REPETITION_QUALITY_THRESHOLD:
+        return "negative", "quality_below_threshold"
+    return "positive", "quality_meets_threshold"
+
+
+def analyze_repeated_self_learning_outcomes(
+    outcomes: List[JsonDict],
+    *,
+    window_size: int = 4,
+    minimum_consecutive_failures: int = 3,
+) -> JsonDict:
+    """Return an auditable failure streak using one final event per task."""
+    try:
+        normalized_window_size = int(window_size)
+        normalized_minimum_failures = int(minimum_consecutive_failures)
+    except (TypeError, ValueError, OverflowError):
+        normalized_window_size = 0
+        normalized_minimum_failures = 0
+    result: JsonDict = {
+        "blocked": False,
+        "reason": "insufficient_valid_outcomes",
+        "consecutive_negative_count": 0,
+        "sampled_outcomes": [],
+        "sampled_task_ids": [],
+        "recent_success_at": None,
+        "unknown_count": 0,
+        "deduplicated_count": 0,
+        "window_size": max(0, normalized_window_size),
+        "minimum_consecutive_failures": max(0, normalized_minimum_failures),
+    }
+    if normalized_window_size <= 0 or normalized_minimum_failures <= 0:
+        result["reason"] = "invalid_threshold"
+        return result
+
+    eligible: list[tuple[int, JsonDict]] = []
+    for index, item in enumerate(outcomes):
+        if not isinstance(item, dict):
+            continue
+        event_type = str(item.get("event_type") or "").strip().lower()
+        terminal_event = event_type.startswith(_REPETITION_TERMINAL_EVENT_PREFIX) and event_type.rsplit("_", 1)[-1] in {"completed", "failed", "cancelled", "deferred", "timeout"}
+        if event_type not in _REPETITION_EVENT_TYPES and not terminal_event:
+            continue
+        if str(item.get("task_family") or "").strip().lower() != "self_learning":
+            continue
+        eligible.append((index, dict(item)))
+
+    latest_by_batch: dict[str, tuple[int, JsonDict]] = {}
+    for index, item in eligible:
+        task_id = str(item.get("task_id") or "").strip()
+        batch_id = str(
+            item.get("execution_batch_id")
+            or item.get("batch_id")
+            or item.get("attempt_id")
+            or item.get("lease_id")
+            or item.get("execution_id")
+            or item.get("employee_run_id")
+            or item.get("run_id")
+            or ""
+        ).strip()
+        batch_key = f"{task_id}:{batch_id}" if task_id and batch_id else task_id or batch_id or f"outcome:{index}"
+        current = latest_by_batch.get(batch_key)
+        if current is None:
+            latest_by_batch[batch_key] = (index, item)
+            continue
+        current_index, current_item = current
+        current_timestamp = _outcome_timestamp(current_item)
+        candidate_timestamp = _outcome_timestamp(item)
+        current_order = (_outcome_event_authority(current_item), current_timestamp.timestamp() if current_timestamp else 0.0, -current_index)
+        candidate_order = (_outcome_event_authority(item), candidate_timestamp.timestamp() if candidate_timestamp else 0.0, -index)
+        if candidate_order > current_order:
+            latest_by_batch[batch_key] = (index, item)
+
+    effective = list(latest_by_batch.values())
+    effective.sort(key=lambda pair: (1 if _outcome_timestamp(pair[1]) else 0, _outcome_timestamp(pair[1]).timestamp() if _outcome_timestamp(pair[1]) else 0.0, -pair[0]), reverse=True)
+    sampled = [item for _, item in effective[:normalized_window_size]]
+    result["deduplicated_count"] = len(effective)
+    result["sampled_task_ids"] = [str(item.get("task_id") or item.get("endogenous_drive_key") or "") for item in sampled]
+    for item, task_id in zip(sampled, result["sampled_task_ids"]):
+        classification, classification_reason = _outcome_result(item)
+        result["sampled_outcomes"].append(
+            {
+                "task_id": task_id,
+                "event_type": str(item.get("event_type") or ""),
+                "recorded_at": _outcome_timestamp_value(item),
+                "status": item.get("status"),
+                "result_status": item.get("result_status"),
+                "quality_score": item.get("quality_score"),
+                "classification": classification,
+                "classification_reason": classification_reason,
+            }
+        )
+
+    for item in sampled:
+        classification, _ = _outcome_result(item)
+        if classification == "negative":
+            result["consecutive_negative_count"] += 1
+            continue
+        if classification == "unknown":
+            result["unknown_count"] += 1
+            result["reason"] = "newest_outcome_unknown"
+        else:
+            result["recent_success_at"] = _outcome_timestamp_value(item)
+            result["reason"] = "newest_outcome_success"
+        break
+    if result["consecutive_negative_count"] >= normalized_minimum_failures:
+        result["blocked"] = True
+        result["reason"] = "repeated_negative_self_learning_outcomes"
+    elif len(sampled) < normalized_minimum_failures:
+        result["reason"] = "insufficient_valid_outcomes"
+    return result
+
+
+def repeated_self_learning_outcomes_blocked(
+    outcomes: List[JsonDict],
+    *,
+    window_size: int = 4,
+    minimum_consecutive_failures: int = 3,
+) -> bool:
+    return bool(analyze_repeated_self_learning_outcomes(outcomes, window_size=window_size, minimum_consecutive_failures=minimum_consecutive_failures)["blocked"])
 
 @dataclass(frozen=True, slots=True)
 class EndogenousDriveEvaluationContext:
@@ -157,19 +347,11 @@ async def evaluate_endogenous_drive(
         *employee_execution_lane_tasks,
     ]
     history_snapshot = context.load_drive_history()
-    recent_outcomes = [
-        item for item in list(dict(history_snapshot or {}).get("outcomes") or [])
-        if isinstance(item, dict)
-        and str(item.get("event_type") or "").strip().lower()
-        in {"decision", "execution_finalize", "employee_execution_completed"}
-        and str(item.get("task_family") or "").strip().lower() == "self_learning"
-    ][:4]
-    drive_input["self_iteration_repetition_blocked"] = len(recent_outcomes) >= 3 and all(
-        str(item.get("result_status") or item.get("status") or "").strip().lower()
-        in {"cancelled", "failed", "deferred"}
-        or float(item.get("quality_score") or 0.0) < 0.4
-        for item in recent_outcomes
+    repetition_audit = analyze_repeated_self_learning_outcomes(
+        list(dict(history_snapshot or {}).get("outcomes") or [])
     )
+    drive_input["self_iteration_repetition_blocked"] = bool(repetition_audit["blocked"])
+    drive_input["self_iteration_repetition_audit"] = repetition_audit
     drive_input["endogenous_drive_policy"] = build_endogenous_drive_policy(
         context.runtime_config
     )

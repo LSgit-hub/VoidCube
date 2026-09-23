@@ -163,6 +163,19 @@ def test_eligibility_keeps_active_and_unsafe_kinds_outside_materialization():
     assert "memory_maintenance" in eligible
 
 
+def test_lm_candidate_eligibility_blocks_learning_families_after_repeated_failures():
+    eligible = eligible_lm_candidate_kinds(
+        active_candidate_kinds=set(),
+        self_evolution_eligible=True,
+        body_projection_available=True,
+        body_growth_quota=1,
+        governance_signal_present=True,
+        repeated_learning_blocked=True,
+    )
+    assert "exploratory_learning" not in eligible
+    assert "shell_baseline_learning" not in eligible
+    assert "governance_hygiene_review" in eligible
+
 def test_resolve_lm_candidate_eligibility_projects_all_explicit_signals():
     eligible = resolve_lm_candidate_eligibility(
         api_b_judgement_tasks=[
