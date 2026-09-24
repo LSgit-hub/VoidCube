@@ -198,6 +198,13 @@ class Supervisor(
             version="1.0",
             lifespan=self._app_lifespan,
         )
+        @self.app.middleware("http")
+        async def normalize_request_target(request, call_next):
+            path = str(request.scope.get("path") or "")
+            if "://" in path:
+                target = path.split("://", 1)[1]
+                request.scope["path"] = "/" + target.split("/", 1)[1] if "/" in target else "/"
+            return await call_next(request)
         self._subprocess_module = subprocess
         self._agent_model = AgentInstance
         self._agents: Dict[str, AgentInstance] = {}

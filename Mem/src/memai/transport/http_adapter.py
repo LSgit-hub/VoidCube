@@ -158,6 +158,13 @@ def build_memory_http_app(
         version="1.0",
         lifespan=lifespan,
     )
+    @app.middleware("http")
+    async def normalize_request_target(request: Request, call_next):
+        path = str(request.scope.get("path") or "")
+        if "://" in path:
+            target = path.split("://", 1)[1]
+            request.scope["path"] = "/" + target.split("/", 1)[1] if "/" in target else "/"
+        return await call_next(request)
 
     configured_token = str(service_token or "").strip()
     configured_actor = str(service_actor or "").strip()

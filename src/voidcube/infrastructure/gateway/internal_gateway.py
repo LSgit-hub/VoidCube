@@ -258,6 +258,18 @@ class InternalGateway:
             run_dir.mkdir(parents=True, exist_ok=True)
             self.config.activity_log_path = str(run_dir / "gateway-activity.json")
         self._setup_routes()
+
+        # Some Windows ASGI launchers pass an absolute-form request target in
+        # ``scope["path"]``. Starlette routes expect only the origin path.
+        # Normalize at the application boundary so registration and admin
+        # routes remain reachable regardless of the server adapter.
+        @self.app.middleware("http")
+        async def normalize_request_target(request, call_next):
+            path = str(request.scope.get("path") or "")
+            if "://" in path:
+                target = path.split("://", 1)[1]
+                request.scope["path"] = "/" + target.split("/", 1)[1] if "/" in target else "/"
+            return await call_next(request)
         self._load_activity_state()
 
     @classmethod
