@@ -1026,12 +1026,16 @@ class VoidcubeCLI:
 
     def _initialize_application_runtime(self, session_identity) -> None:
         self.session_id = session_identity.session_id
+        from ...infrastructure.persistence.turn_event_journal import TurnEventJournal
+        from ...infrastructure.persistence.approval_journal import ApprovalJournal
         self._application_runtime = ApplicationRuntime.create(
             session_id=self.session_id,
             session_start=self.session_start,
             conversation_history=self.__dict__.pop("_conversation_history", ()),
             resumed=session_identity.resumed,
             event_sink=self._handle_application_event,
+            event_journal=TurnEventJournal(),
+            approval_journal=ApprovalJournal(),
         )
         self.__dict__.pop("_session_id", None)
         self.__dict__.pop("_session_start", None)
@@ -1040,12 +1044,16 @@ class VoidcubeCLI:
         runtime = self.__dict__.get("_application_runtime")
         if runtime is not None:
             return runtime
+        from ...infrastructure.persistence.turn_event_journal import TurnEventJournal
+        from ...infrastructure.persistence.approval_journal import ApprovalJournal
         runtime = ApplicationRuntime.create(
             session_id=self.session_id,
             session_start=self.__dict__.get("_session_start", datetime.now()),
             conversation_history=self.conversation_history,
             resumed=False,
             event_sink=self._handle_application_event,
+            event_journal=TurnEventJournal(),
+            approval_journal=ApprovalJournal(),
         )
         pending_title = self.__dict__.pop("_pending_title_fallback", None)
         hydration = self.__dict__.pop("_session_hydration_fallback", None)
@@ -2619,7 +2627,7 @@ class VoidcubeCLI:
 
         The corresponding block in ``_init_agent()`` reuses the cached outcome.
         """
-        return CliSessionResumeRuntime(
+        loaded = CliSessionResumeRuntime(
             CliSessionResumePorts(
                 resumed=lambda: self._ensure_application_runtime().state.resumed,
                 repository_available=lambda: self._session_db is not None,
@@ -2630,6 +2638,19 @@ class VoidcubeCLI:
                 emit=self.console.print,
             )
         ).preload()
+        if loaded:
+            recovery = self._ensure_application_runtime().recoverable_state()
+            active = recovery.get("active_turn")
+            approvals = recovery.get("pending_approvals") or []
+            if active or approvals:
+                self.console.print(
+                    f"[dim]Recoverable state: "
+                    f"{('1 interrupted turn' if active else '')}"
+                    f"{(' and ' if active and approvals else '')}"
+                    f"{(str(len(approvals)) + ' pending approval(s)' if approvals else '')}. "
+                    "Review before continuing.[/]"
+                )
+        return loaded
 
     def _display_resumed_history(self):
         """Render resumed history through the session display adapter."""
@@ -4952,6 +4973,12 @@ class VoidcubeCLI:
                     repository.close()
                 finally:
                     self._session_db = None
+            runtime = self.__dict__.get("_application_runtime")
+            if runtime is not None:
+                try:
+                    runtime.close()
+                except Exception:
+                    logger.debug("Failed to close application runtime", exc_info=True)
 
         def unregister_tool_callbacks() -> None:
             _get_set_sudo_password_callback(None)

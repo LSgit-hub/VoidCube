@@ -53,6 +53,8 @@ from .sessions import (
     start_new_session as _start_new_session,
 )
 from .ports import CallbackEventPort
+from ..infrastructure.persistence.turn_event_journal import TurnEventJournal
+from ..infrastructure.persistence.approval_journal import ApprovalJournal
 from ..domain.contracts.tool_events import ToolEvent
 from ..domain.contracts.turn_queue import TurnInputRoute
 from ..domain.contracts.turn import (
@@ -91,11 +93,15 @@ class ApplicationRuntime:
         *,
         event_sink: EventSink | None = None,
         uuid_factory=uuid.uuid4,
+        event_journal: TurnEventJournal | None = None,
+        approval_journal: ApprovalJournal | None = None,
     ) -> None:
         self.state = state
         self._event_sink = event_sink
         self._event_port = CallbackEventPort(event_sink)
         self._uuid_factory = uuid_factory
+        self._event_journal = event_journal
+        self._approval_journal = approval_journal
         self._pending_input_lock = RLock()
 
         self._emit(
@@ -120,6 +126,8 @@ class ApplicationRuntime:
         resumed: bool = False,
         event_sink: EventSink | None = None,
         uuid_factory=uuid.uuid4,
+        event_journal: TurnEventJournal | None = None,
+        approval_journal: ApprovalJournal | None = None,
     ) -> "ApplicationRuntime":
         identity = str(session_id or "").strip() or generate_session_id(
             session_start,
@@ -139,6 +147,8 @@ class ApplicationRuntime:
             state,
             event_sink=event_sink,
             uuid_factory=uuid_factory,
+            event_journal=event_journal,
+            approval_journal=approval_journal,
         )
 
     def replace_history(self, history: Sequence[Mapping[str, Any]]) -> None:
@@ -440,6 +450,33 @@ class ApplicationRuntime:
             history_applied=True,
         )
 
+    def recoverable_state(self) -> dict[str, Any]:
+        """Return persisted work that can be surfaced after a process restart."""
+        summary = (
+            self._event_journal.session_summary(self.state.session_id)
+            if self._event_journal is not None else None
+        )
+        return {
+            "active_turn": (
+                self._event_journal.recover_active_turn(self.state.session_id)
+                if self._event_journal is not None else None
+            ),
+            "pending_approvals": (
+                self._approval_journal.pending(self.state.session_id)
+                if self._approval_journal is not None else []
+            ),
+            "event_summary": summary,
+        }
+
+    def close(self) -> None:
+        """Release optional durable runtime resources at session shutdown."""
+        for journal in (self._event_journal, self._approval_journal):
+            if journal is not None:
+                try:
+                    journal.close()
+                except Exception:
+                    continue
+
     def tool_event_sink(self, event: ToolEvent) -> None:
         self._emit(event)
         for artifact in event.artifacts:
@@ -478,6 +515,14 @@ class ApplicationRuntime:
         request: ApprovalRequest,
         sink: ApprovalSink | None,
     ) -> ApprovalDecision:
+        request_id = None
+        if self._approval_journal is not None:
+            request_id = self._approval_journal.request(
+                session_id=self.state.session_id,
+                turn_id=self.state.active_turn_id or "",
+                command=request.command,
+                description=request.description,
+            )
         self._emit(
             ApprovalRequested(
                 session_id=self.state.session_id,
@@ -485,7 +530,12 @@ class ApplicationRuntime:
                 request=request,
             )
         )
-        return resolve_approval(request, sink)
+        decision = resolve_approval(request, sink)
+        if request_id is not None:
+            self._approval_journal.resolve(
+                request_id, decision.status.value, decision.reason
+            )
+        return decision
 
     def resolve_clarification(
         self,
@@ -520,6 +570,12 @@ class ApplicationRuntime:
         return self._uuid_factory().hex
 
     def _emit(self, event: ApplicationEvent) -> None:
+        if self._event_journal is not None:
+            try:
+                self._event_journal.append(event)
+            except Exception:
+                # Journaling must not make the interactive turn unavailable.
+                pass
         outcome = self._event_port.emit(event)
         if outcome.status == "failed":
             # Adapter event failures must not change the turn state machine.

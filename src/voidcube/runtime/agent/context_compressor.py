@@ -39,6 +39,7 @@ from ...infrastructure.providers.model_metadata import (
     parse_context_limit_from_error,
 )
 from .context_policy import ContextCompressionPolicy
+from ...infrastructure.persistence.turn_event_journal import JournalEvent, TurnEventJournal
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +401,21 @@ class ContextCompressor(ContextEngine):
         )
         self._last_checkpoint = self._load_checkpoint()
 
+    def _journal_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        journal = self._event_journal
+        if journal is None or not self._checkpoint_session_id:
+            return
+        try:
+            journal.append(
+                JournalEvent(
+                    event_type=event_type,
+                    session_id=self._checkpoint_session_id,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.debug("Compression journal append failed", exc_info=True)
+
     def update_model(
         self,
         model: str,
@@ -475,6 +491,7 @@ class ContextCompressor(ContextEngine):
         config_context_length: int | None = None,
         provider: str = "",
         policy: ContextCompressionPolicy | None = None,
+        event_journal: TurnEventJournal | None = None,
     ):
         self.model = model
         self.base_url = base_url
@@ -527,6 +544,7 @@ class ContextCompressor(ContextEngine):
         self._checkpoint_session_id = ""
         self._checkpoint_path: Path | None = None
         self._last_checkpoint: dict[str, Any] | None = None
+        self._event_journal = event_journal
 
     def update_from_response(self, usage: Dict[str, Any]):
         """Update tracked token usage from API response."""
@@ -1266,10 +1284,23 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             compress_start=compress_start,
             compress_end=compress_end,
         )
+        self._journal_event(
+            "context.compaction.started",
+            {
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "source_message_count": checkpoint.source_message_count,
+                "compress_start": checkpoint.compress_start,
+                "compress_end": checkpoint.compress_end,
+            },
+        )
         try:
             self._persist_checkpoint(checkpoint)
         except Exception as exc:
             logger.warning("Compression checkpoint persistence failed: %s", exc)
+            self._journal_event(
+                "context.compaction.failed",
+                {"checkpoint_id": checkpoint.checkpoint_id, "error": str(exc)},
+            )
 
         if not self.quiet_mode:
             logger.info(
@@ -1365,6 +1396,15 @@ The user has requested that this compaction PRIORITISE preserving all informatio
             compressed.append(msg)
 
         self.compression_count += 1
+
+        self._journal_event(
+            "context.compaction.completed",
+            {
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "compression_count": self.compression_count,
+                "message_count": len(compressed),
+            },
+        )
 
         compressed = self._sanitize_tool_pairs(compressed)
 
