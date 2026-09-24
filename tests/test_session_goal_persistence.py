@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from voidcube.infrastructure.persistence.session_runtime import SessionDB
+from voidcube.interfaces.cli.session_goal_runtime import (
+    BLOCKED,
+    create_goal,
+    get_goal,
+    stop_goal_after_turn,
+)
 
 
 def test_session_goal_persists_and_enforces_one_active_goal(tmp_path):
@@ -20,5 +28,115 @@ def test_session_goal_persists_and_enforces_one_active_goal(tmp_path):
     assert db.update_session_goal("session-a", "blocked", "Done testing") is True
     assert db.clear_session_goal("session-a") is True
     assert db.get_session_goal("session-a") is None
+
+    db.close()
+
+
+def test_session_goal_blocker_requires_same_reason_in_three_turns(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    db.create_session_goal("session-a", "Finish the task")
+
+    first = db.audit_session_goal_blocker(
+        "session-a", "Missing access", turn_id="turn-1"
+    )
+    duplicate = db.audit_session_goal_blocker(
+        "session-a", "Different issue", turn_id="turn-1"
+    )
+    second = db.audit_session_goal_blocker(
+        "session-a", "Missing access", turn_id="turn-2"
+    )
+    changed = db.audit_session_goal_blocker(
+        "session-a", "Different issue", turn_id="turn-3"
+    )
+    assert first["blocked_streak"] == duplicate["blocked_streak"] == 1
+    assert duplicate["reason"] == "Missing access"
+    assert second["blocked_streak"] == 2
+    assert changed["blocked_streak"] == 1
+    assert db.get_session_goal("session-a")["status"] == "active"
+
+    db.close()
+
+
+def test_session_goal_blocks_after_three_consecutive_same_blockers(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    db.create_session_goal("session-a", "Finish the task")
+
+    db.audit_session_goal_blocker("session-a", "Missing access", turn_id="turn-1")
+    db.audit_session_goal_blocker("session-a", "Missing access", turn_id="turn-2")
+    result = db.audit_session_goal_blocker(
+        "session-a", "Missing access", turn_id="turn-3"
+    )
+
+    assert result == {
+        "status": "blocked",
+        "reason": "Missing access",
+        "blocked_streak": 3,
+    }
+    assert db.get_session_goal("session-a")["status"] == "blocked"
+    db.close()
+
+
+def test_unreported_completed_goal_turn_clears_blocker_streak(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    db.create_session_goal("session-a", "Finish the task")
+
+    db.audit_session_goal_blocker("session-a", "Missing access", turn_id="turn-1")
+    db.finish_session_goal_audit_turn("session-a", "turn-2")
+
+    result = db.audit_session_goal_blocker(
+        "session-a", "Missing access", turn_id="turn-3"
+    )
+    assert result["status"] == "active"
+    assert result["blocked_streak"] == 1
+    db.close()
+
+
+def test_turn_failure_persists_blocked_goal_until_resume(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    host = SimpleNamespace(session_id="session-a", _session_db=db)
+    create_goal(host, "Finish the task")
+
+    assert stop_goal_after_turn(host, "Execution unavailable") is True
+    assert get_goal(host)["status"] == BLOCKED
+
+    db.close()
+
+
+def test_session_goal_objective_can_be_revised_without_resetting_status(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    db.create_session_goal("session-a", "Initial objective")
+    db.update_session_goal("session-a", "paused", "waiting for user")
+
+    assert db.update_session_goal_objective(
+        "session-a", "Revised objective", reason="scope clarified"
+    ) is True
+    goal = db.get_session_goal("session-a")
+    assert goal["objective"] == "Revised objective"
+    assert goal["status"] == "paused"
+    assert goal["reason"] == "scope clarified"
+
+    db.close()
+
+
+def test_session_goal_revision_rejects_stale_status_or_objective_writes(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    created = db.create_session_goal("session-a", "Initial objective")
+    revision = created["revision"]
+
+    assert db.update_session_goal(
+        "session-a", "paused", "first writer", expected_revision=revision
+    ) is True
+    assert db.update_session_goal(
+        "session-a", "blocked", "stale writer", expected_revision=revision
+    ) is False
+    assert db.update_session_goal_objective(
+        "session-a", "stale objective", expected_revision=revision
+    ) is False
+    assert db.get_session_goal("session-a")["status"] == "paused"
 
     db.close()

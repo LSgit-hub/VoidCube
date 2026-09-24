@@ -5,7 +5,11 @@ import threading
 
 from voidcube.domain.contracts.scheduler import TurnLane, TurnRequest
 from voidcube.application.scheduling.turn_scheduler import TurnScheduler
-from voidcube.interfaces.cli.turn.scheduler import CliTurnSchedulerPorts, CliTurnSchedulerRuntime
+from voidcube.interfaces.cli.turn.scheduler import (
+    CliTurnSchedulerPorts,
+    CliTurnSchedulerRuntime,
+    TurnCompletion,
+)
 
 
 def _runtime(scheduler: TurnScheduler | None = None, calls: list | None = None):
@@ -204,6 +208,7 @@ def test_async_completion_callback_runs_after_execution_finishes() -> None:
     entered = threading.Event()
     release = threading.Event()
     completed = threading.Event()
+    outcomes = []
 
     def execute(*_args):
         entered.set()
@@ -222,11 +227,70 @@ def test_async_completion_callback_runs_after_execution_finishes() -> None:
         asynchronous=True,
     )
 
-    runtime.submit_user(object(), "hello", on_finished=completed.set)
+    runtime.submit_user(
+        object(),
+        "hello",
+        on_finished=lambda outcome: (outcomes.append(outcome), completed.set()),
+    )
     assert entered.wait(1)
     assert completed.is_set() is False
     release.set()
     assert completed.wait(1)
+    assert outcomes == [TurnCompletion.SUCCEEDED]
+
+
+def test_failed_turn_reports_failure_to_completion_callback() -> None:
+    outcomes = []
+    runtime = CliTurnSchedulerRuntime(
+        TurnScheduler(),
+        CliTurnSchedulerPorts(
+            session_id=lambda _host: "session",
+            tool_policy=lambda *_args: {},
+            execute_user=lambda *_args: (_ for _ in ()).throw(RuntimeError("boom")),
+            execute_autonomous=lambda *_args: None,
+            cancel_user=lambda *_args: None,
+            cancel_autonomous=lambda *_args: None,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        runtime.submit_user(object(), "hello", on_finished=outcomes.append)
+
+    assert outcomes == [TurnCompletion.FAILED]
+
+
+def test_cancelled_turn_reports_cancelled_to_completion_callback() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    outcomes = []
+
+    def execute(*_args):
+        entered.set()
+        release.wait(1)
+
+    runtime = CliTurnSchedulerRuntime(
+        TurnScheduler(),
+        CliTurnSchedulerPorts(
+            session_id=lambda _host: "session",
+            tool_policy=lambda *_args: {},
+            execute_user=execute,
+            execute_autonomous=execute,
+            cancel_user=lambda *_args: None,
+            cancel_autonomous=lambda *_args: None,
+        ),
+        asynchronous=True,
+    )
+
+    runtime.submit_user(object(), "hello", on_finished=outcomes.append)
+    assert entered.wait(1)
+    assert runtime.cancel_user() is True
+    release.set()
+    for _ in range(100):
+        if outcomes:
+            break
+        threading.Event().wait(0.01)
+
+    assert outcomes == [TurnCompletion.CANCELLED]
 
 
 def test_thread_start_failure_cancels_admitted_request_and_unbinds_host() -> None:

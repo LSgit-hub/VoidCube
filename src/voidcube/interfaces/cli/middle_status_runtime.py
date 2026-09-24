@@ -19,6 +19,7 @@ class CliMiddleStatusPorts:
     ascii_mode: Callable[[], bool]
     subagent_snapshot: Callable[[], Mapping[str, Any]]
     scheduler_snapshot: Callable[[], Any] | None = None
+    goal_snapshot: Callable[[], Mapping[str, Any]] | None = None
 
 
 class CliMiddleStatusRuntime:
@@ -123,6 +124,28 @@ class CliMiddleStatusRuntime:
                     fragments.append(
                         (f"{self._BACKGROUND} #2dd4bf", f"等待:{blocked_reason}")
                     )
+            except Exception:
+                pass
+
+        if ports.goal_snapshot is not None:
+            try:
+                goal = dict(ports.goal_snapshot() or {})
+                status = str(goal.get("status") or "").strip().casefold()
+                objective = " ".join(str(goal.get("objective") or "").split())
+                if status and objective:
+                    if len(objective) > 24:
+                        objective = objective[:21].rstrip() + "..."
+                    status_labels = {
+                        "active": ("*" if ascii_mode else "◎", "#60A5FA"),
+                        "paused": ("||" if ascii_mode else "Ⅱ", "#FBBF24"),
+                        "blocked": ("!", "#FF6B6B"),
+                        "completed": ("v" if ascii_mode else "✓", "#7CC9A0"),
+                    }
+                    icon, color = status_labels.get(status, ("?", "#9CA3AF"))
+                    if fragments:
+                        fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
+                    fragments.append((f"{self._BACKGROUND} {color} bold", icon))
+                    fragments.append((f"{self._BACKGROUND} {color}", f" {objective}"))
             except Exception:
                 pass
 

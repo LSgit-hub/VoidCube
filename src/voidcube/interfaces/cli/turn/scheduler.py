@@ -6,6 +6,7 @@ import itertools
 from collections.abc import Mapping
 from threading import Thread
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable
 
 from ....domain.contracts.scheduler import TurnLane, TurnRequest
@@ -24,6 +25,14 @@ class CliTurnSchedulerPorts:
     execute_autonomous: Callable[[Any, TurnRequest, CancellationToken], Any]
     cancel_user: Callable[[Any, str], None]
     cancel_autonomous: Callable[[Any, str], None]
+
+
+class TurnCompletion(str, Enum):
+    """Terminal outcome exposed to lifecycle callbacks."""
+
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class CliTurnSchedulerRuntime:
@@ -55,7 +64,7 @@ class CliTurnSchedulerRuntime:
         self,
         host: Any,
         payload: Any,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Callable[[TurnCompletion], None] | None = None,
     ) -> bool:
         return self._submit(
             host, payload, TurnLane.USER_CHAT, TurnLane.USER_CHAT.value, on_finished
@@ -65,7 +74,7 @@ class CliTurnSchedulerRuntime:
         self,
         host: Any,
         payload: Any,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Callable[[TurnCompletion], None] | None = None,
     ) -> bool:
         return self._submit(
             host,
@@ -108,7 +117,7 @@ class CliTurnSchedulerRuntime:
         payload: Any,
         lane: TurnLane,
         source: str,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Callable[[TurnCompletion], None] | None = None,
     ) -> bool:
         request = self._request(host, payload, lane, source)
         if lane is TurnLane.SUPERVISOR_TASK and not self.scheduler.snapshot().autonomous_gate:
@@ -139,19 +148,40 @@ class CliTurnSchedulerRuntime:
     def _run_admitted(
         self,
         request: TurnRequest,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Callable[[TurnCompletion], None] | None = None,
     ) -> bool:
+        completion = TurnCompletion.CANCELLED
+        observed_token: CancellationToken | None = None
+
+        def execute(
+            admitted_request: TurnRequest,
+            token: CancellationToken,
+        ) -> Any:
+            nonlocal observed_token
+            observed_token = token
+            return self._executor.execute(admitted_request, token)
+
         try:
-            return self.scheduler.run_admitted(request, self._executor.execute)
+            admitted = self.scheduler.run_admitted(request, execute)
+            if admitted and observed_token is not None and not observed_token.cancelled:
+                completion = TurnCompletion.SUCCEEDED
+            return admitted
+        except Exception:
+            completion = (
+                TurnCompletion.CANCELLED
+                if observed_token is not None and observed_token.cancelled
+                else TurnCompletion.FAILED
+            )
+            raise
         finally:
             self._executor.unbind(request.request_id)
             if on_finished is not None:
-                on_finished()
+                on_finished(completion)
 
     def _run_async(
         self,
         request: TurnRequest,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Callable[[TurnCompletion], None] | None = None,
     ) -> None:
         try:
             self._run_admitted(request, on_finished)
@@ -161,4 +191,4 @@ class CliTurnSchedulerRuntime:
             return
 
 
-__all__ = ["CliTurnSchedulerPorts", "CliTurnSchedulerRuntime"]
+__all__ = ["CliTurnSchedulerPorts", "CliTurnSchedulerRuntime", "TurnCompletion"]

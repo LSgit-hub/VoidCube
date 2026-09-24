@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 import queue
+from threading import RLock
 from typing import Any, Mapping, Sequence
 import uuid
 
@@ -95,6 +96,7 @@ class ApplicationRuntime:
         self._event_sink = event_sink
         self._event_port = CallbackEventPort(event_sink)
         self._uuid_factory = uuid_factory
+        self._pending_input_lock = RLock()
 
         self._emit(
             SessionEvent(
@@ -189,7 +191,8 @@ class ApplicationRuntime:
 
     def reset_input_queues(self) -> None:
         """Start a fresh adapter run while retaining shared session identity."""
-        self.state.pending_input_queue = queue.Queue()
+        with self._pending_input_lock:
+            self.state.pending_input_queue = queue.Queue()
 
     def set_agent_running(self, value: bool) -> None:
         self.state.agent_running = bool(value)
@@ -343,8 +346,35 @@ class ApplicationRuntime:
         payload: Any,
     ) -> TurnInputRoute:
         """Queue input for Scheduler admission without cancelling active work."""
-        self.state.pending_input_queue.put(payload)
+        self.enqueue_pending_input(payload)
         return TurnInputRoute.NEXT_TURN
+
+    def enqueue_pending_input(self, payload: Any) -> None:
+        """Queue adapter-generated input under the shared admission lock."""
+        with self._pending_input_lock:
+            self.state.pending_input_queue.put(payload)
+
+    def enqueue_if_idle(self, payload: Any) -> bool:
+        """Atomically enqueue automatic input only while the queue is empty."""
+        with self._pending_input_lock:
+            if not self.state.pending_input_queue.empty():
+                return False
+            self.state.pending_input_queue.put(payload)
+            return True
+
+    def discard_pending_inputs(self, predicate) -> None:
+        """Remove matching queued inputs while preserving other input order."""
+        with self._pending_input_lock:
+            retained: list[Any] = []
+            while True:
+                try:
+                    item = self.state.pending_input_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if not predicate(item):
+                    retained.append(item)
+            for item in retained:
+                self.state.pending_input_queue.put(item)
 
     def begin_turn(
         self,
@@ -494,6 +524,10 @@ class ApplicationRuntime:
         if outcome.status == "failed":
             # Adapter event failures must not change the turn state machine.
             return
+
+    def emit_goal_event(self, event: ApplicationEvent) -> None:
+        """Publish an externally-owned lifecycle event through this runtime."""
+        self._emit(event)
 
 
 __all__ = ["ApplicationRuntime", "ApplicationState"]

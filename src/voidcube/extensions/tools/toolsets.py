@@ -79,6 +79,12 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "session_goal": {
+        "description": "Inspect, pause, resume, complete, or audit blockers for the current session goal",
+        "tools": ["session_goal", "get_goal", "create_goal", "update_goal"],
+        "includes": [],
+    },
+
     "mail": {
         "description": "Read, search, reply to, send, and organize the configured mailbox",
         "tools": [
@@ -133,7 +139,7 @@ TOOLSETS = {
     "voidcube": {
         "description": "Core tools for server management",
         "tools": [],
-        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "mail", "code_execution", "ops", "media", "assistant", "delegation", "todo"]
+        "includes": ["web", "playback", "browser", "vision", "terminal", "file", "skills", "scheduling", "mail", "code_execution", "ops", "media", "assistant", "delegation", "todo", "session_goal"]
     },
 
     "mini": {

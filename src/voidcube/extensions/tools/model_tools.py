@@ -52,6 +52,7 @@ def _discover_tools():
         "voidcube.extensions.tools.todo_tool",
         "voidcube.extensions.tools.mail_tools",
         "voidcube.extensions.tools.session_search_tool",
+        "voidcube.extensions.tools.session_goal_tool",
         "voidcube.extensions.tools.mixture_of_agents_tool",
         "voidcube.extensions.tools.clarify_tool",
         "voidcube.extensions.tools.scheduled_task_tool",

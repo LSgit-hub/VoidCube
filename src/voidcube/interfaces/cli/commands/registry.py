@@ -487,7 +487,7 @@ def install_cli_command_execution(
             "queue": lambda request: handle_queue_command(
                 request,
                 ports=QueueCommandPorts(
-                    enqueue=host._pending_input.put,
+                    enqueue=getattr(host, "_enqueue_pending_input", host._pending_input.put),
                     agent_running=lambda: host._agent_running,
                     emit=emit,
                 ),
@@ -500,7 +500,7 @@ def install_cli_command_execution(
                         empty_message=translate("no_messages_to_retry"),
                         no_user_message=translate("no_user_message_found_to_retry"),
                     ),
-                    enqueue=host._pending_input.put,
+                    enqueue=getattr(host, "_enqueue_pending_input", host._pending_input.put),
                     emit=print,
                 ),
             ),
@@ -1024,21 +1024,78 @@ def _goal_command_ports(
         clear_goal,
         create_goal,
         get_goal,
+        update_goal_objective,
         update_goal,
         goal_update_error,
     )
 
     pending_input = getattr(host, "_pending_input", None)
+    enqueue_pending = getattr(host, "_enqueue_pending_input", None)
+    lifecycle_lock = getattr(host, "_goal_lifecycle_lock", None)
+
+    def mutate(callback, *args):
+        from contextlib import nullcontext
+
+        with lifecycle_lock if lifecycle_lock is not None else nullcontext():
+            return callback(*args)
+
+    def reset_goal_agent() -> None:
+        reset = getattr(host, "_reset_goal_execution_state", None)
+        if callable(reset):
+            reset()
+            return
+        discard = getattr(host, "_discard_pending_goal_continuations", None)
+        if callable(discard):
+            discard()
+        setattr(host, "agent", None)
+
+    def update_objective_and_steer(objective: str) -> bool:
+        if not update_goal_objective(host, objective):
+            return False
+        agent = getattr(host, "agent", None)
+        steer = getattr(agent, "steer_goal_objective", None)
+        if callable(steer):
+            try:
+                steer(objective)
+            except Exception:
+                pass
+        return True
+
     return GoalCommandPorts(
         get_goal=lambda: get_goal(host),
-        create_goal=lambda objective: create_goal(host, objective),
-        update_goal=lambda status, reason: update_goal(host, status, reason),
-        clear_goal=lambda: clear_goal(host),
-        start_goal=pending_input.put if pending_input is not None else None,
-        bind_backend=lambda objective: __import__("voidcube.interfaces.cli.session_goal_runtime", fromlist=["bind_goal_backend"]).bind_goal_backend(host, objective),
-        get_backend_status=lambda goal: __import__("voidcube.interfaces.cli.session_goal_runtime", fromlist=["backend_status"]).backend_status(host, goal),
+        create_goal=lambda objective: mutate(create_goal, host, objective),
+        update_objective=lambda objective: mutate(
+            update_objective_and_steer, objective
+        ),
+        update_goal=lambda status, reason: mutate(
+            update_goal, host, status, reason
+        ),
+        clear_goal=lambda: mutate(clear_goal, host),
+        start_goal=(
+            lambda objective: (enqueue_pending or pending_input.put)(
+                f"Continue working toward this active session goal: {objective}"
+            )
+            if pending_input is not None or enqueue_pending is not None
+            else None
+        ),
+        bind_backend=lambda objective: mutate(
+            __import__(
+                "voidcube.interfaces.cli.session_goal_runtime",
+                fromlist=["bind_goal_backend"],
+            ).bind_goal_backend,
+            host,
+            objective,
+        ),
+        get_backend_status=lambda goal: mutate(
+            __import__(
+                "voidcube.interfaces.cli.session_goal_runtime",
+                fromlist=["backend_status"],
+            ).backend_status,
+            host,
+            goal,
+        ),
         get_update_error=lambda: goal_update_error(host),
-        reset_agent=lambda: setattr(host, "agent", None),
+        reset_agent=reset_goal_agent,
         emit=emit,
         translate=translate,
     )

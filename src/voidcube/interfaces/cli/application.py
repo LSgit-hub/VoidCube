@@ -58,7 +58,7 @@ from typing import List, Dict, Any, Optional, Callable, Mapping, Sequence, TYPE_
 
 from ...infrastructure.llm.error_classifier import summarize_api_error
 from ...application.application_runtime import ApplicationRuntime
-from ...domain.contracts.events import MessageDelta
+from ...domain.contracts.events import GoalEvent, MessageDelta
 from ...application.configuration import (
     get_application_config,
     reload_application_config,
@@ -266,6 +266,7 @@ from ...application.scheduling.turn_scheduler import CancellationToken, TurnSche
 from .turn.scheduler import (
     CliTurnSchedulerPorts,
     CliTurnSchedulerRuntime,
+    TurnCompletion,
 )
 from .turn.agent_executor import (
     CliAgentTurnExecutorPorts,
@@ -856,6 +857,24 @@ def _parse_skills_argument(skills: str | list[str] | tuple[str, ...] | None) -> 
 # VoidcubeCLI Class
 # ============================================================================
 
+
+def _session_goal_tools_available_for(host: Any) -> bool:
+    enabled = getattr(host, "enabled_toolsets", None)
+    if not enabled or "all" in enabled or "*" in enabled:
+        return True
+    try:
+        from ...extensions.tools.toolsets import resolve_toolset
+
+        available = {
+            tool
+            for toolset in enabled
+            for tool in resolve_toolset(str(toolset))
+        }
+        return "session_goal" in available
+    except Exception:
+        return False
+
+
 class VoidcubeCLI:
     """
     Interactive CLI for the Voidcube Agent.
@@ -985,6 +1004,25 @@ class VoidcubeCLI:
             runtime.state.pending_input_queue = value
         else:
             self.__dict__["_pending_input_fallback"] = value
+
+    def _enqueue_pending_input(self, payload: Any) -> None:
+        """Queue input through the shared runtime's admission lock."""
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.enqueue_pending_input(payload)
+            return
+        self._pending_input.put(payload)
+
+    def _enqueue_goal_if_idle(self, payload: Any) -> bool:
+        """Atomically queue a goal continuation only when no input is pending."""
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            return runtime.enqueue_if_idle(payload)
+        pending_queue = self._pending_input
+        if not pending_queue.empty():
+            return False
+        pending_queue.put(payload)
+        return True
 
     def _initialize_application_runtime(self, session_identity) -> None:
         self.session_id = session_identity.session_id
@@ -1258,6 +1296,7 @@ class VoidcubeCLI:
         self._autonomous_gate_active: bool = False
         self._autonomous_activation_pending: bool = False
         self._autonomous_mode_lock = threading.Lock()
+        self._goal_lifecycle_lock = threading.RLock()
         self._should_exit = False
         self._clarify_state = None
         self._clarify_freetext = False
@@ -1345,7 +1384,24 @@ class VoidcubeCLI:
             request: TurnRequest,
             token: CancellationToken,
         ) -> Any:
-            return host._execute_agent_turn_request(request, token)
+            result = host._execute_agent_turn_request(
+                request,
+                token,
+                return_result=True,
+            )
+            if result is None:
+                raise RuntimeError("turn execution unavailable")
+            if isinstance(result, CliAgentTurnResult):
+                if result.outcome.failed:
+                    raise RuntimeError(
+                        result.outcome.error or "turn execution failed"
+                    )
+                if not result.response.strip():
+                    raise RuntimeError("turn produced an empty response")
+                return result
+            if isinstance(result, str) and not result.strip():
+                raise RuntimeError("turn produced an empty response")
+            return result
 
         runtime = CliTurnSchedulerRuntime(
             scheduler,
@@ -1941,13 +1997,93 @@ class VoidcubeCLI:
                     and not self._voice_state().recording
                 ),
                 restart_voice_recording=self._voice_start_recording,
-                enqueue_pending_input=self._pending_input.put,
+                enqueue_pending_input=self._enqueue_pending_input,
                 render_markup=lambda text: ChatConsole().print(text),
+                continue_session_goal=self._continue_session_goal,
+                stop_session_goal=self._stop_session_goal_after_turn,
                 emit=_cprint,
             )
         )
         self._pending_input_runtime_instance = runtime
         return runtime
+
+    def _continue_session_goal(self) -> None:
+        """Queue one more goal turn after user input and process notices."""
+        from contextlib import nullcontext
+
+        from .session_goal_runtime import ACTIVE, get_goal
+
+        checker = getattr(self, "_session_goal_tools_available", None)
+        if callable(checker):
+            if not checker():
+                return
+        elif not _session_goal_tools_available_for(self):
+            return
+        lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+        with lifecycle_lock if lifecycle_lock is not None else nullcontext():
+            if (goal := get_goal(self)) and goal.get("status") == ACTIVE:
+                continuation = (
+                    "Continue working toward the active session goal. "
+                    "Inspect its current state with session_goal(action='get'). "
+                    "After a meaningful work attempt, report a repeated unresolved blocker "
+                    "with session_goal(action='audit_blocker', reason=...) or update its "
+                    "status when it is paused or complete."
+                )
+                enqueue_if_idle = getattr(self, "_enqueue_goal_if_idle", None)
+                if callable(enqueue_if_idle):
+                    enqueue_if_idle(continuation)
+                elif self._pending_input.empty():
+                    self._pending_input.put(continuation)
+
+    def _session_goal_tools_available(self) -> bool:
+        """Return whether the next turn can inspect and update its session goal."""
+        return _session_goal_tools_available_for(self)
+
+    def _stop_session_goal_after_turn(self, reason: str) -> None:
+        """Block an active goal after a terminal turn execution failure."""
+        from contextlib import nullcontext
+
+        from .session_goal_runtime import stop_goal_after_turn
+
+        try:
+            lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+            with lifecycle_lock if lifecycle_lock is not None else nullcontext():
+                if stop_goal_after_turn(self, reason):
+                    self._discard_pending_goal_continuations()
+                    self.agent = None
+        except Exception:
+            logger.debug("Failed to stop session goal after turn failure", exc_info=True)
+
+    def _reset_goal_execution_state(self) -> None:
+        """Invalidate queued goal work after an explicit goal state change."""
+        from contextlib import nullcontext
+
+        lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+        with lifecycle_lock if lifecycle_lock is not None else nullcontext():
+            self._discard_pending_goal_continuations()
+            self.agent = None
+
+    def _discard_pending_goal_continuations(self) -> None:
+        """Remove stale automatic goal prompts while preserving user input."""
+        predicate = lambda item: isinstance(item, str) and (
+            item.startswith("Continue working toward this active session goal:")
+            or item.startswith("Continue working toward the active session goal.")
+        )
+        runtime = self.__dict__.get("_application_runtime")
+        if runtime is not None:
+            runtime.discard_pending_inputs(predicate)
+            return
+        pending_queue = self._pending_input
+        retained: list[Any] = []
+        while True:
+            try:
+                item = pending_queue.get_nowait()
+            except queue.Empty:
+                break
+            if not predicate(item):
+                retained.append(item)
+        for item in retained:
+            pending_queue.put(item)
 
     def _execute_pending_input(self, user_input: Any, *, app=None) -> bool:
         """Execute one queued prompt/command through the pending-input runtime."""
@@ -1958,7 +2094,7 @@ class VoidcubeCLI:
         payload: Any,
         app: Any | None,
         *,
-        on_finished: Callable[[], None] | None = None,
+        on_finished: Callable[[TurnCompletion], None] | None = None,
     ) -> bool:
         del app
         runtime = self._scheduler_runtime()
@@ -2018,6 +2154,7 @@ class VoidcubeCLI:
                 ascii_mode=self._use_ascii_fallback_cached,
                 subagent_snapshot=self._get_subagent_observability_snapshot,
                 scheduler_snapshot=self._scheduler_display_snapshot,
+                goal_snapshot=lambda: self._goal_status_snapshot(),
             )
         ).build()
 
@@ -2039,6 +2176,11 @@ class VoidcubeCLI:
             )
             self._git_status_runtime_instance = runtime
         return runtime.build()
+
+    def _goal_status_snapshot(self) -> dict[str, Any]:
+        from .session_goal_runtime import get_goal
+
+        return get_goal(self) or {}
     
     def _get_status_bar_fragments(self):
         """Build the status bar through the display-only runtime."""
@@ -2305,6 +2447,7 @@ class VoidcubeCLI:
                     checkpoint_max_snapshots=self.checkpoint_max_snapshots,
                     pass_session_id=self.pass_session_id,
                     tool_event_sink=self._ensure_application_runtime().tool_event_sink,
+                    event_sink=self._ensure_application_runtime().emit_goal_event,
                     stream_delta_callback=(
                         self._ensure_application_runtime().message_delta_sink
                         if self.streaming_enabled
@@ -3030,11 +3173,7 @@ class VoidcubeCLI:
                         name, arguments, task_id=task_id
                     ),
                     session_id=lambda: self.session_id,
-                    enqueue_pending_input=lambda message: (
-                        self._pending_input.put(message)
-                        if hasattr(self, "_pending_input")
-                        else None
-                    ),
+                    enqueue_pending_input=self._enqueue_pending_input,
                     emit=_emit_dynamic,
                     emit_markup=_emit_dynamic_markup,
                 )
@@ -3536,6 +3675,10 @@ class VoidcubeCLI:
             self._on_tool_event(event)
         elif isinstance(event, MessageDelta):
             self._stream_delta(event.text)
+        elif isinstance(event, GoalEvent):
+            # Goal mutations can happen through a tool or a command while the
+            # prompt-toolkit app is idle; repaint the status projection promptly.
+            self._invalidate(min_interval=0.0)
 
     # ====================================================================
     # Voice mode methods
@@ -3552,7 +3695,7 @@ class VoidcubeCLI:
             should_exit=lambda: self._should_exit,
             invalidate=invalidate,
             emit=lambda message: _cprint(f"{_DIM}{message}{_RST}"),
-            enqueue_input=self._pending_input.put,
+            enqueue_input=self._enqueue_pending_input,
             clear_attached_images=self._attached_images.clear,
             voice=self._voice_session(),
         )
@@ -4409,11 +4552,13 @@ class VoidcubeCLI:
         self,
         request: TurnRequest,
         cancellation: CancellationToken,
-    ) -> Optional[str]:
+        *,
+        return_result: bool = False,
+    ) -> Optional[str | CliAgentTurnResult]:
         result = self._agent_turn_executor_runtime().execute(request, cancellation)
         if isinstance(result, CliAgentTurnResult):
             self._present_agent_turn_result(result)
-            return result.response
+            return result if return_result else result.response
         return result
 
     def chat(self, message, images: list = None) -> Optional[str]:
@@ -4990,7 +5135,7 @@ class VoidcubeCLI:
                 start_autonomous_execution=lambda: self._start_autonomous_execution(),
                 application_ready=lambda: bool(self._app),
                 invalidate=lambda interval: self._invalidate(min_interval=interval),
-                enqueue_pending_input=self._pending_input.put,
+                enqueue_pending_input=self._enqueue_pending_input,
                 stop_requested=lambda: self._should_exit,
                 presence_refresh_needed=lambda: (
                     self._agent_running

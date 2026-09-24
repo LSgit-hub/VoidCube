@@ -51,7 +51,7 @@ class SessionTranscriptDivergenceError(SessionSequenceConflictError):
 
 DEFAULT_DB_PATH = get_VoidCube_home() / "state.db"
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 15
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -124,6 +124,10 @@ CREATE TABLE IF NOT EXISTS session_goals (
     project_id TEXT,
     root_node_id TEXT,
     backend_status TEXT NOT NULL DEFAULT 'unavailable',
+    blocked_reason TEXT,
+    blocked_streak INTEGER NOT NULL DEFAULT 0,
+    blocked_audit_turn_id TEXT,
+    revision INTEGER NOT NULL DEFAULT 0,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -544,6 +548,35 @@ class SessionDB:
                     except sqlite3.OperationalError:
                         pass
                 cursor.execute("UPDATE schema_version SET version = 12")
+            if current_version < 13:
+                for name, column_type in (
+                    ("blocked_reason", "TEXT"),
+                    ("blocked_streak", "INTEGER NOT NULL DEFAULT 0"),
+                ):
+                    try:
+                        cursor.execute(
+                            f'ALTER TABLE session_goals ADD COLUMN "{name}" {column_type}'
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                cursor.execute("UPDATE schema_version SET version = 13")
+            if current_version < 14:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE session_goals ADD COLUMN blocked_audit_turn_id TEXT"
+                    )
+                except sqlite3.OperationalError:
+                    pass
+                cursor.execute("UPDATE schema_version SET version = 14")
+            if current_version < 15:
+                try:
+                    cursor.execute(
+                        "ALTER TABLE session_goals ADD COLUMN revision "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                except sqlite3.OperationalError:
+                    pass
+                cursor.execute("UPDATE schema_version SET version = 15")
         # Unique title index — always ensure it exists (safe to run after migrations
         # since the title column is guaranteed to exist at this point)
         try:
@@ -841,7 +874,7 @@ class SessionDB:
         """Return the one goal owned by a session, if present."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT session_id, objective, status, reason, backend, project_id, root_node_id, backend_status, created_at, updated_at "
+                "SELECT session_id, objective, status, reason, backend, project_id, root_node_id, backend_status, blocked_reason, blocked_streak, blocked_audit_turn_id, revision, created_at, updated_at "
                 "FROM session_goals WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
@@ -875,22 +908,136 @@ class SessionDB:
         session_id: str,
         status: str,
         reason: str | None = None,
+        *,
+        expected_revision: int | None = None,
     ) -> bool:
         """Update a goal status while enforcing valid session transitions."""
-        if status not in {"active", "completed", "blocked"}:
+        if status not in {"active", "completed", "blocked", "paused"}:
             raise ValueError(f"Unsupported goal status: {status}")
         now = time.time()
 
         def _do(conn):
-            source_status = "blocked" if status == "active" else "active"
+            revision_clause = ""
+            revision_params: tuple[Any, ...] = ()
+            if expected_revision is not None:
+                revision_clause = " AND revision = ?"
+                revision_params = (int(expected_revision),)
+            if status == "active":
+                cursor = conn.execute(
+                    "UPDATE session_goals SET status = ?, reason = ?, blocked_reason = NULL, "
+                    "blocked_streak = 0, blocked_audit_turn_id = NULL, "
+                    "revision = revision + 1, updated_at = ? "
+                    "WHERE session_id = ? AND status IN ('blocked', 'paused')" + revision_clause,
+                    (status, reason, now, session_id, *revision_params),
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE session_goals SET status = ?, reason = ?, "
+                    "revision = revision + 1, updated_at = ? "
+                    "WHERE session_id = ? AND status = 'active'" + revision_clause,
+                    (status, reason, now, session_id, *revision_params),
+                )
+            return cursor.rowcount
+
+        return bool(self._execute_write(_do))
+
+    def update_session_goal_objective(
+        self,
+        session_id: str,
+        objective: str,
+        *,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+    ) -> bool:
+        """Atomically replace the objective while keeping its lifecycle state."""
+        normalized = " ".join(str(objective or "").split())
+        if not normalized:
+            raise ValueError("A goal objective is required")
+        now = time.time()
+
+        def _do(conn):
+            revision_clause = ""
+            revision_params: tuple[Any, ...] = ()
+            if expected_revision is not None:
+                revision_clause = " AND revision = ?"
+                revision_params = (int(expected_revision),)
             cursor = conn.execute(
-                "UPDATE session_goals SET status = ?, reason = ?, updated_at = ? "
-                "WHERE session_id = ? AND status = ?",
-                (status, reason, now, session_id, source_status),
+                "UPDATE session_goals SET objective = ?, reason = ?, "
+                "blocked_reason = NULL, blocked_streak = 0, "
+                "blocked_audit_turn_id = NULL, updated_at = ?, revision = revision + 1 "
+                "WHERE session_id = ? AND status IN ('active', 'paused', 'blocked')" + revision_clause,
+                (normalized, reason, now, session_id, *revision_params),
             )
             return cursor.rowcount
 
         return bool(self._execute_write(_do))
+
+    def audit_session_goal_blocker(
+        self,
+        session_id: str,
+        reason: str,
+        *,
+        turn_id: str,
+        threshold: int = 3,
+        expected_revision: int | None = None,
+    ) -> Dict[str, Any] | None:
+        """Record a repeated blocker and block only after consecutive confirmation."""
+        normalized = " ".join(str(reason or "").split())
+        if not normalized:
+            raise ValueError("A blocker reason is required")
+        if threshold < 1:
+            raise ValueError("threshold must be positive")
+        now = time.time()
+
+        def _do(conn):
+            revision_clause = ""
+            revision_params: tuple[Any, ...] = ()
+            if expected_revision is not None:
+                revision_clause = " AND revision = ?"
+                revision_params = (int(expected_revision),)
+            row = conn.execute(
+                "SELECT status, blocked_reason, blocked_streak, blocked_audit_turn_id, revision "
+                "FROM session_goals "
+                "WHERE session_id = ?" + revision_clause,
+                (session_id, *revision_params),
+            ).fetchone()
+            if row is None or row["status"] != "active":
+                return None
+            if row["blocked_audit_turn_id"] == turn_id:
+                return {
+                    "status": row["status"],
+                    "reason": row["blocked_reason"],
+                    "blocked_streak": int(row["blocked_streak"] or 0),
+                }
+            streak = int(row["blocked_streak"] or 0) + 1 if row["blocked_reason"] == normalized else 1
+            status = "blocked" if streak >= threshold else "active"
+            cursor = conn.execute(
+                "UPDATE session_goals SET status = ?, reason = ?, blocked_reason = ?, "
+                "blocked_streak = ?, blocked_audit_turn_id = ?, "
+                "revision = revision + 1, updated_at = ? "
+                "WHERE session_id = ? AND revision = ?",
+                (
+                    status, normalized, normalized, streak, turn_id, now, session_id,
+                    int(row["revision"]),
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return {"status": status, "reason": normalized, "blocked_streak": streak}
+
+        return self._execute_write(_do)
+
+    def finish_session_goal_audit_turn(self, session_id: str, turn_id: str) -> None:
+        """Clear a blocker streak when this completed goal turn did not report it."""
+        def _do(conn):
+            conn.execute(
+                "UPDATE session_goals SET blocked_reason = NULL, blocked_streak = 0, "
+                "revision = revision + 1, updated_at = ? WHERE session_id = ? AND status = 'active' "
+                "AND blocked_audit_turn_id != ?",
+                (time.time(), session_id, turn_id),
+            )
+
+        self._execute_write(_do)
 
     def bind_session_goal_backend(
         self, session_id: str, *, backend: str, project_id: str | None,
@@ -899,7 +1046,8 @@ class SessionDB:
         now = time.time()
         def _do(conn):
             cursor = conn.execute(
-                "UPDATE session_goals SET backend = ?, project_id = ?, root_node_id = ?, backend_status = ?, updated_at = ? WHERE session_id = ?",
+                "UPDATE session_goals SET backend = ?, project_id = ?, root_node_id = ?, "
+                "backend_status = ?, revision = revision + 1, updated_at = ? WHERE session_id = ?",
                 (backend, project_id, root_node_id, backend_status, now, session_id),
             )
             return cursor.rowcount

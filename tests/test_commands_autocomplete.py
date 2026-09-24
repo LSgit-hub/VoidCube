@@ -48,10 +48,14 @@ def test_goal_subcommands_include_localized_completion_descriptions():
         set_locale(original_locale)
 
     assert {item.text: item.display_meta_text for item in completions} == {
+        "glq": "使用目标管理器创建目标",
+        "--glq": "使用目标管理器创建目标",
         "status": "查看当前目标状态",
+        "edit": "替换未完成目标并继续执行",
         "complete": "将活动目标标记为完成",
         "blocked": "将活动目标标记为阻塞，后接原因",
-        "resume": "恢复受阻目标并继续执行",
+        "pause": "暂停活动目标",
+        "resume": "恢复暂停或受阻目标并继续执行",
         "clear": "清除已结束的目标",
     }
 

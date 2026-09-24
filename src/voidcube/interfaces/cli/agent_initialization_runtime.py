@@ -48,6 +48,7 @@ class CliAgentInitializationPorts:
     autonomous_task_provider: Any = None
     validate_execution_lease: Any = None
     working_dir: str | None = None
+    event_sink: Any = None
 
 
 class CliAgentInitializationRuntime:
@@ -99,6 +100,8 @@ class CliAgentInitializationRuntime:
             "validate_execution_lease": ports.validate_execution_lease,
             "working_dir": ports.working_dir,
         }
+        if ports.event_sink is not None:
+            kwargs["event_sink"] = ports.event_sink
         if ports.persist_session is not None:
             kwargs["persist_session"] = ports.persist_session
         if ports.skip_memory is not None:

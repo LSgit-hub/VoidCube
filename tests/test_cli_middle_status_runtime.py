@@ -177,3 +177,23 @@ def test_middle_status_projects_supervisor_voice_as_microphone_icon():
 
     assert "🎤" in rendered
     assert "💤" not in rendered
+
+
+def test_middle_status_projects_active_goal_summary():
+    rendered = "".join(
+        text
+        for _, text in CliMiddleStatusRuntime(
+            CliMiddleStatusPorts(
+                supervisor_snapshot=lambda: {"scene": "idle"},
+                memory_llm=lambda: {"provider": "mem"},
+                ascii_mode=lambda: True,
+                subagent_snapshot=lambda: {"active": False},
+                goal_snapshot=lambda: {
+                    "status": "blocked",
+                    "objective": "Wait for the dependency to become available",
+                },
+            )
+        ).build()
+    )
+
+    assert "! Wait for the dependen..." in rendered

@@ -13,6 +13,7 @@ from .attachments import _detect_file_drop
 from .cli_ui import _DIM, _RST, _accent_hex, _cprint
 from .commands.router import looks_like_slash_command
 from .lifecycle.idle_maintenance import drain_process_notifications
+from .turn.scheduler import TurnCompletion
 
 
 logger = logging.getLogger(__name__)
@@ -27,13 +28,15 @@ class PendingInputExecutionPorts:
     process_command: Callable[[str], bool]
     set_should_exit: Callable[[bool], None]
     reset_turn_state: Callable[[], None]
-    submit_turn: Callable[[Any, Any, Callable[[], None]], bool]
+    submit_turn: Callable[[Any, Any, Callable[[TurnCompletion], None]], bool]
     invalidate_app: Callable[[Any | None], None]
     exit_app: Callable[[Any], None]
     voice_restart_ready: Callable[[], bool]
     restart_voice_recording: Callable[[], None]
     enqueue_pending_input: Callable[[Any], None]
     render_markup: Callable[[str], None]
+    continue_session_goal: Callable[[], None] = lambda: None
+    stop_session_goal: Callable[[str], None] = lambda _reason: None
     emit: Callable[[str], None] = _cprint
 
 
@@ -97,7 +100,7 @@ class PendingInputRuntime:
 
         completed = False
 
-        def on_finished() -> None:
+        def on_finished(completion: TurnCompletion) -> None:
             nonlocal completed
             if completed:
                 return
@@ -106,6 +109,12 @@ class PendingInputRuntime:
             self.ports.invalidate_app(app)
             self._restart_continuous_voice_if_needed(app)
             self._enqueue_process_notifications()
+            if completion is TurnCompletion.SUCCEEDED:
+                self.ports.continue_session_goal()
+            elif completion is TurnCompletion.FAILED:
+                self.ports.stop_session_goal(
+                    "Turn execution failed; resolve the error before resuming the goal."
+                )
 
         try:
             self.ports.submit_turn(
@@ -114,7 +123,7 @@ class PendingInputRuntime:
                 on_finished,
             )
         except Exception:
-            on_finished()
+            on_finished(TurnCompletion.FAILED)
             raise
 
         return True

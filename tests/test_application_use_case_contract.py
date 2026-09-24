@@ -195,3 +195,19 @@ def test_shared_runtime_owns_pending_title_hydration_busy_state_and_queues() -> 
     runtime.clear_session_hydration()
     assert runtime.state.pending_title is None
     assert runtime.state.session_hydration is None
+
+
+def test_pending_input_goal_admission_is_atomic_and_preserves_user_order() -> None:
+    runtime = ApplicationRuntime.create(
+        session_id="active",
+        session_start=datetime(2026, 8, 5),
+        uuid_factory=_fixed_uuid,
+    )
+
+    assert runtime.enqueue_if_idle("goal continuation") is True
+    assert runtime.enqueue_if_idle("second goal continuation") is False
+    runtime.enqueue_pending_input("user input")
+
+    assert runtime.state.pending_input_queue.get_nowait() == "goal continuation"
+    assert runtime.state.pending_input_queue.get_nowait() == "user input"
+    assert runtime.enqueue_if_idle("next goal continuation") is True

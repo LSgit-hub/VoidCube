@@ -25,6 +25,26 @@ class SessionEvent:
     reason: str = ""
 
 
+class GoalEventKind(str, Enum):
+    CREATED = "goal.created"
+    UPDATED = "goal.updated"
+    COMPLETED = "goal.completed"
+    BLOCKED = "goal.blocked"
+    PAUSED = "goal.paused"
+    CLEARED = "goal.cleared"
+
+
+@dataclass(frozen=True, slots=True)
+class GoalEvent:
+    """Structured notification for a session goal lifecycle change."""
+
+    kind: GoalEventKind
+    session_id: str
+    goal: Mapping[str, Any] | None = None
+    reason: str = ""
+    turn_id: str = ""
+
+
 class TurnEventKind(str, Enum):
     STARTED = "turn.started"
     COMPLETED = "turn.completed"
@@ -79,6 +99,7 @@ class ClarificationRequested:
 ApplicationEvent: TypeAlias = (
     SessionEvent
     | TurnEvent
+    | GoalEvent
     | MessageDelta
     | ToolEvent
     | ApprovalRequested
@@ -95,6 +116,8 @@ __all__ = [
     "ApprovalRequested",
     "ArtifactCreated",
     "ClarificationRequested",
+    "GoalEvent",
+    "GoalEventKind",
     "MessageDelta",
     "SessionEvent",
     "SessionEventKind",

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from queue import Queue
 
 import pytest
 
 from voidcube.interfaces.cli.commands.handlers.goal import GoalCommandPorts, handle_goal_command
 from voidcube.interfaces.cli.commands.router import parse_cli_command
+from voidcube.interfaces.cli.commands.registry import _goal_command_ports
+from voidcube.infrastructure.persistence.session_runtime import SessionDB
 from voidcube.interfaces.cli.session_goal_runtime import (
     ACTIVE,
     BLOCKED,
@@ -18,6 +21,7 @@ from voidcube.interfaces.cli.session_goal_runtime import (
     goal_prompt,
     goal_update_error,
     update_goal,
+    update_goal_objective,
 )
 from plugins.goal_manager.db.connection import GoalStore
 from voidcube.interfaces.cli.application import VoidcubeCLI
@@ -46,6 +50,20 @@ def test_goal_runtime_is_session_isolated_and_prompt_is_active_only():
     assert get_goal(host) is None
 
 
+def test_goal_objective_edit_preserves_status_and_invalidates_continuation():
+    invalidations = []
+    host = _host()
+    host._discard_pending_goal_continuations = lambda: invalidations.append(True)
+    create_goal(host, "Initial objective")
+    update_goal(host, BLOCKED, "waiting")
+    invalidations.clear()
+
+    assert update_goal_objective(host, "Revised objective") is True
+    assert get_goal(host)["objective"] == "Revised objective"
+    assert get_goal(host)["status"] == BLOCKED
+    assert invalidations == [True]
+
+
 def test_active_goal_is_included_in_agent_system_prompt():
     host = _host()
     host.system_prompt = "Base instructions"
@@ -56,6 +74,50 @@ def test_active_goal_is_included_in_agent_system_prompt():
     assert prompt.startswith("Base instructions")
     assert "Active Session Goal" in prompt
     assert "Keep the command surface canonical" in prompt
+
+
+def test_goal_continuation_only_queues_when_session_is_idle_and_active():
+    host = _host()
+    host._pending_input = Queue()
+    create_goal(host, "Finish the lifecycle")
+
+    VoidcubeCLI._continue_session_goal(host)
+    continuation = host._pending_input.get_nowait()
+    assert "Continue working toward the active session goal" in continuation
+
+    host._pending_input.put("user input")
+    VoidcubeCLI._continue_session_goal(host)
+    assert host._pending_input.get_nowait() == "user input"
+
+    update_goal(host, COMPLETED, "verified")
+    VoidcubeCLI._continue_session_goal(host)
+    assert host._pending_input.empty()
+
+
+def test_goal_continuation_skips_when_session_goal_tool_is_unavailable():
+    host = _host()
+    host._pending_input = Queue()
+    host.enabled_toolsets = ["web"]
+    create_goal(host, "Finish the lifecycle")
+
+    VoidcubeCLI._continue_session_goal(host)
+
+    assert host._pending_input.empty()
+
+
+def test_goal_status_change_discards_stale_continuations_but_keeps_user_input():
+    host = _host()
+    host._pending_input = Queue()
+    host._pending_input.put("Continue working toward this active session goal: stale")
+    host._pending_input.put("user input")
+    host._pending_input.put(
+        "Continue working toward the active session goal. stale continuation"
+    )
+
+    VoidcubeCLI._discard_pending_goal_continuations(host)
+
+    assert host._pending_input.get_nowait() == "user input"
+    assert host._pending_input.empty()
 
 
 def test_active_goal_prompt_teaches_goal_manager_workflow():
@@ -281,6 +343,33 @@ def test_goal_handler_creates_and_queues_objective():
     assert output[0].startswith("goal_command.created")
 
 
+def test_goal_handler_edits_unfinished_goal_and_requeues_new_objective():
+    state: dict[str, object] = {
+        "goal": {"objective": "old", "status": ACTIVE},
+    }
+    output: list[str] = []
+    queued: list[str] = []
+    ports = GoalCommandPorts(
+        get_goal=lambda: state["goal"],
+        create_goal=lambda objective: state["goal"],
+        update_objective=lambda objective: state["goal"].update(
+            objective=objective
+        ) or True,
+        update_goal=lambda _status, _reason: False,
+        clear_goal=lambda: False,
+        start_goal=queued.append,
+        reset_agent=lambda: None,
+        emit=output.append,
+        translate=lambda key, **kwargs: key,
+    )
+
+    handle_goal_command(parse_cli_command("/goal edit revised objective"), ports=ports)
+
+    assert state["goal"]["objective"] == "revised objective"
+    assert queued == ["revised objective"]
+    assert output == ["goal_command.edited"]
+
+
 def test_goal_handler_requires_terminal_transition_before_clear():
     state: dict[str, object] = {
         "goal": {"objective": "active", "status": ACTIVE},
@@ -311,7 +400,8 @@ def test_goal_handler_requires_terminal_transition_before_clear():
     assert state["goal"] is None
 
 
-def test_goal_command_full_create_block_resume_complete_flow(monkeypatch, tmp_path):
+@pytest.mark.parametrize("flag", ["glq", "--glq"])
+def test_goal_command_full_create_block_resume_complete_flow(monkeypatch, tmp_path, flag):
     store = GoalStore(tmp_path / "goal-flow.db")
     host = _host()
     output: list[str] = []
@@ -355,9 +445,10 @@ def test_goal_command_full_create_block_resume_complete_flow(monkeypatch, tmp_pa
         translate=lambda key, **kwargs: key,
     )
     try:
-        handle_goal_command(parse_cli_command("/goal Run the full flow"), ports=ports)
+        handle_goal_command(parse_cli_command(f"/goal {flag} Run the full flow"), ports=ports)
         binding = get_goal(host)
         assert binding["backend"] == "goal_manager"
+        assert binding["objective"] == "Run the full flow"
         assert store.get_node(binding["root_node_id"])["status"] == "in_progress"
 
         handle_goal_command(parse_cli_command("/goal blocked waiting for input"), ports=ports)
@@ -374,3 +465,129 @@ def test_goal_command_full_create_block_resume_complete_flow(monkeypatch, tmp_pa
         assert queued == ["Run the full flow", "Run the full flow"]
     finally:
         store.close()
+
+
+def _wired_goal_ports(host, output):
+    host._pending_input = Queue()
+    return _goal_command_ports(
+        host, emit=output.append, translate=lambda key, **kwargs: key,
+    )
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+def test_default_goal_lifecycle_never_contacts_manager(monkeypatch, tmp_path, persistent):
+    host = _host()
+    output = []
+    calls = []
+
+    def forbidden_client():
+        calls.append("client")
+        raise AssertionError("Session goals must not contact Goal Manager")
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", forbidden_client)
+    if persistent:
+        host._session_db = SessionDB(tmp_path / "sessions.db")
+    try:
+        ports = _wired_goal_ports(host, output)
+        handle_goal_command(parse_cli_command("/goal Build glq documentation"), ports=ports)
+        assert get_goal(host)["backend"] == "session"
+        assert host._pending_input.get_nowait() == (
+            "Continue working toward this active session goal: Build glq documentation"
+        )
+        assert "Goal Manager operating protocol" not in goal_prompt(get_goal(host))
+        assert "Pursue this goal directly in the session" in goal_prompt(get_goal(host))
+        prompt = goal_prompt(get_goal(host))
+        assert "user-provided task data" in prompt
+        assert "do not redefine success around an easier subset" in prompt
+        assert "identify authoritative evidence for each one" in prompt
+        assert "status='paused') only after an explicit user request" in prompt
+        if persistent:
+            host._session_db.close()
+            host._session_db = SessionDB(tmp_path / "sessions.db")
+            assert get_goal(host)["backend"] == "session"
+        for command, expected in [
+            ("status", ACTIVE),
+            ("blocked waiting for input", BLOCKED),
+            ("resume input restored", ACTIVE),
+            ("complete verified", COMPLETED),
+        ]:
+            handle_goal_command(parse_cli_command(f"/goal {command}"), ports=ports)
+            assert get_goal(host)["status"] == expected
+        handle_goal_command(parse_cli_command("/goal clear"), ports=ports)
+        assert get_goal(host) is None
+        assert calls == []
+    finally:
+        if persistent:
+            host._session_db.close()
+
+
+@pytest.mark.parametrize("flag", ["glq", "--glq", "GLQ", "--GLQ"])
+def test_glq_requires_objective_without_changing_existing_goal(flag):
+    host = _host()
+    create_goal(host, "Existing objective")
+    before = get_goal(host)
+    output = []
+    ports = _wired_goal_ports(host, output)
+    handle_goal_command(parse_cli_command(f"/goal {flag}\t "), ports=ports)
+    assert get_goal(host) == before
+    assert host._pending_input.empty()
+    assert output == ["goal_command.glq_usage"]
+
+
+@pytest.mark.parametrize("failure", ["health", "create"])
+def test_glq_outage_reports_fallback_and_keeps_local_goal_usable(monkeypatch, failure):
+    host = _host()
+    output = []
+
+    class UnavailableClient:
+        def health(self):
+            return failure != "health"
+
+        def create_session_project(self, objective, session_id):
+            raise RuntimeError("service unavailable")
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", UnavailableClient)
+    ports = _wired_goal_ports(host, output)
+    handle_goal_command(parse_cli_command("/goal --glq\tShip the change"), ports=ports)
+    assert get_goal(host)["backend"] == "session"
+    assert get_goal(host)["objective"] == "Ship the change"
+    assert host._pending_input.get_nowait() == (
+        "Continue working toward this active session goal: Ship the change"
+    )
+    assert output == ["goal_command.backend_unavailable", "goal_command.created"]
+    handle_goal_command(parse_cli_command("/goal complete verified"), ports=ports)
+    assert get_goal(host)["status"] == COMPLETED
+
+
+def test_glq_binding_persists_but_does_not_enable_manager_for_next_goal(monkeypatch, tmp_path):
+    host = _host()
+    host._session_db = SessionDB(tmp_path / "sessions.db")
+    output = []
+    calls = []
+
+    class Client:
+        def health(self):
+            return True
+
+        def create_session_project(self, objective, session_id):
+            calls.append(objective)
+            return {"project": {"id": "proj-1"}, "root": {"id": "root-1"}}
+
+        def complete_node(self, node_id, reason, *, session_id=None):
+            calls.append(node_id)
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", Client)
+    try:
+        ports = _wired_goal_ports(host, output)
+        handle_goal_command(parse_cli_command("/goal glq Ship with manager"), ports=ports)
+        host._session_db.close()
+        host._session_db = SessionDB(tmp_path / "sessions.db")
+        assert get_goal(host)["backend"] == "goal_manager"
+        assert "Goal Manager operating protocol" in goal_prompt(get_goal(host))
+        handle_goal_command(parse_cli_command("/goal complete verified"), ports=ports)
+        handle_goal_command(parse_cli_command("/goal Next session goal"), ports=ports)
+        assert get_goal(host)["backend"] == "session"
+        assert get_goal(host)["project_id"] is None
+        assert calls == ["Ship with manager", "root-1"]
+    finally:
+        host._session_db.close()

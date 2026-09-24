@@ -180,5 +180,17 @@ def test_status_and_lookup_tools_are_registered_read_only():
     assert registry.get_effect("write_file") == "idempotent_write"
 
 
+def test_session_goal_toolset_exposes_codex_style_goal_tools():
+    from voidcube.extensions.tools.model_tools import get_tool_definitions
+
+    definitions = get_tool_definitions(
+        enabled_toolsets=["session_goal"],
+        quiet_mode=True,
+    )
+    names = {item["function"]["name"] for item in definitions}
+
+    assert {"session_goal", "get_goal", "create_goal", "update_goal"} <= names
+
+
 
 
