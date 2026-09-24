@@ -140,3 +140,32 @@ def test_session_goal_revision_rejects_stale_status_or_objective_writes(tmp_path
     assert db.get_session_goal("session-a")["status"] == "paused"
 
     db.close()
+
+
+def test_session_goal_audit_cleanup_rejects_stale_revision(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    created = db.create_session_goal("session-a", "Initial objective")
+    revision = created["revision"]
+
+    db.audit_session_goal_blocker(
+        "session-a", "Missing access", turn_id="turn-1", expected_revision=revision
+    )
+    current = db.get_session_goal("session-a")
+    assert current["revision"] == revision + 1
+
+    # A completion from the old turn must not clear a newer blocker update.
+    assert db.finish_session_goal_audit_turn(
+        "session-a", "turn-2", expected_revision=revision
+    ) is False
+    unchanged = db.get_session_goal("session-a")
+    assert unchanged["blocked_reason"] == "Missing access"
+    assert unchanged["blocked_streak"] == 1
+
+    assert db.finish_session_goal_audit_turn(
+        "session-a", "turn-2", expected_revision=unchanged["revision"]
+    ) is True
+    cleared = db.get_session_goal("session-a")
+    assert cleared["blocked_reason"] is None
+    assert cleared["blocked_streak"] == 0
+    db.close()

@@ -300,7 +300,14 @@ def finish_goal_audit_turn(host: Any, turn_id: str) -> None:
     repository = getattr(host, "_session_db", None)
     if repository is not None and hasattr(repository, "finish_session_goal_audit_turn"):
         before = get_goal(host)
-        repository.finish_session_goal_audit_turn(session_id, turn_id)
+        expected_revision = (
+            int(before.get("revision") or 0) if before is not None else None
+        )
+        repository.finish_session_goal_audit_turn(
+            session_id,
+            turn_id,
+            expected_revision=expected_revision,
+        )
         after = get_goal(host)
         if before and after and (
             before.get("blocked_reason") != after.get("blocked_reason")

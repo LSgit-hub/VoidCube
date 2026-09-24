@@ -180,7 +180,7 @@ def test_status_and_lookup_tools_are_registered_read_only():
     assert registry.get_effect("write_file") == "idempotent_write"
 
 
-def test_session_goal_toolset_exposes_codex_style_goal_tools():
+def test_session_goal_toolset_exposes_individual_goal_tools():
     from voidcube.extensions.tools.model_tools import get_tool_definitions
 
     definitions = get_tool_definitions(

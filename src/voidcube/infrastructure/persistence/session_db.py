@@ -619,7 +619,7 @@ class SessionDB:
     ) -> str:
         """Create a new session record. Returns the session_id."""
         def _do(conn):
-            conn.execute(
+            cursor = conn.execute(
                 """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
                    system_prompt, parent_session_id, started_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -640,7 +640,7 @@ class SessionDB:
     def end_session(self, session_id: str, end_reason: str) -> None:
         """Mark a session as ended."""
         def _do(conn):
-            conn.execute(
+            cursor = conn.execute(
                 "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?",
                 (time.time(), end_reason, session_id),
             )
@@ -1027,17 +1027,29 @@ class SessionDB:
 
         return self._execute_write(_do)
 
-    def finish_session_goal_audit_turn(self, session_id: str, turn_id: str) -> None:
+    def finish_session_goal_audit_turn(
+        self,
+        session_id: str,
+        turn_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> bool:
         """Clear a blocker streak when this completed goal turn did not report it."""
         def _do(conn):
-            conn.execute(
+            revision_clause = ""
+            revision_params: tuple[Any, ...] = ()
+            if expected_revision is not None:
+                revision_clause = " AND revision = ?"
+                revision_params = (int(expected_revision),)
+            cursor = conn.execute(
                 "UPDATE session_goals SET blocked_reason = NULL, blocked_streak = 0, "
                 "revision = revision + 1, updated_at = ? WHERE session_id = ? AND status = 'active' "
-                "AND blocked_audit_turn_id != ?",
-                (time.time(), session_id, turn_id),
+                "AND blocked_audit_turn_id != ?" + revision_clause,
+                (time.time(), session_id, turn_id, *revision_params),
             )
+            return cursor.rowcount
 
-        self._execute_write(_do)
+        return bool(self._execute_write(_do))
 
     def bind_session_goal_backend(
         self, session_id: str, *, backend: str, project_id: str | None,

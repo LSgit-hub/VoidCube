@@ -169,7 +169,7 @@ def test_goal_lifecycle_emits_structured_events_when_host_subscribes():
     assert events[1].reason == "User pause"
 
 
-def test_codex_style_individual_goal_tools_share_the_session_backend():
+def test_individual_goal_tools_share_the_session_backend():
     host = SimpleNamespace(session_id="session-a", _session_goals={})
 
     created = json.loads(_handle_create_goal(
@@ -186,7 +186,7 @@ def test_codex_style_individual_goal_tools_share_the_session_backend():
     assert completed["goal"]["status"] == "completed"
 
 
-def test_aggregate_goal_tool_accepts_codex_complete_status_alias():
+def test_aggregate_goal_tool_accepts_complete_status_alias():
     host = SimpleNamespace(session_id="session-a", _session_goals={})
     create_goal(host, "Finish the task")
 
@@ -198,7 +198,7 @@ def test_aggregate_goal_tool_accepts_codex_complete_status_alias():
     assert result["goal"]["status"] == "completed"
 
 
-def test_agent_routes_codex_style_goal_tool_names_to_session_backend(tmp_path):
+def test_agent_routes_individual_goal_tool_names_to_session_backend(tmp_path):
     db = SessionDB(tmp_path / "sessions.db")
     agent = object.__new__(AIAgent)
     agent.session_id = "session-a"
