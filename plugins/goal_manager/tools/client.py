@@ -113,6 +113,10 @@ class GoalClient:
     def project(self, project_id: str) -> dict[str, Any]:
         return self.request("GET", f"/api/goals/projects/{project_id}")
 
+    def context(self, node_id: str) -> dict[str, Any]:
+        """Read node context, including opaque linked-memory references."""
+        return self.request("GET", f"/api/goals/nodes/{node_id}/context")
+
     def update_node_status(
         self, node_id: str, expected_version: int, status: str, reason: str,
         *, session_id: str | None = None,
@@ -159,7 +163,21 @@ class GoalClient:
                 "idempotency_key": idempotency_key, "root_status": "in_progress" if session_id else "planned", **actor,
             })
         if tool_name == "goal_get_context":
-            return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/context")
+            return self.context(args["nodeId"])
+        if tool_name == "goal_memory_ref_add":
+            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/memory-refs", {
+                "memory_id": args["memoryId"],
+                "relation_type": args.get("relationType", "context"),
+                "confidence": args.get("confidence", 1),
+                "created_by": args.get("createdBy", "agent"),
+                "reason": args["reason"], **actor,
+            })
+        if tool_name == "goal_memory_ref_list":
+            return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/memory-refs")
+        if tool_name == "goal_memory_ref_delete":
+            return self.request("DELETE", f"/api/goals/nodes/{args['nodeId']}/memory-refs/{args['memoryRefId']}", query={
+                "reason": args["reason"], **actor,
+            })
         if tool_name == "goal_graph_query":
             return self.request("GET", f"/api/goals/projects/{args['projectId']}/graph", query={
                 "start_node": args["startNode"], "depth": args.get("depth", 3),

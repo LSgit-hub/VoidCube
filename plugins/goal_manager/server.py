@@ -165,6 +165,18 @@ class EvidenceCreate(BaseModel):
     session_id: str | None = None
 
 
+class MemoryReferenceCreate(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    memory_id: str
+    relation_type: str = "context"
+    confidence: float = Field(default=1, ge=0, le=1)
+    created_by: str = "agent"
+    reason: str
+    actor_type: str = "agent"
+    actor_id: str | None = None
+    session_id: str | None = None
+
+
 class ExecutionResultCreate(BaseModel):
     model_config = ConfigDict(extra="allow")
     status: str
@@ -518,6 +530,42 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             node_id, payload.model_dump(exclude={"created_by", "reason", "actor_type", "actor_id", "session_id"}),
             created_by=payload.created_by, reason=payload.reason, actor_type=payload.actor_type,
             actor_id=payload.actor_id, session_id=payload.session_id,
+        )
+
+    @app.post("/api/goals/nodes/{node_id}/memory-refs", status_code=201)
+    def add_memory_reference(node_id: str, payload: MemoryReferenceCreate) -> dict[str, Any]:
+        return store.add_memory_reference(
+            node_id,
+            payload.memory_id,
+            relation_type=payload.relation_type,
+            confidence=payload.confidence,
+            created_by=payload.created_by,
+            reason=payload.reason,
+            actor_type=payload.actor_type,
+            actor_id=payload.actor_id,
+            session_id=payload.session_id,
+        )
+
+    @app.get("/api/goals/nodes/{node_id}/memory-refs")
+    def list_memory_references(node_id: str) -> dict[str, Any]:
+        return {"memory_refs": store.list_memory_references(node_id)}
+
+    @app.delete("/api/goals/nodes/{node_id}/memory-refs/{memory_ref_id}")
+    def delete_memory_reference(
+        node_id: str,
+        memory_ref_id: str,
+        reason: str = Query(...),
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return store.delete_memory_reference(
+            node_id,
+            memory_ref_id,
+            reason=reason,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            session_id=session_id,
         )
 
     @app.get("/api/goals/nodes/{node_id}/lifecycle")

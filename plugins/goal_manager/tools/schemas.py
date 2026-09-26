@@ -174,4 +174,24 @@ SCHEMAS = {
          "createdBy": {"type": "string"}, "reason": {"type": "string"}, **COMMON_CONTEXT},
         ["nodeId", "evidenceType", "reason"],
     ),
+    "goal_memory_ref_add": _schema(
+        "把记忆服务中的不透明 memory_id 关联到目标节点；不复制记忆正文。",
+        {"nodeId": {"type": "string"}, "memoryId": {"type": "string"},
+         "relationType": {"type": "string", "enum": [
+             "context", "prior_solution", "decision", "constraint", "evidence", "blocked_by", "supersedes",
+         ]}, "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+         "createdBy": {"type": "string"}, "reason": {"type": "string"}, **COMMON_CONTEXT},
+        ["nodeId", "memoryId", "reason"],
+    ),
+    "goal_memory_ref_list": _schema(
+        "读取目标节点关联的记忆引用元数据；不会读取记忆正文。",
+        {"nodeId": {"type": "string"}, **COMMON_CONTEXT},
+        ["nodeId"],
+    ),
+    "goal_memory_ref_delete": _schema(
+        "软删除目标节点上的记忆引用，不影响记忆服务中的原始记忆。",
+        {"nodeId": {"type": "string"}, "memoryRefId": {"type": "string"},
+         "reason": {"type": "string"}, **COMMON_CONTEXT},
+        ["nodeId", "memoryRefId", "reason"],
+    ),
 }

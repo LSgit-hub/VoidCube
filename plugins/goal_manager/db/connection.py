@@ -36,6 +36,9 @@ PROGRESS_MODES = {"manual", "weighted_children", "evidence_based"}
 EDGE_TYPES = {"decomposes_to", "depends_on", "blocks"}
 ACTORS = {"user", "agent", "supervisor", "system"}
 EVIDENCE_TYPES = {"test_result", "ci_build", "git_commit", "pr", "issue", "note", "file", "manual"}
+MEMORY_REF_RELATIONS = {
+    "context", "prior_solution", "decision", "constraint", "evidence", "blocked_by", "supersedes",
+}
 LIFECYCLE_EVENT_TYPES = {
     "record_execution_result": "execution_result",
     "record_observation": "observation",
@@ -96,6 +99,12 @@ def _event_payload(row: dict[str, Any]) -> dict[str, Any]:
     result = dict(row)
     result["before"] = load_json(result.pop("before_json", None))
     result["after"] = load_json(result.pop("after_json", None))
+    return result
+
+
+def _memory_ref_payload(row: dict[str, Any]) -> dict[str, Any]:
+    result = dict(row)
+    result["confidence"] = float(result.get("confidence", 1))
     return result
 
 
@@ -216,6 +225,17 @@ class GoalStore:
         if row is None:
             raise KeyError(f"edge not found: {edge_id}")
         return _edge_payload(row)
+
+    def _get_memory_ref(
+        self, conn: sqlite3.Connection, memory_ref_id: str, *, include_deleted: bool = False,
+    ) -> dict[str, Any]:
+        query = "SELECT * FROM goal_memory_refs WHERE id = ?"
+        if not include_deleted:
+            query += " AND deleted_at IS NULL"
+        row = _row(conn.execute(query, (memory_ref_id,)).fetchone())
+        if row is None:
+            raise KeyError(f"memory reference not found: {memory_ref_id}")
+        return _memory_ref_payload(row)
 
     def _ensure_project(self, conn: sqlite3.Connection, project_id: str) -> dict[str, Any]:
         row = _row(conn.execute(
@@ -1033,6 +1053,101 @@ class GoalStore:
         )
         return after
 
+    def add_memory_reference(
+        self,
+        node_id: str,
+        memory_id: str,
+        *,
+        relation_type: str = "context",
+        confidence: float = 1,
+        created_by: str = "agent",
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Attach an opaque memory owner id to a goal node.
+
+        The Goal Manager never dereferences ``memory_id``.  This keeps memory
+        ownership, content and access control in the memory service.
+        """
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        memory_id = _text(memory_id, "memory_id", required=True)
+        relation_type = _text(relation_type, "relation_type", required=True)
+        if relation_type not in MEMORY_REF_RELATIONS:
+            raise ValueError(f"relation_type must be one of {sorted(MEMORY_REF_RELATIONS)}")
+        confidence = _number(confidence, "confidence", 1)
+        created_by = _text(created_by, "created_by", required=True)
+        reason = _text(reason, "reason", required=True)
+        with self._transaction() as conn:
+            node = self._get_node(conn, node_id)
+            existing = conn.execute(
+                "SELECT * FROM goal_memory_refs WHERE node_id=? AND memory_id=? "
+                "AND relation_type=? AND deleted_at IS NULL",
+                (node_id, memory_id, relation_type),
+            ).fetchone()
+            if existing is not None:
+                return {"memory_ref": _memory_ref_payload(dict(existing)), "idempotent_reused": True}
+            memory_ref_id = new_id("memref_")
+            now = utc_now()
+            conn.execute(
+                "INSERT INTO goal_memory_refs "
+                "(id, project_id, node_id, memory_id, relation_type, confidence, created_by, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (memory_ref_id, node["project_id"], node_id, memory_id, relation_type,
+                 confidence, created_by, now),
+            )
+            after = self._get_memory_ref(conn, memory_ref_id)
+            self._event(
+                conn, project_id=node["project_id"], event_type="create_memory_reference",
+                entity_type="memory_reference", entity_id=memory_ref_id, after=after, reason=reason,
+                batch_id=None, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+            )
+            return {"memory_ref": after}
+
+    def list_memory_references(self, node_id: str, *, include_deleted: bool = False) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            self._get_node(conn, node_id)
+            query = "SELECT * FROM goal_memory_refs WHERE node_id=?"
+            if not include_deleted:
+                query += " AND deleted_at IS NULL"
+            query += " ORDER BY created_at DESC"
+            return [
+                _memory_ref_payload(dict(row))
+                for row in conn.execute(query, (node_id,)).fetchall()
+            ]
+
+    def delete_memory_reference(
+        self,
+        node_id: str,
+        memory_ref_id: str,
+        *,
+        reason: str,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        with self._transaction() as conn:
+            node = self._get_node(conn, node_id)
+            before = self._get_memory_ref(conn, memory_ref_id)
+            if before["node_id"] != node_id or before["project_id"] != node["project_id"]:
+                raise KeyError(f"memory reference not found: {memory_ref_id}")
+            now = utc_now()
+            conn.execute(
+                "UPDATE goal_memory_refs SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                (now, memory_ref_id),
+            )
+            after = self._get_memory_ref(conn, memory_ref_id, include_deleted=True)
+            self._event(
+                conn, project_id=node["project_id"], event_type="delete_memory_reference",
+                entity_type="memory_reference", entity_id=memory_ref_id, before=before, after=after,
+                reason=reason, batch_id=None, actor_type=actor_type, actor_id=actor_id,
+                session_id=session_id,
+            )
+            return {"memory_ref": after}
+
     def get_node(self, node_id: str) -> dict[str, Any]:
         with self._connect() as conn:
             node = self._get_node(conn, node_id)
@@ -1373,6 +1488,14 @@ class GoalStore:
                     blocks.append({"id": item["target_id"], "title": item["title"], "status": item["status"]})
             return {
                 "node": node, "children": children, "dependencies": deps, "blocks": blocks,
+                # These are opaque links only; consumers must ask the memory
+                # owner for content under its own authorization rules.
+                "memory_refs": [
+                    _memory_ref_payload(dict(row)) for row in conn.execute(
+                        "SELECT * FROM goal_memory_refs WHERE node_id=? AND deleted_at IS NULL "
+                        "ORDER BY created_at DESC LIMIT 50", (node_id,),
+                    ).fetchall()
+                ],
                 "evidence": [dict(row) for row in conn.execute(
                     "SELECT * FROM goal_evidence WHERE node_id=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 20",
                     (node_id,),

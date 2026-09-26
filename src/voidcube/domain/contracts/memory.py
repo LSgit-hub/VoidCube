@@ -134,6 +134,21 @@ class MemoryProvider(ABC):
         """
         raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
 
+    def resolve_goal_memory_refs(
+        self,
+        memory_refs: list[Dict[str, Any]],
+        *,
+        session_id: str = "",
+    ) -> str:
+        """Resolve explicitly linked Goal memory into a bounded context block.
+
+        Providers that own an authorized MemoryClient may opt in.  The default
+        keeps Goal Manager usable with providers that have no linked-memory
+        capability.
+        """
+        del memory_refs, session_id
+        return ""
+
     def shutdown(self) -> EffectOutcome:
         """Clean shutdown — flush queues, close connections."""
         return EffectOutcome(status="skipped", details={"reason": "no_shutdown_hook"})

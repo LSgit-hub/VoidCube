@@ -101,3 +101,25 @@ CREATE TABLE IF NOT EXISTS goal_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_goal_evidence_node
     ON goal_evidence(node_id, deleted_at);
+
+-- Goal Manager stores only opaque references into the memory owner.  Memory
+-- content, embeddings and permission data remain outside this database.
+CREATE TABLE IF NOT EXISTS goal_memory_refs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    memory_id TEXT NOT NULL,
+    relation_type TEXT NOT NULL CHECK (relation_type IN
+        ('context','prior_solution','decision','constraint','evidence','blocked_by','supersedes')),
+    confidence REAL NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    deleted_at TEXT,
+    FOREIGN KEY (project_id) REFERENCES goal_projects(id),
+    FOREIGN KEY (node_id) REFERENCES goal_nodes(id)
+);
+CREATE INDEX IF NOT EXISTS idx_goal_memory_refs_node
+    ON goal_memory_refs(node_id, deleted_at, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_memory_refs_active
+    ON goal_memory_refs(node_id, memory_id, relation_type)
+    WHERE deleted_at IS NULL;

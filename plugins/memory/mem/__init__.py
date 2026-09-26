@@ -208,6 +208,38 @@ class MemMemoryProvider(MemoryProvider):
             "of recalled evidence."
         )
 
+    def resolve_goal_memory_refs(
+        self,
+        memory_refs: list[Dict[str, Any]],
+        *,
+        session_id: str = "",
+    ) -> str:
+        """Resolve Goal references through this provider's authorized client."""
+        if not self._initialized or self._memory_client is None:
+            return ""
+        from voidcube.application.goal_memory_context import (
+            GoalMemoryContextBudget,
+            build_goal_memory_context_block,
+            resolve_goal_memory_refs,
+        )
+
+        budget = GoalMemoryContextBudget(
+            max_refs=6,
+            max_context_chars=min(3000, self._prefetch_max_context_chars),
+            max_item_chars=900,
+        )
+        try:
+            resolution = resolve_goal_memory_refs(
+                memory_refs,
+                self._memory_client,
+                budget=budget,
+                session_id=str(session_id or self._session_id or "").strip() or None,
+            )
+            return build_goal_memory_context_block(resolution, budget=budget)
+        except Exception as exc:
+            logger.warning("Goal linked-memory resolution unavailable: %s", exc)
+            return ""
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return [
             {

@@ -634,6 +634,29 @@ def goal_prompt(goal: Mapping[str, Any] | None) -> str:
     )
 
 
+def resolve_goal_memory_context(host: Any, goal: Mapping[str, Any] | None) -> str:
+    """Resolve linked memory only when an active Goal Manager goal is read."""
+    if not goal or goal.get("status") != ACTIVE or goal.get("backend") != "goal_manager":
+        return ""
+    node_id = str(goal.get("root_node_id") or "").strip()
+    if not node_id:
+        return ""
+    try:
+        from plugins.goal_manager.tools.client import GoalClient
+
+        context = GoalClient().context(node_id)
+        refs = context.get("memory_refs") or []
+        memory = getattr(host, "_memory_provider", None)
+        if memory is None:
+            memory = getattr(host, "memory_provider", None)
+        resolver = getattr(memory, "resolve_goal_memory_refs", None)
+        if not callable(resolver) or not isinstance(refs, list):
+            return ""
+        return str(resolver(refs, session_id=str(getattr(host, "session_id", "") or "")) or "")
+    except Exception:
+        return ""
+
+
 __all__ = [
     "ACTIVE",
     "COMPLETED",
@@ -651,4 +674,5 @@ __all__ = [
     "bind_goal_backend",
     "backend_status",
     "goal_prompt",
+    "resolve_goal_memory_context",
 ]

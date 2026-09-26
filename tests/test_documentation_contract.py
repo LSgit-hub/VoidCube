@@ -16,6 +16,7 @@ ACTIVE_DOCS = {
     "mem-integration-contract.md",
     "mem-temporary-memory-contract.md",
     "memory-resource-contract.md",
+    "goal-management-contract.md",
     "operations.md",
     "release.md",
     "testing.md",

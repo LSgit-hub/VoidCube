@@ -2354,9 +2354,13 @@ class VoidcubeCLI:
 
     def _effective_system_prompt(self) -> str | None:
         """Combine the configured prompt with the current session goal."""
-        from .session_goal_runtime import get_goal, goal_prompt
+        from .session_goal_runtime import get_goal, goal_prompt, resolve_goal_memory_context
 
-        parts = [self.system_prompt or "", goal_prompt(get_goal(self))]
+        goal = get_goal(self)
+        parts = [self.system_prompt or "", goal_prompt(goal)]
+        linked_memory = resolve_goal_memory_context(self, goal)
+        if linked_memory:
+            parts.append(linked_memory)
         prompt = "\n\n".join(part for part in parts if part).strip()
         return prompt or None
 

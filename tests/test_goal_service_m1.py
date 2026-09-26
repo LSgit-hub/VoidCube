@@ -138,6 +138,14 @@ def test_protocol_tools_route_to_goal_service_contracts(monkeypatch):
     client.call_tool("goal_plan_review", {"projectId": "proj_1"})
     client.call_tool("goal_replan", {"projectId": "proj_1", "reason": "revise plan"})
     client.call_tool("goal_lifecycle_get", {"nodeId": "goal_1"})
+    client.call_tool("goal_memory_ref_add", {
+        "nodeId": "goal_1", "memoryId": "memory:1", "relationType": "context",
+        "confidence": 0.7, "reason": "link context", "session_id": "s1",
+    })
+    client.call_tool("goal_memory_ref_list", {"nodeId": "goal_1"})
+    client.call_tool("goal_memory_ref_delete", {
+        "nodeId": "goal_1", "memoryRefId": "memref_1", "reason": "unlink",
+    })
     client.call_tool("goal_record_execution_result", {
         "nodeId": "goal_1", "status": "succeeded", "summary": "ran", "outputs": {"exit_code": 0},
         "reason": "record execution",
@@ -168,13 +176,20 @@ def test_protocol_tools_route_to_goal_service_contracts(monkeypatch):
     assert calls[2]["path"] == "/api/goals/projects/proj_1/plan-review"
     assert calls[3]["path"] == "/api/goals/projects/proj_1/replan"
     assert calls[4]["path"] == "/api/goals/nodes/goal_1/lifecycle"
-    assert calls[5]["path"] == "/api/goals/nodes/goal_1/execution-results"
-    assert calls[5]["payload"]["outputs"] == {"exit_code": 0}
-    assert calls[6]["payload"]["execution_result_id"] == "exec_1"
-    assert calls[7]["payload"]["criterion_index"] == 0
-    assert calls[8]["payload"]["verification_id"] == "ver_1"
-    assert calls[8]["payload"]["expected_version"] == 2
-    assert calls[9]["path"] == "/api/goals/nodes/goal_1/submit-for-review"
+    assert calls[5]["path"] == "/api/goals/nodes/goal_1/memory-refs"
+    assert calls[5]["payload"]["memory_id"] == "memory:1"
+    assert calls[5]["payload"]["confidence"] == 0.7
+    assert calls[6]["path"] == "/api/goals/nodes/goal_1/memory-refs"
+    assert calls[6]["method"] == "GET"
+    assert calls[7]["path"] == "/api/goals/nodes/goal_1/memory-refs/memref_1"
+    assert calls[7]["method"] == "DELETE"
+    assert calls[8]["path"] == "/api/goals/nodes/goal_1/execution-results"
+    assert calls[8]["payload"]["outputs"] == {"exit_code": 0}
+    assert calls[9]["payload"]["execution_result_id"] == "exec_1"
+    assert calls[10]["payload"]["criterion_index"] == 0
+    assert calls[11]["payload"]["verification_id"] == "ver_1"
+    assert calls[11]["payload"]["expected_version"] == 2
+    assert calls[12]["path"] == "/api/goals/nodes/goal_1/submit-for-review"
 
 
 def test_session_project_client_retries_server_failure_with_same_key(monkeypatch):
@@ -489,6 +504,51 @@ def test_lifecycle_records_rollback_and_redo_without_duplicates(store):
     assert results[0]["after"]["id"] == recorded["execution_result"]["id"]
 
 
+def test_memory_references_are_opaque_audited_and_soft_deleted(store):
+    project = store.create_project("Memory links", reason="init")
+    node = store.create_node(
+        project["project"]["id"], {"node_type": "task", "title": "Use prior decision"}, reason="add"
+    )["node"]
+
+    added = store.add_memory_reference(
+        node["id"], "memory:abc-123", relation_type="prior_solution", confidence=0.8,
+        reason="link prior solution",
+    )
+    ref = added["memory_ref"]
+    assert ref["memory_id"] == "memory:abc-123"
+    assert ref["relation_type"] == "prior_solution"
+    assert ref["confidence"] == 0.8
+    assert "content" not in ref
+    assert "embedding" not in ref
+    assert store.add_memory_reference(
+        node["id"], "memory:abc-123", relation_type="prior_solution", reason="retry"
+    )["idempotent_reused"] is True
+
+    context = store.get_context(node["id"])
+    assert context["memory_refs"] == [ref]
+    event_types = {event["event_type"] for event in store.list_events(project["project"]["id"])}
+    assert "create_memory_reference" in event_types
+
+    deleted = store.delete_memory_reference(node["id"], ref["id"], reason="unlink")
+    assert deleted["memory_ref"]["deleted_at"]
+    assert store.list_memory_references(node["id"]) == []
+    assert store.get_context(node["id"])["memory_refs"] == []
+    with pytest.raises(KeyError, match="memory reference not found"):
+        store.delete_memory_reference(node["id"], ref["id"], reason="repeat unlink")
+
+
+def test_memory_reference_is_scoped_to_its_node(store):
+    first = store.create_project("First", reason="init")
+    second = store.create_project("Second", reason="init")
+    first_node = first["root"]["id"]
+    second_node = second["root"]["id"]
+    ref = store.add_memory_reference(first_node, "memory:private", reason="link")["memory_ref"]
+
+    with pytest.raises(KeyError, match="memory reference not found"):
+        store.delete_memory_reference(second_node, ref["id"], reason="cross project delete")
+    assert store.list_memory_references(first_node)[0]["memory_id"] == "memory:private"
+
+
 def test_verified_evidence_can_be_applied_then_human_review_approves(store):
     project = store.create_project("Reviewed", reason="init")
     task = store.create_node(
@@ -629,6 +689,26 @@ def test_api_and_tool_schemas(tmp_path):
             )
             assert task.status_code == 201
             task_id = task.json()["node"]["id"]
+            memory_ref = client.post(
+                f"/api/goals/nodes/{task_id}/memory-refs",
+                json={
+                    "memory_id": "memory:api-1", "relation_type": "decision", "confidence": 0.9,
+                    "reason": "attach decision",
+                },
+            )
+            assert memory_ref.status_code == 201
+            memory_ref_id = memory_ref.json()["memory_ref"]["id"]
+            context = client.get(f"/api/goals/nodes/{task_id}/context")
+            assert context.status_code == 200
+            assert context.json()["memory_refs"][0]["memory_id"] == "memory:api-1"
+            assert "content" not in context.json()["memory_refs"][0]
+            assert client.get(f"/api/goals/nodes/{task_id}/memory-refs").json()["memory_refs"]
+            deleted_ref = client.delete(
+                f"/api/goals/nodes/{task_id}/memory-refs/{memory_ref_id}",
+                params={"reason": "remove decision"},
+            )
+            assert deleted_ref.status_code == 200
+            assert client.get(f"/api/goals/nodes/{task_id}/memory-refs").json()["memory_refs"] == []
             execution = client.post(
                 f"/api/goals/nodes/{task_id}/execution-results",
                 json={"status": "succeeded", "summary": "ran", "outputs": ["result"], "reason": "record"},
@@ -705,14 +785,15 @@ def test_api_and_tool_schemas(tmp_path):
         app.state.goal_store.db_path.unlink(missing_ok=True)
         app.state.goal_store.db_path.with_name("test_goal_service_api.db.owner").unlink(missing_ok=True)
 
-    assert len(SCHEMAS) == 24
+    assert len(SCHEMAS) == 27
     from plugins.goal_manager.tools.agent_tools import NON_IDEMPOTENT_WRITE_TOOLS, READ_TOOLS
     assert READ_TOOLS.isdisjoint(NON_IDEMPOTENT_WRITE_TOOLS)
-    assert {"goal_protocol_next_action", "goal_plan_review", "goal_lifecycle_get"} <= READ_TOOLS
+    assert {"goal_protocol_next_action", "goal_plan_review", "goal_lifecycle_get", "goal_memory_ref_list"} <= READ_TOOLS
     assert {
         "goal_intent_contract_set", "goal_replan", "goal_record_execution_result",
         "goal_record_observation", "goal_verify_evidence", "goal_apply_evidence_verification",
         "goal_submit_for_review",
+        "goal_memory_ref_add", "goal_memory_ref_delete",
     } <= NON_IDEMPOTENT_WRITE_TOOLS
     for schema in SCHEMAS.values():
         assert schema["parameters"]["type"] == "object"

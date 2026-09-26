@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -153,6 +153,27 @@ class MemoryClient:
                 time.sleep(self.retry_base_seconds * (2**attempt))
         raise MemoryServiceUnavailable("Memory Service request exhausted retries")
 
+    def get_compressed(
+        self,
+        memory_id: str,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read one authorized compressed memory by opaque id.
+
+        The client identity remains the source of authorization.  Callers
+        cannot supply owner, workspace or domain through this convenience
+        method.
+        """
+        normalized = str(memory_id or "").strip()
+        if not normalized:
+            raise ValueError("memory_id is required")
+        return self.request_json(
+            "GET",
+            f"/compressed/{quote(normalized, safe='')}",
+            identity_session_id=session_id,
+        )
+
     @staticmethod
     def _validate_or_bind(payload: dict[str, Any], key: str, expected: str) -> None:
         supplied = payload.get(key)
@@ -276,6 +297,22 @@ class AsyncMemoryClient:
         if not isinstance(parsed, dict):
             raise MemoryProtocolError("Memory Service returned a non-object response")
         return parsed
+
+    async def get_compressed(
+        self,
+        memory_id: str,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read one authorized compressed memory by opaque id."""
+        normalized = str(memory_id or "").strip()
+        if not normalized:
+            raise ValueError("memory_id is required")
+        return await self.request_json(
+            "GET",
+            f"/compressed/{quote(normalized, safe='')}",
+            identity_session_id=session_id,
+        )
 
 
 __all__ = [

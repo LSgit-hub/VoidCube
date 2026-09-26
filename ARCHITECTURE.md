@@ -40,6 +40,8 @@ extensions -> declared plugin/skill contracts
 - `state.db`、`actions.db`、`scheduled_tasks.db`、`scheduled_writebacks.db`、`registry.db` 和技能 registry 各有单独 owner；outbox 是可靠传输队列，不是第二份长期记忆。
 - 所有记忆请求带 `owner_id`、`workspace_id`、`memory_domain` 和服务端 actor 能力。跨域传播必须可审计。
 
+Goal Manager 的职责和状态边界见 [单一目标管理契约](docs/goal-management-contract.md)。它管理当前工作的控制状态；MemAI 管理长期记忆，两者通过显式上下文引用协作。
+
 ## Gateway 边界
 
 Gateway 负责服务生命周期、健康、presence/scene/activity 聚合和外部管理入口。高频记忆和会话数据走对应 owner 的本地客户端，不经过通用 Gateway 路由。Gateway 不持有业务 SQLite 连接，也不执行 Memory CRUD。

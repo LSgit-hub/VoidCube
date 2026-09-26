@@ -91,6 +91,35 @@ def test_memory_client_rejects_identity_override_before_network(monkeypatch):
         )
 
 
+def test_memory_client_get_compressed_quotes_opaque_id(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"memory_id":"m/1","summary":"authorized"}'
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["method"] = request.method
+        captured["data"] = request.data
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("voidcube.infrastructure.memory.client.urlopen", fake_urlopen)
+    assert _client().get_compressed("m/1", session_id="session-7")["summary"] == "authorized"
+    assert captured["url"].startswith("http://127.0.0.1:6001/compressed/m%2F1?")
+    assert "memory_actor=api_a" in captured["url"]
+    assert "owner_id=local-user" in captured["url"]
+    assert captured["method"] == "GET"
+    assert captured["data"] is None
+
+
 def test_memory_client_retries_transient_http_error(monkeypatch):
     attempts = []
 

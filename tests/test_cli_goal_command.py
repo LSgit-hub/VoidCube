@@ -6,6 +6,7 @@ from queue import Queue
 import pytest
 
 from voidcube.interfaces.cli.commands.handlers.goal import GoalCommandPorts, handle_goal_command
+from voidcube.domain.goals import classify_goal_backend
 from voidcube.interfaces.cli.commands.router import parse_cli_command
 from voidcube.interfaces.cli.commands.registry import _goal_command_ports
 from voidcube.infrastructure.persistence.session_runtime import SessionDB
@@ -134,6 +135,50 @@ def test_active_goal_prompt_teaches_goal_manager_workflow():
     assert "Re-read the latest node version" in prompt
     assert "Attach real test, CI, Git, file" in prompt
     assert "Never claim completion" in prompt
+
+
+def test_effective_goal_prompt_resolves_linked_memory_only_for_goal_manager(monkeypatch):
+    host = _host()
+    host.system_prompt = "Base instructions"
+    create_goal(host, "Use a prior decision")
+    host._session_goals[host.session_id].update({
+        "backend": "goal_manager", "project_id": "proj-1", "root_node_id": "root-1",
+    })
+
+    class FakeClient:
+        def context(self, node_id):
+            assert node_id == "root-1"
+            return {"memory_refs": [{"memory_id": "m-1", "confidence": 1, "relation_type": "decision"}]}
+
+    class FakeMemory:
+        def resolve_goal_memory_refs(self, refs, *, session_id):
+            assert refs[0]["memory_id"] == "m-1"
+            assert session_id == "goal-session"
+            return "<goal-memory-context>linked</goal-memory-context>"
+
+    host._memory_provider = FakeMemory()
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", FakeClient)
+
+    prompt = VoidcubeCLI._effective_system_prompt(host)
+    assert "<goal-memory-context>linked</goal-memory-context>" in prompt
+
+
+def test_effective_goal_prompt_does_not_resolve_memory_for_session_goal(monkeypatch):
+    host = _host()
+    host.system_prompt = "Base instructions"
+    create_goal(host, "Simple session task")
+
+    def forbidden_client():
+        raise AssertionError("session goals must not resolve linked memory")
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", forbidden_client)
+    host._memory_provider = SimpleNamespace(
+        resolve_goal_memory_refs=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("session goals must not resolve linked memory")
+        )
+    )
+    prompt = VoidcubeCLI._effective_system_prompt(host)
+    assert "goal-memory-context" not in prompt
 
 
 def test_blocked_goal_is_mirrored_to_goal_manager_root(monkeypatch):
@@ -341,6 +386,69 @@ def test_goal_handler_creates_and_queues_objective():
     assert queued == ["Build a reliable terminal harness"]
     assert reset_count == 1
     assert output[0].startswith("goal_command.created")
+
+
+def test_goal_routing_keeps_simple_requests_in_session_goals():
+    decision = classify_goal_backend("Look up the current Python version")
+    assert decision.backend == "session"
+    assert decision.reasons == ()
+
+
+def test_goal_routing_promotes_multistep_verified_change():
+    decision = classify_goal_backend("修复 API 鉴权问题，然后补充回归测试并验证 CI")
+    assert decision.backend == "goal_manager"
+    assert {"multi_step", "verification", "change_or_risk"} <= set(decision.reasons)
+
+
+def test_explicit_goal_manager_route_always_wins():
+    decision = classify_goal_backend("简单目标", explicit=True)
+    assert decision.backend == "goal_manager"
+    assert decision.explicit is True
+
+
+@pytest.mark.parametrize(
+    ("objective", "expected_backend"),
+    [
+        ("查看当前 Python 版本", "session"),
+        ("解释一下这个函数", "session"),
+        ("把 README 的一句话改掉", "session"),
+        ("分析日志并给出建议", "session"),
+        ("检查这个文件是否有拼写错误", "session"),
+        ("修复 API 鉴权问题，然后补充回归测试并验证 CI", "goal_manager"),
+        ("重构数据库迁移，运行测试并发布版本", "goal_manager"),
+        ("部署服务、检查健康状态、记录结果", "goal_manager"),
+        ("实现功能 A；补充功能 B；更新文档", "goal_manager"),
+    ],
+)
+def test_goal_routing_realistic_sample_set(objective, expected_backend):
+    assert classify_goal_backend(objective).backend == expected_backend
+
+
+def test_complex_goal_is_bound_to_goal_manager_automatically(monkeypatch):
+    host = _host()
+    output: list[str] = []
+    calls: list[str] = []
+
+    class Client:
+        def health(self):
+            return True
+
+        def create_session_project(self, objective, session_id):
+            calls.append(f"{session_id}:{objective}")
+            return {"project": {"id": "proj-auto"}, "root": {"id": "root-auto"}}
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", Client)
+    ports = _wired_goal_ports(host, output)
+    handle_goal_command(
+        parse_cli_command("/goal 修复 API 鉴权问题，然后补充回归测试并验证 CI"),
+        ports=ports,
+    )
+
+    goal = get_goal(host)
+    assert goal["backend"] == "goal_manager"
+    assert goal["project_id"] == "proj-auto"
+    assert calls == ["goal-session:修复 API 鉴权问题，然后补充回归测试并验证 CI"]
+    assert "goal_command.backend_auto_enabled" in output
 
 
 def test_goal_handler_edits_unfinished_goal_and_requeues_new_objective():

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..router import ParsedCliCommand
+from .....domain.goals import classify_goal_backend
 
 
 MAX_GOAL_LENGTH = 4000
@@ -134,10 +135,14 @@ def handle_goal_command(request: ParsedCliCommand, *, ports: GoalCommandPorts) -
     if current:
         ports.clear_goal()
     ports.create_goal(objective)
+    routing = classify_goal_backend(objective, explicit=use_goal_manager)
+    use_goal_manager = routing.backend == "goal_manager"
     if use_goal_manager:
         binding = ports.bind_backend(objective) if ports.bind_backend is not None else None
         if not binding or binding.get("backend_status") != "available":
             ports.emit(ports.translate("goal_command.backend_unavailable"))
+        elif not action in {"glq", "--glq"}:
+            ports.emit(ports.translate("goal_command.backend_auto_enabled"))
     ports.reset_agent()
     ports.emit(ports.translate("goal_command.created", objective=objective))
     if ports.start_goal is not None:
