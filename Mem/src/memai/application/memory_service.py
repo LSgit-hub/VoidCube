@@ -123,6 +123,19 @@ from memai.indexes.timeline import (
 
 logger = logging.getLogger("memory_service")
 
+
+def _gateway_auth_token() -> str:
+    """Resolve Gateway root auth from environment, then shared config."""
+    token = str(os.getenv("GATEWAY_AUTH_TOKEN") or "").strip()
+    if token:
+        return token
+    try:
+        from voidcube.infrastructure.config.system import get_config
+
+        return str(get_config().gateway.auth_token or "").strip()
+    except Exception:
+        return ""
+
 _CMEM_COLUMNS = (
     "memory_id, memory_type, title, summary, timespan_start, timespan_end, "
     "importance, confidence, topics, entities, source_turns, timeline_parent_id, "
@@ -924,6 +937,7 @@ class MemoryApplicationService:
         self.config = config or MemoryServiceConfig()
         self._compression_task: asyncio.Task | None = None
         self._gateway_registration_task: asyncio.Task | None = None
+        self._gateway_health_report_task: asyncio.Task | None = None
         self._semantic_task: asyncio.Task | None = None
         self._maintenance_request_task: asyncio.Task | None = None
         self._semantic_wake = asyncio.Event()
@@ -932,6 +946,7 @@ class MemoryApplicationService:
         self._gateway_service_id: Optional[str] = None
         self._gateway_registration_healthy = False
         self._last_gateway_registration_check_at: Optional[str] = None
+        self._gateway_service_token: Optional[str] = None
         self._repository = repository or SQLiteMemoryRepository(
             self.config.db_path,
             backup_retention_count=self.config.backup_retention_count,
@@ -2442,6 +2457,7 @@ class MemoryApplicationService:
         finally:
             tasks = (
                 self._gateway_registration_task,
+                self._gateway_health_report_task,
                 self._compression_task,
                 self._semantic_task,
                 self._maintenance_request_task,
@@ -2494,8 +2510,15 @@ class MemoryApplicationService:
             import aiohttp
 
             async with aiohttp.ClientSession() as session:
+                gateway_token = _gateway_auth_token()
+                headers = (
+                    {"Authorization": f"Bearer {gateway_token}"}
+                    if gateway_token
+                    else {}
+                )
                 async with session.get(
                     f"{self.config.gateway_address}/admin/services/{service_id}",
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:
                     if response.status != 200:
@@ -2535,6 +2558,46 @@ class MemoryApplicationService:
                     exc_info=True,
                 )
             await asyncio.sleep(interval)
+
+    async def _report_gateway_health(self, healthy: bool) -> bool:
+        """Publish memory health with the token issued for this registration."""
+        service_id = str(self._gateway_service_id or "").strip()
+        token = str(self._gateway_service_token or "").strip()
+        if not service_id or not token:
+            return False
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                headers = {"x-voidcube-service-token": token}
+                gateway_token = _gateway_auth_token()
+                if gateway_token:
+                    headers["Authorization"] = f"Bearer {gateway_token}"
+                async with session.post(
+                    f"{self.config.gateway_address.rstrip('/')}/health/{service_id}",
+                    json={"healthy": bool(healthy)},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
+                    if response.status in {401, 404}:
+                        self._gateway_service_id = None
+                        self._gateway_service_token = None
+                        self._gateway_registration_healthy = False
+                    return response.status == 200
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Memory Gateway health report failed: %s", exc)
+            return False
+
+    def _queue_gateway_health_report(self, healthy: bool) -> None:
+        """Report control-plane health without delaying the local health probe."""
+        task = self._gateway_health_report_task
+        if task is not None and not task.done():
+            return
+        self._gateway_health_report_task = asyncio.create_task(
+            self._report_gateway_health(healthy)
+        )
 
     async def _compression_loop(self) -> None:
         """Periodically trigger memory compression (runs in the memory service).
@@ -3074,6 +3137,10 @@ class MemoryApplicationService:
             and self._tier2_bridge_state != "degraded"
         )
         database_healthy = database["readable"] and database["integrity"] == "ok"
+        self._queue_gateway_health_report(service_healthy and database_healthy)
+        # Let a fast report update registration state before returning while
+        # still yielding immediately when the Gateway is slow or unavailable.
+        await asyncio.sleep(0)
         return {
             "status": (
                 "healthy" if service_healthy and database_healthy else "degraded"
@@ -6896,6 +6963,9 @@ class MemoryApplicationService:
 
     async def register_with_gateway(self, *, max_retries: int = 5):
         url = f"{self.config.gateway_address}/register"
+        self._gateway_service_id = None
+        self._gateway_service_token = None
+        self._gateway_registration_healthy = False
         payload = {
             "service_name": "memory-service",
             "service_type": "memory",
@@ -6915,9 +6985,7 @@ class MemoryApplicationService:
                         "json": payload,
                         "timeout": 10,
                     }
-                    gateway_token = str(
-                        os.getenv("GATEWAY_AUTH_TOKEN") or ""
-                    ).strip()
+                    gateway_token = _gateway_auth_token()
                     if gateway_token:
                         request_kwargs["headers"] = {
                             "Authorization": f"Bearer {gateway_token}"
@@ -6925,15 +6993,25 @@ class MemoryApplicationService:
                     async with session.post(url, **request_kwargs) as response:
                         if response.status == 201:
                             result = await response.json()
+                            service_id = str(result.get("service_id") or "").strip()
                             logger.info(
                                 "Registered with gateway (attempt %d): %s",
                                 attempt,
                                 {
-                                    "service_id": result.get("service_id"),
+                                    "service_id": service_id,
                                     "status": result.get("status"),
                                 },
                             )
-                            self._gateway_service_id = result["service_id"]
+                            service_token = str(
+                                result.get("service_token") or ""
+                            ).strip() or None
+                            if not service_id or not service_token:
+                                raise RuntimeError(
+                                    "Gateway registration response did not include "
+                                    "service credentials"
+                                )
+                            self._gateway_service_id = service_id
+                            self._gateway_service_token = service_token
                             self._gateway_registration_healthy = True
                             self._last_gateway_registration_check_at = (
                                 datetime.now().isoformat()

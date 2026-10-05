@@ -244,7 +244,8 @@ def cmd_gateway(args):
     action = getattr(args, "gateway_action", None) or "status"
     from ....infrastructure.gateway.service_launcher import start_all, stop_all, print_status
     if action == "start":
-        start_all()
+        if start_all() is False:
+            raise SystemExit(1)
     elif action == "stop":
         stop_all()
     else:

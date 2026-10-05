@@ -4,6 +4,7 @@ from voidcube.application.goal_memory_context import (
     GoalMemoryContextBudget,
     build_goal_memory_context_block,
     resolve_goal_memory_refs,
+    resolve_goal_memory_refs_with_metrics,
 )
 
 
@@ -89,3 +90,18 @@ def test_budget_rejects_invalid_limits():
             pass
         else:
             raise AssertionError("invalid budget was accepted")
+
+
+def test_resolution_metrics_contain_counts_and_no_memory_identity():
+    fetcher = FakeMemoryFetcher({"m1": {"summary": "fact"}})
+    resolution, metrics = resolve_goal_memory_refs_with_metrics(
+        [{"memory_id": "m1", "confidence": 1}], fetcher,
+        budget=GoalMemoryContextBudget(max_refs=1),
+    )
+    assert resolution["resolved_count"] == 1
+    assert metrics["reference_count"] == 1
+    assert metrics["resolved_count"] == 1
+    assert metrics["skipped_count"] == 0
+    assert metrics["budget_truncated"] is False
+    assert metrics["elapsed_ms"] >= 0
+    assert "memory_id" not in metrics

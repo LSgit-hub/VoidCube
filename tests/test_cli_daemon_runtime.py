@@ -105,3 +105,14 @@ def test_stop_all_uses_snapshot_when_service_registry_changes(monkeypatch):
         service_launcher.SERVICES.update(original_services)
 
     assert calls == ["gateway", "memory"]
+
+
+def test_handle_serve_command_reports_lifecycle_exception(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.service_launcher.start_all",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("port configuration invalid")),
+    )
+
+    daemon_runtime.handle_serve_command("start")
+
+    assert "Service lifecycle failed: port configuration invalid" in capsys.readouterr().out

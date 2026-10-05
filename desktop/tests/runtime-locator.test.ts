@@ -29,6 +29,23 @@ describe('runtime locator', () => {
     expect(runtime.pythonCommand).toBe('C:\\Python314\\python.exe')
     expect(runtime.cliArgs).toEqual(['-m', 'voidcube.interfaces.cli.main'])
   })
+
+  it('prefers the bundled CLI executable when the packaged sidecar exists', () => {
+    const root = mkdtempSync(join(tmpdir(), 'voidcube-desktop-bundle-'))
+    try {
+      const resources = join(root, 'resources')
+      mkdirSync(join(resources, 'voidcube'), { recursive: true })
+      writeFileSync(join(resources, 'voidcube', 'voidcube.exe'), '')
+      const runtime = resolveRuntimePaths({
+        resourcesPath: resources,
+        env: { PATH: '' },
+        platform: 'win32'
+      })
+      expect(runtime.cliExecutable).toBe(join(resources, 'voidcube', 'voidcube.exe'))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('monitor URL policy', () => {

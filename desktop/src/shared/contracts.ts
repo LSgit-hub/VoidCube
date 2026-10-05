@@ -24,12 +24,18 @@ export interface ServiceInfo {
   port: number
   pid?: number | null
   state: ServicePhase
+  registered?: boolean
+  controlPlaneHealthy?: boolean
+  restartBlocked?: string
 }
 
 export interface PluginServiceInfo {
   port: number
   pid?: number | null
   state: ServicePhase
+  registered?: boolean
+  controlPlaneHealthy?: boolean
+  restartBlocked?: string
 }
 
 export interface PluginInfo {

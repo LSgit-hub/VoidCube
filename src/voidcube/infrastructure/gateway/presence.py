@@ -50,7 +50,18 @@ class GatewayPresenceClient:
 
     @property
     def url(self) -> str:
-        return (self.base_url.strip() or default_gateway_url()).rstrip("/")
+        normalized = (self.base_url.strip() or default_gateway_url()).rstrip("/")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Gateway URL must use http or https")
+        return normalized
 
     def is_running(
         self,
@@ -58,17 +69,17 @@ class GatewayPresenceClient:
         *,
         socket_factory: Callable[..., Any] | None = None,
     ) -> bool:
-        parsed = urlsplit(self.url)
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
         connection = None
         try:
+            parsed = urlsplit(self.url)
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
             socket_factory = socket_factory or socket.socket
             connection = socket_factory(socket.AF_INET, socket.SOCK_STREAM)
             connection.settimeout(timeout)
             connection.connect((host, port))
             return True
-        except OSError:
+        except (OSError, ValueError):
             return False
         finally:
             if connection is not None:
@@ -173,16 +184,16 @@ class GatewayPresenceClient:
         include_auth: bool,
         opener: Callable[..., Any] | None,
     ) -> bool:
-        headers = {"Content-Type": "application/json"}
-        if include_auth:
-            headers.update(gateway_auth_headers(self.auth_token))
-        request = Request(
-            f"{self.url}/{path.lstrip('/')}",
-            data=json.dumps(dict(payload)).encode(),
-            headers=headers,
-            method="POST",
-        )
         try:
+            headers = {"Content-Type": "application/json"}
+            if include_auth:
+                headers.update(gateway_auth_headers(self.auth_token))
+            request = Request(
+                f"{self.url}/{path.lstrip('/')}",
+                data=json.dumps(dict(payload)).encode(),
+                headers=headers,
+                method="POST",
+            )
             if opener is None:
                 from urllib.request import urlopen
 

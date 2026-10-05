@@ -39,11 +39,22 @@ from memai.application.tier1_to_tier2_bridge import (
     Tier1ToTier2Bridge,
     _write_compressed_memories_to_db,
 )
+import memai.application.memory_service as memory_service_module
 
 
 def _make_service(tmp_path: Path) -> MemoryService:
     cfg = MemoryServiceConfig(db_path=str(tmp_path / "mem.db"))
     return MemoryService(cfg)
+
+
+def test_memory_gateway_auth_falls_back_to_shared_config(monkeypatch):
+    monkeypatch.delenv("GATEWAY_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "voidcube.infrastructure.config.system.get_config",
+        lambda: SimpleNamespace(gateway=SimpleNamespace(auth_token="config-root")),
+    )
+
+    assert memory_service_module._gateway_auth_token() == "config-root"
 
 
 def test_memory_service_does_not_own_a_second_tier2_bridge() -> None:
@@ -319,6 +330,180 @@ async def test_memory_health_stays_local_when_gateway_registration_is_unavailabl
 
     assert health["status"] == "healthy"
     assert health["gateway_registration"]["healthy"] is False
+
+
+@pytest.mark.asyncio
+async def test_memory_rejects_registration_without_service_token(tmp_path, monkeypatch):
+    service = _make_service(tmp_path)
+
+    class _Response:
+        status = 201
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def json(self):
+            return {"service_id": "memory-service"}
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(ClientSession=_Session),
+    )
+
+    assert await service.register_with_gateway(max_retries=1) is None
+    assert service._gateway_service_id is None
+    assert service._gateway_service_token is None
+    assert service._gateway_registration_healthy is False
+
+
+@pytest.mark.asyncio
+async def test_memory_health_reports_gateway_status_with_registered_token(tmp_path, monkeypatch):
+    service = _make_service(tmp_path)
+    service._gateway_service_id = "memory-service"
+    service._gateway_service_token = "memory-token"
+    monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "root-token")
+    requests = []
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def post(self, url, *, json, headers, timeout):
+            requests.append((url, json, headers, timeout.total))
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(
+        ClientSession=_Session,
+        ClientTimeout=lambda **kwargs: SimpleNamespace(total=kwargs["total"]),
+    ))
+
+    health = await service.health_check()
+
+    assert health["status"] == "healthy"
+    assert requests[0][0].endswith("/health/memory-service")
+    assert requests[0][1] == {"healthy": True}
+    assert requests[0][2] == {
+        "x-voidcube-service-token": "memory-token",
+        "Authorization": "Bearer root-token",
+    }
+
+
+@pytest.mark.asyncio
+async def test_memory_health_clears_expired_gateway_credentials(tmp_path, monkeypatch):
+    service = _make_service(tmp_path)
+    service._gateway_service_id = "stale-memory-service"
+    service._gateway_service_token = "stale-token"
+    service._gateway_registration_healthy = True
+
+    class _Response:
+        status = 401
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientSession=_Session,
+            ClientTimeout=lambda **kwargs: SimpleNamespace(total=kwargs["total"]),
+        ),
+    )
+
+    await service.health_check()
+
+    assert service._gateway_service_id is None
+    assert service._gateway_service_token is None
+    assert service._gateway_registration_healthy is False
+
+
+@pytest.mark.asyncio
+async def test_memory_health_does_not_wait_for_gateway_health_report(tmp_path, monkeypatch):
+    service = _make_service(tmp_path)
+    service._gateway_service_id = "slow-memory-service"
+    service._gateway_service_token = "memory-token"
+    report_started = asyncio.Event()
+    release_report = asyncio.Event()
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            report_started.set()
+            await release_report.wait()
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(
+            ClientSession=_Session,
+            ClientTimeout=lambda **kwargs: SimpleNamespace(total=kwargs["total"]),
+        ),
+    )
+
+    health = await service.health_check()
+
+    assert health["status"] == "healthy"
+    await report_started.wait()
+    task = service._gateway_health_report_task
+    assert task is not None and not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release_report.set()
 
 
 @pytest.mark.asyncio

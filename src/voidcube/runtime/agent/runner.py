@@ -3749,11 +3749,23 @@ class AIAgent:
             )
         elif function_name in {"session_goal", "get_goal", "create_goal", "update_goal"}:
             from ...extensions.tools.session_goal_tool import dispatch_session_goal
+            from ...application.ports import DefaultSessionGoalPort, UnavailableGoalManagerPort
+            from ...runtime.goal_ports import create_goal_manager_port
 
             host = type("SessionGoalHost", (), {})()
             host.session_id = self.session_id
             host._session_db = self._session_db
             host._goal_event_sink = lambda event: self._event_port.emit(event)
+            host._session_goal_port = getattr(self, "_session_goal_port", None)
+            host._goal_lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+            if host._session_goal_port is None:
+                host._session_goal_port = DefaultSessionGoalPort()
+            host._goal_manager_port = getattr(
+                self, "_goal_manager_port", UnavailableGoalManagerPort(),
+            )
+            host._goal_manager_factory = getattr(
+                self, "_goal_manager_factory", create_goal_manager_port,
+            )
             if function_name == "get_goal":
                 action = "get"
             elif function_name == "create_goal":
@@ -3773,7 +3785,6 @@ class AIAgent:
                 ),
                 reason=function_args.get("reason"),
                 turn_id=self._goal_audit_turn_id,
-                allow_blocked=function_name == "update_goal",
             )
         elif (
             self._context_engine_tool_names
@@ -5111,22 +5122,30 @@ class AIAgent:
             sync_memory_fn = _sync_memory
 
         if turn_state.completed() and self._session_db is not None:
-            finish_goal_audit = getattr(
-                self._session_db, "finish_session_goal_audit_turn", None
-            )
+            goal_port = getattr(self, "_session_goal_port", None)
+            if goal_port is None:
+                from ...application.ports import DefaultSessionGoalPort
+                goal_port = DefaultSessionGoalPort()
             before_goal = None
             try:
                 before_goal = self._session_db.get_session_goal(self.session_id)
             except Exception:
                 pass
-            if callable(finish_goal_audit):
-                try:
-                    finish_goal_audit(self.session_id, self._goal_audit_turn_id)
-                except Exception:
-                    logger.warning(
-                        "Could not finalize session-goal blocker audit",
-                        exc_info=True,
-                    )
+            try:
+                goal_host = type("SessionGoalAuditHost", (), {})()
+                goal_host.session_id = self.session_id
+                goal_host._session_db = self._session_db
+                goal_host._goal_manager_port = getattr(self, "_goal_manager_port", None)
+                goal_host._goal_manager_factory = getattr(self, "_goal_manager_factory", None)
+                goal_host._session_goal_port = goal_port
+                goal_host._goal_lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+                goal_host._goal_event_sink = lambda event: self._event_port.emit(event)
+                goal_port.finish_goal_audit_turn(goal_host, self._goal_audit_turn_id)
+            except Exception:
+                logger.warning(
+                    "Could not finalize session-goal blocker audit",
+                    exc_info=True,
+                )
             try:
                 from ...domain.contracts.events import GoalEvent, GoalEventKind
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+import inspect
 import json
 import secrets
 
@@ -242,10 +243,29 @@ def build_memory_http_app(
                         )
 
         return await call_next(request)
+
+    def make_health_route(health_handler: HttpHandler):
+        async def health_route():
+            result = health_handler()
+            if inspect.isawaitable(result):
+                result = await result
+            if isinstance(result, JSONResponse):
+                return result
+            if isinstance(result, Mapping):
+                status = str(result.get("status") or "").strip().lower()
+                if status == "degraded":
+                    return JSONResponse(dict(result), status_code=503)
+            return result
+
+        return health_route
+
     for route in MEMORY_HTTP_ROUTES:
+        handler = handlers[route.handler]
+        if route.handler == "health_check":
+            handler = make_health_route(handler)
         app.add_api_route(
             route.path,
-            handlers[route.handler],
+            handler,
             methods=list(route.methods),
         )
     return app

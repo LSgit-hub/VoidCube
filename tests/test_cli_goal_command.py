@@ -35,6 +35,11 @@ def _host() -> SimpleNamespace:
     return SimpleNamespace(session_id="goal-session", _session_goals={})
 
 
+def _inject_goal_manager(host, client) -> None:
+    host._goal_manager_port = client
+    host._goal_manager_factory = lambda: client
+
+
 def test_goal_runtime_is_session_isolated_and_prompt_is_active_only():
     host = _host()
     other = SimpleNamespace(session_id="other-session", _session_goals={})
@@ -157,7 +162,7 @@ def test_effective_goal_prompt_resolves_linked_memory_only_for_goal_manager(monk
             return "<goal-memory-context>linked</goal-memory-context>"
 
     host._memory_provider = FakeMemory()
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", FakeClient)
+    _inject_goal_manager(host, FakeClient())
 
     prompt = VoidcubeCLI._effective_system_prompt(host)
     assert "<goal-memory-context>linked</goal-memory-context>" in prompt
@@ -199,7 +204,7 @@ def test_blocked_goal_is_mirrored_to_goal_manager_root(monkeypatch):
             updates.append((node_id, expected_version, status, reason, session_id))
             return {"node": {"id": node_id, "status": status, "version": 4}}
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", FakeClient)
+    _inject_goal_manager(host, FakeClient())
     assert update_goal(host, BLOCKED, "Waiting for credentials") is True
     assert updates == [("root-1", 3, BLOCKED, "Waiting for credentials", "goal-session")]
     assert get_goal(host)["backend_status"] == "available"
@@ -219,7 +224,7 @@ def test_complete_goal_calls_goal_manager_before_local_transition(monkeypatch):
             completed.append((node_id, reason, session_id))
             return {"node": {"id": node_id, "status": "completed"}}
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", CompletingClient)
+    _inject_goal_manager(host, CompletingClient())
     assert update_goal(host, COMPLETED, "verified") is True
     assert completed == [("root-1", "verified", "goal-session")]
     assert get_goal(host)["status"] == COMPLETED
@@ -237,7 +242,7 @@ def test_complete_goal_stays_active_when_goal_manager_rejects(monkeypatch):
         def complete_node(self, node_id, reason, *, session_id=None):
             raise RuntimeError("completion blocked")
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", RejectingClient)
+    _inject_goal_manager(host, RejectingClient())
     assert update_goal(host, COMPLETED, "premature") is False
     assert get_goal(host)["status"] == ACTIVE
     assert get_goal(host)["backend_status"] == "unavailable"
@@ -257,11 +262,33 @@ def test_completion_validation_failure_keeps_backend_available(monkeypatch):
         def complete_node(self, node_id, reason, *, session_id=None):
             raise GoalServiceError(409, {"detail": "goal completion blocked", "blockers": []})
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", ValidationClient)
+    _inject_goal_manager(host, ValidationClient())
     assert update_goal(host, COMPLETED, "premature") is False
     assert get_goal(host)["status"] == ACTIVE
     assert get_goal(host)["backend_status"] == "available"
     assert goal_update_error(host) == "Goal Manager 未通过完成校验"
+
+
+def test_completion_accepts_remote_already_completed_conflict(monkeypatch):
+    host = _host()
+    create_goal(host, "Complete idempotently")
+    host._session_goals[host.session_id].update({
+        "backend": "goal_manager", "project_id": "proj-1", "root_node_id": "root-1",
+        "backend_status": "available",
+    })
+
+    from plugins.goal_manager.tools.client import GoalServiceError
+
+    class AlreadyCompletedClient:
+        def complete_node(self, node_id, reason, *, session_id=None):
+            raise GoalServiceError(409, {
+                "detail": "node version conflict",
+                "latest": {"id": node_id, "status": "completed", "version": 4},
+            })
+
+    _inject_goal_manager(host, AlreadyCompletedClient())
+    assert update_goal(host, COMPLETED, "verified elsewhere") is True
+    assert get_goal(host)["backend_status"] == "available"
 
 
 def test_goal_handler_displays_completion_blockers():
@@ -281,6 +308,34 @@ def test_goal_handler_displays_completion_blockers():
     assert output == ["goal_command.complete_blocked_reason:子目标未完成：实现测试"]
 
 
+def test_goal_handler_status_surfaces_unavailable_goal_manager_backend():
+    output: list[str] = []
+    ports = GoalCommandPorts(
+        get_goal=lambda: {
+            "objective": "goal",
+            "status": ACTIVE,
+            "backend": "goal_manager",
+            "backend_status": "unavailable",
+        },
+        create_goal=lambda objective: {},
+        update_goal=lambda status, reason: False,
+        clear_goal=lambda: False,
+        start_goal=None,
+        reset_agent=lambda: None,
+        emit=output.append,
+        translate=lambda key, **kwargs: key,
+    )
+
+    handle_goal_command(parse_cli_command("/goal status"), ports=ports)
+
+    assert output == [
+        "goal_command.header\n"
+        "goal_command.status_active\n"
+        "goal_command.objective\n"
+        "goal_command.backend_unavailable"
+    ]
+
+
 def test_blocked_goal_stays_local_when_goal_manager_sync_fails(monkeypatch):
     host = _host()
     create_goal(host, "Keep local state")
@@ -293,7 +348,7 @@ def test_blocked_goal_stays_local_when_goal_manager_sync_fails(monkeypatch):
         def project(self, project_id):
             raise RuntimeError("service unavailable")
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", FailingClient)
+    _inject_goal_manager(host, FailingClient())
     assert update_goal(host, BLOCKED, "No network") is True
     assert get_goal(host)["status"] == BLOCKED
     assert get_goal(host)["backend_status"] == "unavailable"
@@ -317,13 +372,45 @@ def test_status_reconciles_blocked_goal_after_backend_recovery(monkeypatch):
             updates.append((node_id, expected_version, status, reason))
             return {"node": {"id": node_id, "version": expected_version + 1, "status": status}}
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", RecoveringClient)
+    _inject_goal_manager(host, RecoveringClient())
     result = backend_status(host, get_goal(host))
 
     assert result["backend_status"] == "available"
     assert result["backend_project"]["root"]["status"] == BLOCKED
     assert updates == [("root-1", 5, BLOCKED, "Service was unavailable")]
     assert get_goal(host)["backend_status"] == "available"
+
+
+def test_status_reports_unavailable_when_backend_status_persistence_is_stale():
+    host = _host()
+
+    class StaleRepository:
+        def get_session_goal(self, session_id):
+            return {
+                "session_id": session_id,
+                "objective": "Recover the goal service",
+                "status": BLOCKED,
+                "reason": "Service was unavailable",
+                "backend": "goal_manager",
+                "project_id": "proj-1",
+                "root_node_id": "root-1",
+                "backend_status": "unavailable",
+                "revision": 4,
+            }
+
+        def bind_session_goal_backend(self, **_kwargs):
+            return False
+
+    class RecoveringClient:
+        def project(self, project_id):
+            return {"root": {"id": "root-1", "version": 5, "status": BLOCKED}}
+
+    host._session_db = StaleRepository()
+    _inject_goal_manager(host, RecoveringClient())
+
+    result = backend_status(host, get_goal(host))
+
+    assert result["backend_status"] == "unavailable"
 
 
 def test_status_reconciles_resumed_goal_after_backend_recovery(monkeypatch):
@@ -344,11 +431,42 @@ def test_status_reconciles_resumed_goal_after_backend_recovery(monkeypatch):
             updates.append((node_id, expected_version, status, reason))
             return {"node": {"id": node_id, "version": expected_version + 1, "status": status}}
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", RecoveringClient)
+    _inject_goal_manager(host, RecoveringClient())
     result = backend_status(host, get_goal(host))
 
     assert result["backend_project"]["root"]["status"] == "in_progress"
     assert updates == [("root-1", 7, "in_progress", "Dependency restored")]
+    assert get_goal(host)["backend_status"] == "available"
+
+
+def test_status_reconciliation_retries_once_after_remote_version_conflict(monkeypatch):
+    host = _host()
+    create_goal(host, "Recover after concurrent edit")
+    host._session_goals[host.session_id].update({
+        "status": ACTIVE, "reason": "retry",
+        "backend": "goal_manager", "project_id": "proj-1", "root_node_id": "root-1",
+        "backend_status": "unavailable",
+    })
+    updates: list[int] = []
+
+    class ConflictError(RuntimeError):
+        status_code = 409
+
+    class ConflictingClient:
+        def project(self, project_id):
+            return {"root": {"id": "root-1", "version": 8, "status": "blocked"}}
+
+        def update_node_status(self, node_id, expected_version, status, reason, *, session_id=None):
+            updates.append(expected_version)
+            if len(updates) == 1:
+                raise ConflictError("stale version")
+            return {"node": {"id": node_id, "version": expected_version + 1, "status": status}}
+
+    _inject_goal_manager(host, ConflictingClient())
+    result = backend_status(host, get_goal(host))
+
+    assert result["backend_status"] == "available"
+    assert updates == [8, 8]
     assert get_goal(host)["backend_status"] == "available"
 
 
@@ -437,7 +555,7 @@ def test_complex_goal_is_bound_to_goal_manager_automatically(monkeypatch):
             calls.append(f"{session_id}:{objective}")
             return {"project": {"id": "proj-auto"}, "root": {"id": "root-auto"}}
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", Client)
+    _inject_goal_manager(host, Client())
     ports = _wired_goal_ports(host, output)
     handle_goal_command(
         parse_cli_command("/goal 修复 API 鉴权问题，然后补充回归测试并验证 CI"),
@@ -538,7 +656,7 @@ def test_goal_command_full_create_block_resume_complete_flow(monkeypatch, tmp_pa
         def complete_node(self, node_id, reason, *, session_id=None):
             return store.complete_node(node_id, reason=reason, session_id=session_id)
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", StoreClient)
+    _inject_goal_manager(host, StoreClient())
     ports = GoalCommandPorts(
         get_goal=lambda: get_goal(host),
         create_goal=lambda objective: create_goal(host, objective),
@@ -654,7 +772,7 @@ def test_glq_outage_reports_fallback_and_keeps_local_goal_usable(monkeypatch, fa
         def create_session_project(self, objective, session_id):
             raise RuntimeError("service unavailable")
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", UnavailableClient)
+    _inject_goal_manager(host, UnavailableClient())
     ports = _wired_goal_ports(host, output)
     handle_goal_command(parse_cli_command("/goal --glq\tShip the change"), ports=ports)
     assert get_goal(host)["backend"] == "session"
@@ -684,7 +802,7 @@ def test_glq_binding_persists_but_does_not_enable_manager_for_next_goal(monkeypa
         def complete_node(self, node_id, reason, *, session_id=None):
             calls.append(node_id)
 
-    monkeypatch.setattr("plugins.goal_manager.tools.client.GoalClient", Client)
+    _inject_goal_manager(host, Client())
     try:
         ports = _wired_goal_ports(host, output)
         handle_goal_command(parse_cli_command("/goal glq Ship with manager"), ports=ports)

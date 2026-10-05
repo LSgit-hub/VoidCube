@@ -18,6 +18,7 @@ let mainWindow: BrowserWindow | undefined
 let terminal: TerminalSession | undefined
 let services: ServiceController | undefined
 let quitting = false
+let terminalShutdownTimer: ReturnType<typeof setTimeout> | undefined
 
 const APP_ID = 'io.voidcube.desktop'
 
@@ -85,13 +86,21 @@ function createWindow(): BrowserWindow {
   else void window.loadFile(join(__dirname, '../renderer/index.html'))
   window.on('closed', () => {
     if (mainWindow === window) mainWindow = undefined
-    if (process.platform !== 'darwin' || !terminal) return
-    const closedTerminal = terminal
-    terminal = undefined
-    closedTerminal.requestGracefulExit()
-    setTimeout(() => closedTerminal.kill(), 1600)
+    if (process.platform === 'darwin' && !quitting) shutdownTerminal()
   })
   return window
+}
+
+function shutdownTerminal(): void {
+  const current = terminal
+  if (!current || !current.isActive()) return
+  terminal = undefined
+  current.requestGracefulExit()
+  if (terminalShutdownTimer !== undefined) clearTimeout(terminalShutdownTimer)
+  terminalShutdownTimer = setTimeout(() => {
+    terminalShutdownTimer = undefined
+    current.kill()
+  }, 1600)
 }
 
 async function probeMonitor(): Promise<MonitorProbe> {
@@ -221,21 +230,18 @@ function registerIpc(): void {
     }
     if (!services) return { ok: false, backend, error: '服务控制不可用' }
 
-    const configured = await services.setTerminalBackend(backend as TerminalBackend)
-    if (!configured.ok) return { ok: false, backend, error: configured.error }
-
-    const serviceResult = await services.control('restart')
-    if (!serviceResult.ok) {
+    const result = await services.setTerminalBackendAndRestart(backend as TerminalBackend)
+    if (!result.ok) {
       return {
         ok: false,
         backend,
-        services: serviceResult,
-        error: serviceResult.error || '托管服务重启失败，配置已写入但尚未完全生效'
+        services: result.services,
+        error: result.error || '执行环境切换失败'
       }
     }
 
     const terminalState = terminal?.restart()
-    return { ok: true, backend, services: serviceResult, terminal: terminalState }
+    return { ok: true, backend, services: result.services, terminal: terminalState }
   })
   ipcMain.handle('plugins:control', (_event, name: unknown, action: unknown) => {
     if (typeof name !== 'string' || !name || (action !== 'start' && action !== 'stop' && action !== 'restart')) {
@@ -269,12 +275,12 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', (event) => {
-  if (quitting || !terminal?.isActive()) return
+  if (quitting) return
+  if (!terminal?.isActive()) return
   event.preventDefault()
   quitting = true
-  terminal.requestGracefulExit()
+  shutdownTerminal()
   setTimeout(() => {
-    terminal?.kill()
     app.quit()
   }, 1600)
 })

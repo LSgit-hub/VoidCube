@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 from voidcube.infrastructure.config.runtime_paths import get_config_path
@@ -43,10 +45,35 @@ def _service_token() -> str:
     return os.getenv("GOAL_SERVICE_TOKEN", "").strip()
 
 
+def _path_segment(value: Any) -> str:
+    """Encode an opaque service identifier as one URL path segment."""
+    raw = str(value)
+    if "/" in raw or "\\" in raw:
+        raise ValueError("Goal Service identifiers cannot contain path separators")
+    return quote(raw, safe="")
+
+
 class GoalClient:
     def __init__(self, base_url: str | None = None, timeout: float = 5.0) -> None:
-        self.base_url = (base_url or _service_url()).rstrip("/")
-        self.timeout = timeout
+        normalized_url = (base_url or _service_url()).strip().rstrip("/")
+        parsed_url = urlsplit(normalized_url)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.netloc
+            or parsed_url.username
+            or parsed_url.password
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
+            raise ValueError("Goal Service URL must use http or https")
+        self.base_url = normalized_url
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError):
+            raise ValueError("Goal Service timeout must be a finite positive number") from None
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("Goal Service timeout must be a finite positive number")
+        self.timeout = normalized_timeout
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None, *,
                 query: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -65,7 +92,10 @@ class GoalClient:
         try:
             with urlopen(Request(url, data=body, headers=headers, method=method), timeout=self.timeout) as response:
                 raw = response.read()
-                return json.loads(raw.decode("utf-8")) if raw else {}
+                decoded = json.loads(raw.decode("utf-8")) if raw else {}
+                if not isinstance(decoded, dict):
+                    raise GoalServiceError(502, {"detail": "goal_service_invalid_response"})
+                return decoded
         except HTTPError as exc:
             raw = exc.read()
             try:
@@ -73,8 +103,10 @@ class GoalClient:
             except (UnicodeDecodeError, json.JSONDecodeError):
                 payload = {"detail": raw.decode("utf-8", errors="replace")}
             raise GoalServiceError(exc.code, payload) from exc
-        except URLError as exc:
+        except (URLError, TimeoutError, OSError) as exc:
             raise GoalServiceError(503, {"detail": "goal_service_unavailable"}) from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise GoalServiceError(502, {"detail": "goal_service_invalid_response"}) from exc
 
     def health(self) -> bool:
         try:
@@ -111,17 +143,17 @@ class GoalClient:
             return self.request("POST", "/api/goals/projects", payload)
 
     def project(self, project_id: str) -> dict[str, Any]:
-        return self.request("GET", f"/api/goals/projects/{project_id}")
+        return self.request("GET", f"/api/goals/projects/{_path_segment(project_id)}")
 
     def context(self, node_id: str) -> dict[str, Any]:
         """Read node context, including opaque linked-memory references."""
-        return self.request("GET", f"/api/goals/nodes/{node_id}/context")
+        return self.request("GET", f"/api/goals/nodes/{_path_segment(node_id)}/context")
 
     def update_node_status(
         self, node_id: str, expected_version: int, status: str, reason: str,
         *, session_id: str | None = None,
     ) -> dict[str, Any]:
-        return self.request("PATCH", f"/api/goals/nodes/{node_id}", {
+        return self.request("PATCH", f"/api/goals/nodes/{_path_segment(node_id)}", {
             "expected_version": expected_version,
             "patch": {"status": status},
             "reason": reason,
@@ -131,7 +163,7 @@ class GoalClient:
         })
 
     def complete_node(self, node_id: str, reason: str, *, session_id: str | None = None) -> dict[str, Any]:
-        return self.request("POST", f"/api/goals/nodes/{node_id}/complete", {
+        return self.request("POST", f"/api/goals/nodes/{_path_segment(node_id)}/complete", {
             "reason": reason,
             "actor_type": "agent",
             "actor_id": "voidcube",
@@ -142,12 +174,21 @@ class GoalClient:
         return self.request("GET", "/api/goals/projects")
 
     def call_tool(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        # Agent tools run under the service's agent identity.  Actor roles are
+        # authentication context, not model-controlled payload fields; keeping
+        # them out of the tool schema prevents an agent from self-promoting to
+        # a human or supervisor reviewer.
+        supplied_actor = args.get("actor_type")
+        if supplied_actor not in (None, "agent"):
+            raise ValueError("goal tools cannot impersonate another actor")
         actor = {
-            key: args[key] for key in ("actor_type", "actor_id", "session_id")
-            if args.get(key) not in (None, "")
+            "actor_type": "agent",
+            "actor_id": "voidcube",
         }
+        if args.get("session_id") not in (None, ""):
+            actor["session_id"] = args["session_id"]
         if tool_name == "goal_project_get":
-            return self.request("GET", f"/api/goals/projects/{args['projectId']}")
+            return self.request("GET", f"/api/goals/projects/{_path_segment(args['projectId'])}")
         if tool_name == "goal_project_create":
             session_id = actor.get("session_id")
             idempotency_key = args.get("idempotencyKey")
@@ -165,7 +206,7 @@ class GoalClient:
         if tool_name == "goal_get_context":
             return self.context(args["nodeId"])
         if tool_name == "goal_memory_ref_add":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/memory-refs", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/memory-refs", {
                 "memory_id": args["memoryId"],
                 "relation_type": args.get("relationType", "context"),
                 "confidence": args.get("confidence", 1),
@@ -173,30 +214,34 @@ class GoalClient:
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_memory_ref_list":
-            return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/memory-refs")
+            return self.request("GET", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/memory-refs")
         if tool_name == "goal_memory_ref_delete":
-            return self.request("DELETE", f"/api/goals/nodes/{args['nodeId']}/memory-refs/{args['memoryRefId']}", query={
+            return self.request("DELETE", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/memory-refs/{_path_segment(args['memoryRefId'])}", query={
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_graph_query":
-            return self.request("GET", f"/api/goals/projects/{args['projectId']}/graph", query={
+            return self.request("GET", f"/api/goals/projects/{_path_segment(args['projectId'])}/graph", query={
                 "start_node": args["startNode"], "depth": args.get("depth", 3),
                 "edge_types": args.get("edgeTypes"),
             })
         if tool_name == "goal_node_create":
-            payload = dict(args)
-            payload.update({"project_id": args["projectId"], "node_type": args["type"], "reason": args["reason"]})
-            payload.pop("projectId", None)
-            payload.pop("type", None)
-            payload["created_by"] = args.get("createdBy", "agent")
-            return self.request("POST", "/api/goals/nodes", payload)
+            return self.request("POST", "/api/goals/nodes", {
+                "project_id": args["projectId"], "node_type": args["type"],
+                "title": args["title"], "description": args.get("description", ""),
+                "status": args.get("status", "planned"), "progress": args.get("progress", 0),
+                "progress_mode": args.get("progress_mode", "manual"),
+                "priority": args.get("priority", 0),
+                "acceptance_criteria": args.get("acceptance_criteria", []),
+                "created_by": args.get("createdBy", "agent"),
+                "reason": args["reason"], **actor,
+            })
         if tool_name == "goal_node_update":
-            return self.request("PATCH", f"/api/goals/nodes/{args['nodeId']}", {
+            return self.request("PATCH", f"/api/goals/nodes/{_path_segment(args['nodeId'])}", {
                 "expected_version": args["expectedVersion"], "patch": args["patch"],
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_node_delete":
-            return self.request("DELETE", f"/api/goals/nodes/{args['nodeId']}", query={
+            return self.request("DELETE", f"/api/goals/nodes/{_path_segment(args['nodeId'])}", query={
                 "reason": args["reason"], "cascade": args.get("cascade", False),
                 "confirm_token": args.get("confirmToken"), **actor,
             })
@@ -207,7 +252,7 @@ class GoalClient:
                 "required": args.get("required", True), "reason": args["reason"], **actor,
             })
         if tool_name == "goal_edge_delete":
-            return self.request("DELETE", f"/api/goals/edges/{args['edgeId']}", query={
+            return self.request("DELETE", f"/api/goals/edges/{_path_segment(args['edgeId'])}", query={
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_batch_apply":
@@ -219,7 +264,7 @@ class GoalClient:
         if tool_name == "goal_rollback":
             return self.request("POST", "/api/goals/rollback", {
                 "batch_id": args["batchId"], "reason": args.get("reason", "rollback batch"),
-                "confirm": args.get("confirm", False), **actor,
+                "confirm_token": args.get("confirmToken"), **actor,
             })
         if tool_name == "goal_redo":
             return self.request("POST", "/api/goals/redo", {
@@ -227,12 +272,12 @@ class GoalClient:
                 "reason": args.get("reason", "redo batch"), **actor,
             })
         if tool_name == "goal_next_actions":
-            return self.request("GET", f"/api/goals/projects/{args['projectId']}/next-actions", query={
+            return self.request("GET", f"/api/goals/projects/{_path_segment(args['projectId'])}/next-actions", query={
                 "limit": args.get("limit", 10),
                 "filters": json.dumps(args.get("filters") or {}, ensure_ascii=False),
             })
         if tool_name == "goal_intent_contract_set":
-            return self.request("PUT", f"/api/goals/projects/{args['projectId']}/intent-contract", {
+            return self.request("PUT", f"/api/goals/projects/{_path_segment(args['projectId'])}/intent-contract", {
                 "outcome": args["outcome"],
                 "success_criteria": args.get("successCriteria", []),
                 "scope": args.get("scope", []),
@@ -243,45 +288,45 @@ class GoalClient:
                 **actor,
             })
         if tool_name == "goal_protocol_next_action":
-            return self.request("GET", f"/api/goals/projects/{args['projectId']}/protocol-next-action", query={
+            return self.request("GET", f"/api/goals/projects/{_path_segment(args['projectId'])}/protocol-next-action", query={
                 "limit": args.get("limit", 10),
             })
         if tool_name == "goal_plan_review":
-            return self.request("GET", f"/api/goals/projects/{args['projectId']}/plan-review")
+            return self.request("GET", f"/api/goals/projects/{_path_segment(args['projectId'])}/plan-review")
         if tool_name == "goal_replan":
-            return self.request("POST", f"/api/goals/projects/{args['projectId']}/replan", {
+            return self.request("POST", f"/api/goals/projects/{_path_segment(args['projectId'])}/replan", {
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_lifecycle_get":
-            return self.request("GET", f"/api/goals/nodes/{args['nodeId']}/lifecycle")
+            return self.request("GET", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/lifecycle")
         if tool_name == "goal_record_execution_result":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/execution-results", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/execution-results", {
                 "status": args["status"], "summary": args["summary"],
                 "outputs": args.get("outputs", []), "reason": args["reason"], **actor,
             })
         if tool_name == "goal_record_observation":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/observations", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/observations", {
                 "execution_result_id": args.get("executionResultId"),
                 "summary": args["summary"], "signals": args.get("signals", []),
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_verify_evidence":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/evidence-verifications", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/evidence-verifications", {
                 "evidence_id": args.get("evidenceId"), "accepted": args["accepted"],
                 "summary": args["summary"], "criterion_index": args.get("criterionIndex"),
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_apply_evidence_verification":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/apply-evidence-verification", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/apply-evidence-verification", {
                 "verification_id": args["verificationId"], "expected_version": args["expectedVersion"],
                 "reason": args["reason"], **actor,
             })
         if tool_name == "goal_submit_for_review":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/submit-for-review", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/submit-for-review", {
                 "expected_version": args["expectedVersion"], "reason": args["reason"], **actor,
             })
         if tool_name == "goal_attach_evidence":
-            return self.request("POST", f"/api/goals/nodes/{args['nodeId']}/evidence", {
+            return self.request("POST", f"/api/goals/nodes/{_path_segment(args['nodeId'])}/evidence", {
                 "evidence_type": args["evidenceType"], "title": args.get("title"),
                 "content": args.get("content"), "uri": args.get("uri"),
                 "created_by": args.get("createdBy", "agent"), "reason": args["reason"], **actor,

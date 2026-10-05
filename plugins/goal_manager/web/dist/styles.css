@@ -34,6 +34,8 @@ body {
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
+button[aria-busy="true"],
+button.is-busy { cursor: progress; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--cyan);
   outline-offset: 2px;

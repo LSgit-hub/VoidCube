@@ -36,14 +36,18 @@ def handle_serve_command(action: str | None) -> None:
         print("Ensure VoidCube is installed correctly (pip install -e .)")
         return
 
-    if action_lower == "start":
-        start_all(foreground=False)
-    elif action_lower == "foreground":
-        start_all(foreground=True)
-    elif action_lower == "stop":
-        stop_all()
-    else:
-        print_status()
+    try:
+        if action_lower == "start":
+            if start_all(foreground=False) is False:
+                print("Service startup failed; see the status details above.")
+        elif action_lower == "foreground":
+            start_all(foreground=True)
+        elif action_lower == "stop":
+            stop_all()
+        else:
+            print_status()
+    except Exception as exc:
+        print(f"Service lifecycle failed: {exc}")
 
 
 def auto_start_daemons() -> None:

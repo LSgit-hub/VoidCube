@@ -16,7 +16,8 @@ READ_TOOLS = {
     "goal_protocol_next_action", "goal_plan_review", "goal_lifecycle_get",
 }
 NON_IDEMPOTENT_WRITE_TOOLS = {
-    "goal_project_create", "goal_node_create", "goal_edge_create", "goal_batch_apply",
+    "goal_project_create", "goal_node_create", "goal_node_update", "goal_node_delete",
+    "goal_edge_create", "goal_edge_delete", "goal_batch_apply",
     "goal_attach_evidence", "goal_rollback", "goal_redo", "goal_intent_contract_set",
     "goal_replan", "goal_record_execution_result", "goal_record_observation",
     "goal_verify_evidence", "goal_apply_evidence_verification", "goal_submit_for_review",

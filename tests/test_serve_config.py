@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -239,6 +240,31 @@ def test_background_service_uses_resolved_service_python(monkeypatch, tmp_path):
     assert (tmp_path / "supervisor.pid").read_text() == "4321"
 
 
+def test_background_service_script_preserves_voidcube_home_for_plugin_config(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    service = serve.SERVICES["supervisor"]
+    monkeypatch.setattr(service, "pid_file", str(tmp_path / "supervisor.pid"))
+    monkeypatch.setattr(service, "log_file", str(tmp_path / "supervisor.log"))
+    monkeypatch.setattr(serve, "_read_pid", lambda path: None)
+    monkeypatch.setattr(serve, "_port_listening", lambda port: False)
+    monkeypatch.setattr(serve, "_service_python_executable", lambda: str(tmp_path / "python.exe"))
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+    calls = []
+    monkeypatch.setattr(
+        serve.subprocess,
+        "Popen",
+        lambda args, **kwargs: calls.append(args) or SimpleNamespace(pid=9876),
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(tmp_path / "home"))
+
+    serve.start_service("supervisor", foreground=False)
+    script = calls[0][2]
+    assert "load_VoidCube_dotenv" in script
+    assert "_build_service_app" in script
+    assert "VOIDCUBE_HOME" not in script or "os.environ" in script
+
+
 def test_foreground_start_reexecs_with_service_python(monkeypatch):
     from voidcube.infrastructure.gateway import service_launcher as serve
 
@@ -337,6 +363,88 @@ def test_status_all_uses_healthy_port_owner_when_pid_file_is_stale(
     assert result["supervisor"]["pid"] == 17704
     assert result["supervisor"]["running"] is True
     assert result["supervisor"]["healthy"] is True
+
+
+def test_status_all_reports_gateway_registration_separately(monkeypatch):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    services = {
+        "gateway": serve.SERVICES["gateway"],
+        "memory": serve.SERVICES["memory"],
+    }
+    monkeypatch.setattr(serve, "SERVICES", services)
+    monkeypatch.setattr(serve, "register_plugin_services", lambda force=False: None)
+    monkeypatch.setattr(serve, "_live_service_pid", lambda _svc: (1234, True))
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: True)
+    monkeypatch.setattr(
+        serve,
+        "_gateway_service_types_snapshot",
+        lambda: {"memory": True},
+    )
+
+    result = serve.status_all()
+
+    assert "registered" not in result["gateway"]
+    assert result["memory"]["healthy"] is True
+    assert result["memory"]["registered"] is True
+    assert result["memory"]["control_plane_healthy"] is True
+
+
+def test_print_status_exposes_control_plane_state(monkeypatch):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    monkeypatch.setattr(
+        serve,
+        "status_all",
+        lambda: {
+            "gateway": {
+                "port": 6000,
+                "pid": 100,
+                "running": True,
+                "healthy": True,
+            },
+            "memory": {
+                "port": 6001,
+                "pid": 101,
+                "running": True,
+                "healthy": True,
+                "registered": False,
+                "control_plane_healthy": False,
+            },
+        },
+    )
+    output: list[str] = []
+    monkeypatch.setattr(serve, "_safe_print", lambda value="": output.append(str(value)))
+
+    serve.print_status()
+
+    rendered = "\n".join(output)
+    assert "gateway" in rendered
+    assert "⚠ unregistered" in rendered
+
+
+def test_print_status_exposes_restart_block_reason(monkeypatch):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    monkeypatch.setattr(
+        serve,
+        "status_all",
+        lambda: {
+            "supervisor": {
+                "port": 6002,
+                "pid": 101,
+                "running": True,
+                "healthy": False,
+                "restart_blocked": "port_release_timeout",
+            }
+        },
+    )
+    output: list[str] = []
+    monkeypatch.setattr(serve, "_safe_print", lambda value="": output.append(str(value)))
+
+    serve.print_status()
+
+    assert "⚠ port busy" in "\n".join(output)
 
 
 def test_ensure_running_rejects_unknown_process_that_only_answers_http_200(
@@ -446,6 +554,61 @@ def test_health_endpoint_identifies_voidcube_service(monkeypatch, name, payload)
     assert serve._health_endpoint_is_service(6002, name) is True
 
 
+def test_health_check_read_timeout_respects_probe_deadline(monkeypatch):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+    import socket
+
+    timeouts = []
+
+    class Socket:
+        def settimeout(self, value):
+            timeouts.append(value)
+
+        def connect(self, _address):
+            return None
+
+        def sendall(self, _request):
+            return None
+
+        def recv(self, _size):
+            raise socket.timeout()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(socket, "socket", lambda *_args, **_kwargs: Socket())
+
+    assert serve._health_check(6002, timeout=0.2) is False
+    assert timeouts
+    assert all(0 < value <= 0.2 for value in timeouts)
+
+
+@pytest.mark.parametrize("status_line", [b"HTTP/1.1 2000 Weird", b"HTTP/1.1 201 Created"])
+def test_health_check_requires_exact_http_200(monkeypatch, status_line):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+    import socket
+
+    class Socket:
+        def settimeout(self, _value):
+            return None
+
+        def connect(self, _address):
+            return None
+
+        def sendall(self, _request):
+            return None
+
+        def recv(self, _size):
+            return status_line + b"\r\n\r\n"
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(socket, "socket", lambda *_args, **_kwargs: Socket())
+
+    assert serve._health_check(6002, timeout=0.2) is False
+
+
 def test_canonical_mem_import_source_matches_repository_source(tmp_path, monkeypatch):
     source = tmp_path / "Mem" / "src"
     expected = source / "memai" / "model_config.py"
@@ -542,7 +705,7 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
     monkeypatch.setattr(serve, "print_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
 
-    serve.start_all(foreground=False)
+    assert serve.start_all(foreground=False) is True
 
     assert calls[:10] == [
         ("sync", "mem"),
@@ -556,6 +719,49 @@ def test_start_all_starts_gateway_before_memory_and_waits_for_registration(monke
         ("registered", "supervisor"),
         ("registered", "executor"),
     ]
+
+
+def test_start_all_stops_after_gateway_health_failure(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    calls = []
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "start_service", lambda name, foreground=False: calls.append(("start", name)))
+    monkeypatch.setattr(serve, "stop_service", lambda name, silent=False: calls.append(("stop", name)) or True)
+    monkeypatch.setattr(serve, "_wait_for_health", lambda name, port: False)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: calls.append(("message", args[0] if args else "")))
+
+    assert serve.start_all(foreground=False) is False
+
+    assert ("start", "gateway") in calls
+    assert ("stop", "gateway") in calls
+    assert ("message", "  ⚠ gateway startup failed; dependent services were not started") in calls
+    assert not any(item == ("start", "memory") for item in calls)
+
+
+def test_gateway_command_returns_failure_when_startup_fails(monkeypatch):
+    from voidcube.interfaces.cli.entrypoints.management import cmd_gateway
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.service_launcher.start_all",
+        lambda: False,
+    )
+    with pytest.raises(SystemExit) as raised:
+        cmd_gateway(SimpleNamespace(gateway_action="start"))
+    assert raised.value.code == 1
+
+
+def test_serve_command_returns_failure_when_startup_fails(monkeypatch):
+    from voidcube.interfaces.cli.entrypoints.operations import cmd_serve
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.service_launcher.start_all",
+        lambda foreground=False: False,
+    )
+    with pytest.raises(SystemExit) as raised:
+        cmd_serve(SimpleNamespace(serve_action="start", foreground=False))
+    assert raised.value.code == 1
 
 
 def test_stop_service_on_windows_terminates_venv_process_tree(monkeypatch, tmp_path):
@@ -578,6 +784,36 @@ def test_stop_service_on_windows_terminates_venv_process_tree(monkeypatch, tmp_p
 
     assert serve.stop_service("supervisor", silent=True) is True
     assert calls[0][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+    assert not pid_file.exists()
+
+
+def test_stop_service_removes_stale_pid_record_without_touching_runtime_db(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    service = serve.SERVICES["supervisor"]
+    pid_file = tmp_path / "supervisor.pid"
+    pid_file.write_text("9999\n", encoding="ascii")
+    monkeypatch.setattr(service, "pid_file", str(pid_file))
+    monkeypatch.setattr(serve, "_pid_alive", lambda _pid: False)
+    assert serve.stop_service("supervisor", silent=True) is True
+    assert not pid_file.exists()
+
+
+def test_stop_service_reports_port_release_timeout(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    service = serve.SERVICES["supervisor"]
+    pid_file = tmp_path / "supervisor.pid"
+    pid_file.write_text("4321\n", encoding="ascii")
+    monkeypatch.setattr(service, "pid_file", str(pid_file))
+    monkeypatch.setattr(serve, "_pid_alive", lambda pid: pid == 4321)
+    monkeypatch.setattr(serve, "_process_belongs_to_runtime", lambda _pid: True)
+    monkeypatch.setattr(serve, "_port_listening", lambda _port: True)
+    monkeypatch.setattr(serve, "_wait_for_port_release", lambda _port: False)
+    monkeypatch.setattr(serve.sys, "platform", "win32")
+    monkeypatch.setattr(serve.subprocess, "run", lambda *args, **kwargs: None)
+
+    assert serve.stop_service("supervisor", silent=True) is False
     assert not pid_file.exists()
 
 
@@ -604,6 +840,27 @@ def test_ensure_running_restarts_healthy_unregistered_memory(monkeypatch, tmp_pa
     assert ("start", "memory") in calls
     assert ("registered", "memory") in calls
     assert result["memory"]["registered"] is True
+
+
+def test_ensure_running_does_not_start_when_stop_cannot_release_port(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    calls = []
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_plugin_service_names", lambda: [])
+    monkeypatch.setattr(serve, "_read_pid", lambda _path: 123)
+    monkeypatch.setattr(serve, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: False)
+    monkeypatch.setattr(serve, "stop_service", lambda name, silent=False: calls.append(("stop", name)) or False)
+    monkeypatch.setattr(serve, "start_service", lambda name, foreground=False: calls.append(("start", name)) or object())
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert ("stop", "gateway") in calls
+    assert ("start", "gateway") not in calls
+    assert result["gateway"]["restart_blocked"] == "port_release_timeout"
 
 
 def test_ensure_running_restarts_supervisor_when_executor_registration_is_missing(
@@ -653,3 +910,174 @@ def test_ensure_running_restarts_supervisor_when_executor_registration_is_missin
     assert ("registered", "supervisor") in calls
     assert ("registered", "executor") in calls
     assert result["supervisor"]["registered"] is True
+
+
+def test_ensure_running_rechecks_registration_after_adopting_process(
+    monkeypatch,
+    tmp_path,
+):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    calls = []
+    pids = {"gateway": 100, "memory": None, "supervisor": 300}
+    memory_starts = 0
+
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_plugin_service_names", lambda: [])
+    monkeypatch.setattr(serve, "_read_pid", lambda path: pids[Path(path).stem])
+    monkeypatch.setattr(serve, "_pid_alive", lambda pid: bool(pid))
+    monkeypatch.setattr(serve, "_process_belongs_to_runtime", lambda _pid: True)
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: True)
+    monkeypatch.setattr(
+        serve,
+        "_gateway_has_service_type",
+        lambda service_type: service_type != "memory",
+    )
+    monkeypatch.setattr(
+        serve,
+        "_wait_for_gateway_service_type",
+        lambda service_type, timeout=20.0: calls.append(("registered", service_type)) or True,
+    )
+    monkeypatch.setattr(
+        serve,
+        "_wait_for_health",
+        lambda name, port, timeout=30.0: calls.append(("wait", name)) or True,
+    )
+
+    def fake_stop(name, silent=False):
+        del silent
+        calls.append(("stop", name))
+        pids[name] = None
+        return True
+
+    def fake_start(name, foreground=False):
+        nonlocal memory_starts
+        del foreground
+        calls.append(("start", name))
+        if name == "memory":
+            memory_starts += 1
+            pids[name] = 200 + memory_starts
+            return object() if memory_starts > 1 else None
+        return object()
+
+    monkeypatch.setattr(serve, "stop_service", fake_stop)
+    monkeypatch.setattr(serve, "start_service", fake_start)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert ("stop", "memory") in calls
+    assert calls.count(("start", "memory")) == 2
+    assert ("registered", "memory") in calls
+    assert result["memory"]["healthy"] is True
+    assert result["memory"]["registered"] is True
+
+
+def test_ensure_running_clears_pid_when_new_service_fails_health_check(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    service = serve.SERVICES["gateway"]
+    pid_file = tmp_path / "gateway.pid"
+    monkeypatch.setattr(service, "pid_file", str(pid_file))
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_plugin_service_names", lambda: [])
+    monkeypatch.setattr(serve, "_read_pid", lambda path: 123 if Path(path) == pid_file and pid_file.exists() else None)
+    monkeypatch.setattr(serve, "_pid_alive", lambda pid: pid == 123)
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: False)
+    monkeypatch.setattr(serve, "_wait_for_health", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(serve, "stop_service", lambda *_args, **_kwargs: True)
+    def fake_start(name, foreground=False):
+        del foreground
+        if name == "gateway":
+            pid_file.write_text("123")
+        return object()
+
+    monkeypatch.setattr(serve, "start_service", fake_start)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert result["gateway"] == {
+        "running": False, "healthy": False, "pid": None, "started": True,
+    }
+    assert not pid_file.exists()
+
+
+def test_ensure_running_reports_registration_recycle_block(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    service = serve.SERVICES["memory"]
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_plugin_service_names", lambda: [])
+    monkeypatch.setattr(serve, "_read_pid", lambda _path: 123)
+    monkeypatch.setattr(serve, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: True)
+    monkeypatch.setattr(serve, "_gateway_has_service_type", lambda _kind: False)
+    monkeypatch.setattr(serve, "stop_service", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert result["memory"]["restart_blocked"] == "port_release_timeout"
+    assert result["memory"]["running"] is True
+    assert result["memory"]["healthy"] is True
+
+
+def test_ensure_running_reports_health_cleanup_block_when_child_will_not_stop(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    pid_file = tmp_path / "gateway.pid"
+    monkeypatch.setattr(serve.SERVICES["gateway"], "pid_file", str(pid_file))
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_plugin_service_names", lambda: [])
+    monkeypatch.setattr(
+        serve,
+        "_read_pid",
+        lambda path: 123 if Path(path) == pid_file and pid_file.exists() else None,
+    )
+    monkeypatch.setattr(serve, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: False)
+    monkeypatch.setattr(serve, "_wait_for_health", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(serve, "start_service", lambda _name, foreground=False: pid_file.write_text("123") or object())
+    monkeypatch.setattr(serve, "stop_service", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert result["gateway"]["restart_blocked"] == "port_release_timeout"
+    assert result["gateway"]["running"] is True
+    assert result["gateway"]["pid"] == 123
+
+
+def test_ensure_running_reports_second_registration_failure_after_recycle(monkeypatch, tmp_path):
+    from voidcube.infrastructure.gateway import service_launcher as serve
+
+    memory = serve.SERVICES["memory"]
+    pid_files = {"gateway": "gateway.pid", "memory": "memory.pid", "supervisor": "supervisor.pid"}
+    monkeypatch.setattr(serve, "PID_DIR", tmp_path)
+    monkeypatch.setattr(serve, "_sync_canonical_mem_binding_before_start", lambda: None)
+    monkeypatch.setattr(serve, "_plugin_service_names", lambda: [])
+    monkeypatch.setattr(
+        serve, "_read_pid",
+        lambda path: 123 if Path(path).name == "memory.pid" else None,
+    )
+    monkeypatch.setattr(serve, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(serve, "_process_belongs_to_runtime", lambda _pid: True)
+    monkeypatch.setattr(serve, "_service_health_check", lambda _svc: True)
+    monkeypatch.setattr(serve, "_gateway_has_service_type", lambda _kind: False)
+    monkeypatch.setattr(serve, "stop_service", lambda _name, silent=False: True)
+    monkeypatch.setattr(serve, "start_service", lambda _name, foreground=False: object())
+    monkeypatch.setattr(serve, "_wait_for_health", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(serve, "_wait_for_gateway_service_type", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(serve, "_safe_print", lambda *args, **kwargs: None)
+
+    result = serve.ensure_running(silent=True)
+
+    assert result["memory"]["registered"] is False
+    assert result["memory"]["running"] is False
+    assert result["memory"]["healthy"] is False
+    assert result["memory"]["pid"] is None

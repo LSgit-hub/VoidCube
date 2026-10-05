@@ -4,18 +4,377 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from plugins.goal_manager.db.connection import GoalStore
 from plugins.goal_manager.domain.graph import GoalConflict
+from plugins.goal_manager.domain.guard import ConfirmationRequired
 from plugins.goal_manager.server import create_app
+from plugins.goal_manager.config import service_config
 from plugins.goal_manager.tools.client import GoalClient, GoalServiceError
 from plugins.goal_manager.tools.schemas import SCHEMAS
 from voidcube.extensions.plugins import registry as plugin_registry
 from voidcube.extensions.tools import model_tools
 from voidcube.extensions.tools.registry import registry
+
+
+def test_goal_service_config_normalizes_gateway_health_interval(tmp_path):
+    assert service_config({"db_path": str(tmp_path / "goals.db"), "gateway_health_interval_seconds": 1})[
+        "gateway_health_interval_seconds"
+    ] == 5.0
+    assert service_config({"db_path": str(tmp_path / "goals.db"), "gateway_health_interval_seconds": 99999})[
+        "gateway_health_interval_seconds"
+    ] == 3600.0
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536, 6003.5, True])
+def test_goal_service_config_rejects_ports_outside_tcp_range(tmp_path, port):
+    with pytest.raises(ValueError):
+        service_config({"db_path": str(tmp_path / "goals.db"), "service_port": port})
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_goal_service_config_rejects_non_finite_timeouts(tmp_path, value):
+    with pytest.raises(ValueError, match="must be finite"):
+        service_config({"db_path": str(tmp_path / "goals.db"), "request_timeout_seconds": value})
+
+
+def test_goal_service_exposes_gateway_registration_credentials(monkeypatch, tmp_path):
+    app = create_app({
+        "db_path": str(tmp_path / "goals.db"),
+        "gateway_address": "http://gateway.test:6000",
+        "gateway_auth_token": "root-token",
+    })
+
+    class Response:
+        is_success = True
+
+        @staticmethod
+        def json():
+            return {"service_id": "goal-1", "service_token": "service-secret"}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **kwargs):
+            if url.endswith("/register"):
+                assert kwargs["headers"]["Authorization"] == "Bearer root-token"
+                return Response()
+            assert url.endswith("/health/goal-1")
+            assert kwargs["headers"] == {
+                "x-voidcube-service-token": "service-secret",
+                "Authorization": "Bearer root-token",
+            }
+            return type("HealthResponse", (), {"is_success": True})()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    import asyncio
+    asyncio.run(app.state.register_with_gateway())
+
+    assert app.state.gateway_service_id == "goal-1"
+    assert app.state.gateway_service_token == "service-secret"
+    assert asyncio.run(app.state.report_gateway_health()) is True
+    app.state.gateway_service_id = None
+    app.state.gateway_service_token = None
+    assert asyncio.run(app.state.refresh_gateway_health()) is True
+
+
+def test_goal_service_clears_expired_gateway_credentials(monkeypatch, tmp_path):
+    import asyncio
+
+    app = create_app({
+        "db_path": str(tmp_path / "goals.db"),
+        "gateway_address": "http://gateway.test:6000",
+    })
+    app.state.gateway_service_id = "stale-goal-service"
+    app.state.gateway_service_token = "stale-token"
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            assert url.endswith("/health/stale-goal-service")
+            return type("HealthResponse", (), {"status_code": 401, "is_success": False})()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    assert asyncio.run(app.state.report_gateway_health()) is False
+    assert app.state.gateway_service_id is None
+    assert app.state.gateway_service_token is None
+
+
+def test_goal_service_refresh_reregisters_after_gateway_rejects_health(
+    monkeypatch, tmp_path
+):
+    import asyncio
+
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    app.state.gateway_service_id = "stale-goal-service"
+    app.state.gateway_service_token = "stale-token"
+    calls = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            calls.append(url)
+            if url.endswith("/health/stale-goal-service"):
+                return type("HealthResponse", (), {"status_code": 404, "is_success": False})()
+            if url.endswith("/register"):
+                return type("RegisterResponse", (), {
+                    "is_success": True,
+                    "json": staticmethod(lambda: {
+                        "service_id": "fresh-goal-service",
+                        "service_token": "fresh-token",
+                    }),
+                })()
+            return type("HealthResponse", (), {"status_code": 200, "is_success": True})()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    assert asyncio.run(app.state.refresh_gateway_health()) is True
+    assert app.state.gateway_service_id == "fresh-goal-service"
+    assert app.state.gateway_service_token == "fresh-token"
+    assert calls == [
+        "http://127.0.0.1:6000/health/stale-goal-service",
+        "http://127.0.0.1:6000/register",
+        "http://127.0.0.1:6000/health/fresh-goal-service",
+    ]
+
+
+def test_goal_service_shutdown_clears_gateway_task_handles(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    with TestClient(app):
+        assert app.state.gateway_registration_task is not None
+        assert app.state.gateway_health_task is not None
+
+    assert app.state.gateway_registration_task is None
+    assert app.state.gateway_health_task is None
+
+
+def test_goal_service_refresh_re_registers_after_gateway_credentials_expire(
+    monkeypatch, tmp_path
+):
+    import asyncio
+
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    calls = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **kwargs):
+            calls.append((url, kwargs))
+            if url.endswith("/register"):
+                return type("RegisterResponse", (), {
+                    "is_success": True,
+                    "json": staticmethod(lambda: {
+                        "service_id": "goal-recovered",
+                        "service_token": "token-recovered",
+                    }),
+                })()
+            return type("HealthResponse", (), {
+                "status_code": 200,
+                "is_success": True,
+            })()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    async def exercise():
+        app.state.gateway_service_id = None
+        app.state.gateway_service_token = None
+        assert await app.state.refresh_gateway_health() is True
+
+    asyncio.run(exercise())
+    assert app.state.gateway_service_id == "goal-recovered"
+    assert app.state.gateway_service_token == "token-recovered"
+    assert [url for url, _kwargs in calls] == [
+        "http://127.0.0.1:6000/register",
+        "http://127.0.0.1:6000/health/goal-recovered",
+    ]
+
+
+def test_goal_service_health_reflects_database_integrity(monkeypatch, tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    with TestClient(app) as client:
+        healthy = client.get("/health")
+        assert healthy.status_code == 200
+        assert healthy.json()["status"] == "ok"
+
+        monkeypatch.setattr(
+            app.state.goal_store,
+            "health_snapshot",
+            lambda: {"readable": False, "integrity": "unavailable"},
+        )
+        degraded = client.get("/health")
+
+    assert degraded.status_code == 503
+    assert degraded.json()["status"] == "degraded"
+
+
+def test_goal_service_rejects_unknown_payload_fields(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/goals/projects",
+            json={"name": "Strict", "reason": "contract", "stale_field": True},
+        )
+    assert response.status_code == 422
+    assert "stale_field" in response.text
+
+
+def test_human_review_rejects_malformed_origin_without_server_error(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db")})
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/goals/nodes/missing/approve-review",
+            headers={"Origin": "http://localhost:not-a-port"},
+            json={"expected_version": 1, "reason": "review", "actor_type": "user"},
+        )
+    assert response.status_code == 403
+
+
+def test_human_review_requires_configured_reviewer_token(tmp_path):
+    app = create_app({
+        "db_path": str(tmp_path / "goals.db"),
+        "human_review_token": "review-secret",
+    })
+    with TestClient(app) as client:
+        missing = client.post(
+            "/api/goals/nodes/missing/approve-review",
+            headers={"Origin": "http://localhost:6002"},
+            json={"expected_version": 1, "reason": "review", "actor_type": "user"},
+        )
+        invalid = client.post(
+            "/api/goals/nodes/missing/approve-review",
+            headers={
+                "Origin": "http://localhost:6002",
+                "X-VoidCube-Review-Token": "wrong",
+            },
+            json={"expected_version": 1, "reason": "review", "actor_type": "user"},
+        )
+        long_lived = client.post(
+            "/api/goals/nodes/missing/approve-review",
+            headers={
+                "Origin": "http://localhost:6002",
+                "X-VoidCube-Review-Token": "review-secret",
+            },
+            json={"expected_version": 1, "reason": "review", "actor_type": "user"},
+        )
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert long_lived.status_code == 401
+
+
+def test_human_review_accepts_valid_reviewer_token(tmp_path):
+    app = create_app({
+        "db_path": str(tmp_path / "goals.db"),
+        "human_review_token": "review-secret",
+    })
+    app.state.review_sessions["short-lived-review"] = time.time() + 300
+    with TestClient(app) as client:
+        project = client.post(
+            "/api/goals/projects",
+            json={"name": "Review", "reason": "setup"},
+        ).json()
+        node = client.post(
+            "/api/goals/nodes",
+            json={
+                "project_id": project["project"]["id"],
+                "node_type": "task",
+                "title": "Ready",
+                "progress": 1,
+                "acceptance_criteria": [{"title": "done", "met": True}],
+                "reason": "setup",
+            },
+        ).json()["node"]
+        submitted = client.post(
+            f"/api/goals/nodes/{node['id']}/submit-for-review",
+            json={"expected_version": node["version"], "reason": "submit"},
+        ).json()["node"]
+        approved = client.post(
+            f"/api/goals/nodes/{node['id']}/approve-review",
+            headers={
+                "Origin": "http://localhost:6002",
+                "X-VoidCube-Review-Token": "short-lived-review",
+            },
+            json={
+                "expected_version": submitted["version"],
+                "reason": "approve",
+                "actor_type": "user",
+            },
+        )
+    assert approved.status_code == 200
+    assert approved.json()["node"]["status"] == "completed"
+
+
+def test_service_token_cannot_escalate_to_human_actor(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db"), "service_token": "internal-secret"})
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/goals/projects",
+            headers={"X-Goal-Service-Token": "internal-secret"},
+            json={"name": "Escalation", "reason": "test", "actor_type": "user"},
+        )
+    assert response.status_code == 403
+    assert "human actor" in response.json()["detail"]
+
+
+def test_service_token_preserves_agent_payload_body(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db"), "service_token": "internal-secret"})
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/goals/projects",
+            headers={"X-Goal-Service-Token": "internal-secret"},
+            json={"name": "Internal", "reason": "test", "actor_type": "agent"},
+        )
+    assert response.status_code == 201
+
+
+def test_service_token_rejects_missing_or_invalid_credentials(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db"), "service_token": "internal-secret"})
+    with TestClient(app) as client:
+        missing = client.get("/api/goals/projects")
+        invalid = client.get("/api/goals/projects", headers={"X-Goal-Service-Token": "wrong"})
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+
+
+def test_service_token_accepts_normalized_bearer_authorization(tmp_path):
+    app = create_app({"db_path": str(tmp_path / "goals.db"), "service_token": "internal-secret"})
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/goals/projects",
+            headers={
+                "Authorization": "bEaReR    internal-secret",
+                "X-Goal-Service-Token": "wrong",
+            },
+        )
+    assert response.status_code == 200
 
 
 @pytest.fixture
@@ -104,6 +463,37 @@ def test_session_project_client_uses_stable_idempotency_key(monkeypatch):
     assert calls[0][2]["root_status"] == "in_progress"
 
 
+def test_goal_client_encodes_opaque_ids_as_single_path_segments(monkeypatch):
+    client = GoalClient(base_url="http://goal.test")
+    calls = []
+
+    def request(method, path, payload=None, **kwargs):
+        calls.append((method, path, payload, kwargs))
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "request", request)
+    client.call_tool("goal_node_update", {
+        "nodeId": "node?b#c",
+        "expectedVersion": 1,
+        "patch": {"title": "safe"},
+        "reason": "encode id",
+    })
+
+    assert calls[0][1] == "/api/goals/nodes/node%3Fb%23c"
+
+
+@pytest.mark.parametrize("node_id", ["node/a", "node\\a"])
+def test_goal_client_rejects_path_separator_in_opaque_id(node_id):
+    client = GoalClient(base_url="http://goal.test")
+    with pytest.raises(ValueError, match="path separators"):
+        client.call_tool("goal_node_update", {
+            "nodeId": node_id,
+            "expectedVersion": 1,
+            "patch": {"title": "safe"},
+            "reason": "reject path separator",
+        })
+
+
 def test_generic_project_create_derives_session_idempotency_key(monkeypatch):
     client = GoalClient(base_url="http://goal.test")
     calls = []
@@ -119,6 +509,84 @@ def test_generic_project_create_derives_session_idempotency_key(monkeypatch):
     })
     assert calls[0]["idempotency_key"].startswith("session:")
     assert calls[0]["root_status"] == "in_progress"
+
+
+def test_agent_goal_tools_bind_actor_identity_and_reject_impersonation(monkeypatch):
+    client = GoalClient(base_url="http://goal.test")
+    calls = []
+
+    def request(method, path, payload=None, **kwargs):
+        calls.append(payload)
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "request", request)
+    client.call_tool("goal_replan", {
+        "projectId": "proj-1", "reason": "refresh plan",
+        "actor_type": "agent", "actor_id": "forged-agent", "session_id": "session-1",
+    })
+    assert calls[0]["actor_type"] == "agent"
+    assert calls[0]["actor_id"] == "voidcube"
+    assert calls[0]["session_id"] == "session-1"
+
+    client.call_tool("goal_node_create", {
+        "projectId": "proj-1", "type": "task", "title": "Task", "reason": "create",
+        "actor_id": "forged-agent", "session_id": "session-1", "createdBy": "agent",
+    })
+    assert calls[1]["actor_type"] == "agent"
+    assert calls[1]["actor_id"] == "voidcube"
+    assert calls[1]["session_id"] == "session-1"
+    assert calls[1]["created_by"] == "agent"
+    assert "createdBy" not in calls[1]
+
+
+def test_agent_goal_client_node_create_uses_service_payload_contract(monkeypatch):
+    client = GoalClient(base_url="http://goal.test")
+    payloads = []
+
+    def request(method, path, payload=None, **_kwargs):
+        payloads.append(payload)
+        return {"node": {"id": "node-1"}}
+
+    monkeypatch.setattr(client, "request", request)
+    client.call_tool("goal_node_create", {
+        "projectId": "proj-1", "type": "task", "title": "Task", "description": "desc",
+        "status": "planned", "progress": 0, "progress_mode": "manual", "priority": 2,
+        "acceptance_criteria": [], "createdBy": "agent", "reason": "create",
+    })
+    assert payloads == [{
+        "project_id": "proj-1", "node_type": "task", "title": "Task", "description": "desc",
+        "status": "planned", "progress": 0, "progress_mode": "manual", "priority": 2,
+        "acceptance_criteria": [], "created_by": "agent", "reason": "create",
+        "actor_type": "agent", "actor_id": "voidcube",
+    }]
+
+    with pytest.raises(ValueError, match="cannot impersonate"):
+        client.call_tool("goal_replan", {
+            "projectId": "proj-1", "reason": "forge review",
+            "actor_type": "supervisor",
+        })
+
+    from plugins.goal_manager.tools.schemas import COMMON_CONTEXT
+    assert set(COMMON_CONTEXT) == {"session_id"}
+
+
+def test_goal_client_sends_rollback_confirmation_token(monkeypatch):
+    client = GoalClient(base_url="http://goal.test")
+    calls = []
+
+    def request(method, path, payload=None, **kwargs):
+        calls.append((method, path, payload, kwargs))
+        return {"rolled_back": True}
+
+    monkeypatch.setattr(client, "request", request)
+    client.call_tool("goal_rollback", {
+        "batchId": "batch-1",
+        "confirmToken": "one-time-token",
+        "reason": "explicit rollback",
+    })
+
+    assert calls[0][2]["confirm_token"] == "one-time-token"
+    assert "confirm" not in calls[0][2]
 
 
 def test_protocol_tools_route_to_goal_service_contracts(monkeypatch):
@@ -210,6 +678,78 @@ def test_session_project_client_retries_server_failure_with_same_key(monkeypatch
     assert payloads[0]["idempotency_key"] == payloads[1]["idempotency_key"]
 
 
+def test_goal_client_normalizes_transport_timeout(monkeypatch):
+    def fail_urlopen(*_args, **_kwargs):
+        raise TimeoutError("connection timed out")
+
+    monkeypatch.setattr("plugins.goal_manager.tools.client.urlopen", fail_urlopen)
+
+    with pytest.raises(GoalServiceError) as error:
+        GoalClient(base_url="http://goal.test").request("GET", "/health")
+
+    assert error.value.status_code == 503
+    assert error.value.payload == {"detail": "goal_service_unavailable"}
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), "invalid"])
+def test_goal_client_rejects_invalid_timeout(timeout):
+    with pytest.raises(ValueError, match="finite positive number"):
+        GoalClient(base_url="http://goal.test", timeout=timeout)
+
+
+@pytest.mark.parametrize("base_url", ["file:///tmp/goals", "ftp://goal.test", "goal.test", "http://goal.test?bad=1", "http://goal.test/#bad"])
+def test_goal_client_rejects_non_http_service_url(base_url):
+    with pytest.raises(ValueError, match="must use http or https"):
+        GoalClient(base_url=base_url)
+
+
+def test_goal_client_normalizes_invalid_success_response(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b"not-json"
+
+    monkeypatch.setattr(
+        "plugins.goal_manager.tools.client.urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+
+    with pytest.raises(GoalServiceError) as error:
+        GoalClient(base_url="http://goal.test").request("GET", "/health")
+
+    assert error.value.status_code == 502
+    assert error.value.payload == {"detail": "goal_service_invalid_response"}
+
+
+@pytest.mark.parametrize("body", [b"[]", b'"ok"', b"null", b"1"])
+def test_goal_client_rejects_non_object_success_response(monkeypatch, body):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return body
+
+    monkeypatch.setattr(
+        "plugins.goal_manager.tools.client.urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+
+    with pytest.raises(GoalServiceError) as error:
+        GoalClient(base_url="http://goal.test").request("GET", "/health")
+
+    assert error.value.status_code == 502
+    assert error.value.payload == {"detail": "goal_service_invalid_response"}
+
+
 def test_cycle_detection_returns_path(store):
     project = store.create_project("P", reason="init")
     project_id = project["project"]["id"]
@@ -255,6 +795,26 @@ def test_batch_is_atomic_and_rollback_is_lifo(store):
     store.rollback(applied["batch_id"])
     with pytest.raises(KeyError):
         store.get_node(node_id)
+
+
+def test_large_rollback_requires_one_time_confirmation_token(store):
+    project = store.create_project("P", reason="init")
+    applied = store.apply_batch(
+        project["project"]["id"],
+        [
+            {"op": "create_node", "node_type": "task", "title": f"N{index}"}
+            for index in range(11)
+        ],
+        reason="large batch",
+    )
+
+    with pytest.raises(ConfirmationRequired) as pending:
+        store.rollback(applied["batch_id"])
+
+    token = pending.value.token
+    store.rollback(applied["batch_id"], confirm_token=token)
+    with pytest.raises(GoalConflict, match="already been rolled back"):
+        store.rollback(applied["batch_id"], confirm_token=token)
 
 
 def test_rollback_can_be_redone_and_new_writes_close_redo_branch(store):
@@ -323,6 +883,28 @@ def test_goal_manager_complete_checks_required_children(store):
     assert completed["node"]["status"] == "completed"
 
 
+def test_completion_cannot_bypass_blocked_or_human_review_states(store):
+    project = store.create_project("P", reason="init")
+    blocked = store.create_node(
+        project["project"]["id"],
+        {"node_type": "task", "title": "Blocked", "status": "blocked", "progress": 1},
+        reason="add blocked",
+    )["node"]
+    with pytest.raises(GoalConflict, match="completion blocked") as blocked_error:
+        store.complete_node(blocked["id"], reason="finish blocked")
+    assert blocked_error.value.payload["blockers"][0]["code"] == "node_status_not_completable"
+
+    review = store.create_node(
+        project["project"]["id"],
+        {"node_type": "task", "title": "Review", "progress": 1},
+        reason="add review",
+    )["node"]
+    submitted = store.submit_for_review(review["id"], review["version"], reason="request review")
+    with pytest.raises(GoalConflict, match="completion blocked") as review_error:
+        store.complete_node(submitted["node"]["id"], reason="bypass review")
+    assert review_error.value.payload["blockers"][0]["code"] == "node_status_not_completable"
+
+
 def test_optimistic_lock_and_soft_delete(store):
     project = store.create_project("P", reason="init")
     node = store.create_node(project["project"]["id"], {"node_type": "task", "title": "T"}, reason="add")["node"]
@@ -348,6 +930,67 @@ def test_confirm_token_for_root_delete(store):
     assert token
     deleted = store.delete_node(root_id, cascade=True, reason="delete root", confirm_token=token)
     assert deleted["node"]["deleted_at"] is not None
+    assert store.list_projects() == []
+    with pytest.raises(KeyError):
+        store.get_project(project["project"]["id"])
+
+    rolled_back = store.rollback(deleted["batch_id"], reason="restore project")
+    assert rolled_back["rolled_back"] is True
+    assert store.list_projects()[0]["id"] == project["project"]["id"]
+    assert store.get_project(project["project"]["id"])["root"]["deleted_at"] is None
+
+
+def test_batch_root_delete_archives_project_and_rolls_back(store):
+    project = store.create_project("Batch root", reason="init")
+    root_id = project["root"]["id"]
+    with pytest.raises(Exception) as error:
+        store.apply_batch(
+            project["project"]["id"],
+            [{"op": "delete_node", "node_id": root_id, "cascade": True}],
+            reason="delete root batch",
+        )
+    token = getattr(error.value, "token", None)
+    assert token
+    result = store.apply_batch(
+        project["project"]["id"],
+        [{"op": "delete_node", "node_id": root_id, "cascade": True}],
+        reason="delete root batch", confirm_token=token,
+    )
+    assert store.list_projects() == []
+    store.rollback(result["batch_id"], reason="restore root batch")
+    assert store.list_projects()[0]["id"] == project["project"]["id"]
+
+
+def test_batch_root_delete_must_be_final_operation(store):
+    project = store.create_project("Batch order", reason="init")
+    root_id = project["root"]["id"]
+    child = store.create_node(
+        project["project"]["id"], {"node_type": "task", "title": "Child"}, reason="add child"
+    )["node"]
+    with pytest.raises(Exception) as error:
+        store.apply_batch(
+            project["project"]["id"],
+            [
+                {"op": "delete_node", "node_id": root_id, "cascade": True},
+                {"op": "delete_node", "node_id": child["id"]},
+            ],
+            reason="invalid root order",
+        )
+    token = getattr(error.value, "token", None)
+    assert token
+    with pytest.raises(GoalConflict, match="final batch operation"):
+        store.apply_batch(
+            project["project"]["id"],
+            [
+                {"op": "delete_node", "node_id": root_id, "cascade": True},
+                {"op": "delete_node", "node_id": child["id"]},
+            ],
+            reason="invalid root order",
+            confirm_token=token,
+        )
+    assert store.list_projects()[0]["id"] == project["project"]["id"]
+    assert store.get_node(root_id)["deleted_at"] is None
+    assert store.get_node(child["id"])["deleted_at"] is None
 
 
 def test_next_actions_respects_dependency_direction(store):
@@ -549,6 +1192,62 @@ def test_memory_reference_is_scoped_to_its_node(store):
     assert store.list_memory_references(first_node)[0]["memory_id"] == "memory:private"
 
 
+def test_graph_query_rejects_start_node_from_another_project(store):
+    first = store.create_project("First graph", reason="init")
+    second = store.create_project("Second graph", reason="init")
+
+    with pytest.raises(KeyError, match="node not found in project"):
+        store.graph_query(first["project"]["id"], second["root"]["id"])
+
+
+def test_project_reads_ignore_corrupted_cross_project_edges(store):
+    first = store.create_project("First isolated", reason="init")
+    second = store.create_project("Second isolated", reason="init")
+    first_node = store.create_node(
+        first["project"]["id"], {"node_type": "task", "title": "First task"}, reason="add"
+    )["node"]
+    second_node = store.create_node(
+        second["project"]["id"], {"node_type": "task", "title": "Second task"}, reason="add"
+    )["node"]
+
+    with store._connect() as conn:
+        conn.execute(
+            "INSERT INTO goal_edges "
+            "(id, project_id, source_id, target_id, edge_type, progress_weight, required, created_by, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "edge_corrupted_cross_project",
+                first["project"]["id"],
+                first_node["id"],
+                second_node["id"],
+                "decomposes_to",
+                1.0,
+                1,
+                "test",
+                "2026-10-05T00:00:00+00:00",
+            ),
+        )
+
+    assert store.get_context(first_node["id"])["children"] == []
+    assert store.completion_check(first_node["id"])["children"] == []
+    assert store.overview(first["project"]["id"])["edges"] == []
+    assert store.graph_query(first["project"]["id"], first_node["id"])["edges"] == []
+
+
+def test_get_project_rejects_cross_project_root_reference(store):
+    first = store.create_project("First root", reason="init")
+    second = store.create_project("Second root", reason="init")
+
+    with store._connect() as conn:
+        conn.execute(
+            "UPDATE goal_projects SET root_node_id=? WHERE id=?",
+            (second["root"]["id"], first["project"]["id"]),
+        )
+
+    with pytest.raises(RuntimeError, match="project root node is missing"):
+        store.get_project(first["project"]["id"])
+
+
 def test_verified_evidence_can_be_applied_then_human_review_approves(store):
     project = store.create_project("Reviewed", reason="init")
     task = store.create_node(
@@ -625,7 +1324,8 @@ def test_review_workflow_requires_current_version_and_ready_node(store):
 
 def test_api_and_tool_schemas(tmp_path):
     db_path = tmp_path / "test_goal_service_api.db"
-    app = create_app({"db_path": str(db_path)})
+    app = create_app({"db_path": str(db_path), "human_review_token": "review-secret"})
+    app.state.review_sessions["short-lived-review"] = time.time() + 300
     try:
         with TestClient(app) as client:
             response = client.post(
@@ -758,8 +1458,17 @@ def test_api_and_tool_schemas(tmp_path):
             )
             assert submitted.status_code == 200
             assert submitted.json()["node"]["status"] == "waiting_review"
+            forged_review = client.post(
+                f"/api/goals/nodes/{review_task_id}/approve-review",
+                json={"expected_version": 3, "reason": "forge", "actor_type": "user"},
+            )
+            assert forged_review.status_code == 403
             approved = client.post(
                 f"/api/goals/nodes/{review_task_id}/approve-review",
+                headers={
+                    "Origin": "http://127.0.0.1:6002",
+                    "X-VoidCube-Review-Token": "short-lived-review",
+                },
                 json={"expected_version": 3, "reason": "approve", "actor_type": "user", "actor_id": "reviewer"},
             )
             assert approved.status_code == 200
@@ -777,6 +1486,10 @@ def test_api_and_tool_schemas(tmp_path):
             ).status_code == 200
             rejected = client.post(
                 f"/api/goals/nodes/{reject_task['id']}/reject-review",
+                headers={
+                    "Origin": "http://127.0.0.1:6002",
+                    "X-VoidCube-Review-Token": "short-lived-review",
+                },
                 json={"expected_version": 2, "reason": "reject", "actor_type": "user"},
             )
             assert rejected.status_code == 200
@@ -790,6 +1503,7 @@ def test_api_and_tool_schemas(tmp_path):
     assert READ_TOOLS.isdisjoint(NON_IDEMPOTENT_WRITE_TOOLS)
     assert {"goal_protocol_next_action", "goal_plan_review", "goal_lifecycle_get", "goal_memory_ref_list"} <= READ_TOOLS
     assert {
+        "goal_node_update", "goal_node_delete", "goal_edge_delete",
         "goal_intent_contract_set", "goal_replan", "goal_record_execution_result",
         "goal_record_observation", "goal_verify_evidence", "goal_apply_evidence_verification",
         "goal_submit_for_review",

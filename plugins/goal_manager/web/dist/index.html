@@ -19,6 +19,10 @@
       </div>
       <div class="toolbar">
         <label class="project-picker">
+          <span>审核凭证</span>
+          <input id="review-token-input" type="password" autocomplete="off" placeholder="输入 reviewer token">
+        </label>
+        <label class="project-picker">
           <span>项目</span>
           <select id="project-select" aria-label="选择项目"></select>
         </label>
@@ -64,7 +68,7 @@
         </div>
         <div id="breadcrumb" class="breadcrumb"></div>
         <div id="radial-wrap" class="radial-wrap">
-          <div id="loading-state" class="state-message">正在连接 Goal Service...</div>
+          <div id="loading-state" class="state-message" role="status" aria-live="polite" aria-busy="true">正在连接 Goal Service...</div>
           <svg id="radial-svg" class="radial-svg" viewBox="0 0 900 650" role="img" aria-label="目标径向图">
             <defs>
               <radialGradient id="node-gradient" cx="34%" cy="28%" r="75%">
@@ -78,7 +82,7 @@
             </defs>
             <g id="radial-content"></g>
           </svg>
-          <div id="empty-state" class="empty-state" hidden>
+          <div id="empty-state" class="empty-state" role="status" aria-live="polite" hidden>
             <strong>还没有可展示的目标</strong>
             <span>创建项目后，从根节点开始拆解。</span>
             <button id="empty-create-button" class="button button-primary" type="button">创建第一个项目</button>
@@ -105,7 +109,7 @@
             <svg id="overview-svg" class="overview-svg" viewBox="0 0 900 260" role="img" aria-label="全局目标总览">
               <g id="overview-content"></g>
             </svg>
-            <div id="overview-empty" class="overview-empty" hidden>当前项目还没有可用的总览节点。</div>
+            <div id="overview-empty" class="overview-empty" role="status" aria-live="polite" hidden>当前项目还没有可用的总览节点。</div>
           </div>
         </section>
       </section>
@@ -141,8 +145,8 @@
     <button type="button" data-menu-action="rollback">回滚最近批次</button>
     <button type="button" data-menu-action="delete" class="danger-action">删除节点</button>
   </div>
-  <div id="goal-dialog" class="dialog-backdrop" role="presentation" hidden>
-    <section class="goal-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+  <div id="goal-dialog" class="dialog-backdrop" role="presentation" aria-hidden="true" hidden>
+    <section class="goal-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" aria-describedby="dialog-content" tabindex="-1">
       <div class="dialog-heading">
         <h2 id="dialog-title">确认操作</h2>
         <button id="dialog-close-button" class="icon-button" type="button" title="关闭" aria-label="关闭">×</button>

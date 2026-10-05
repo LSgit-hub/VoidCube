@@ -963,8 +963,8 @@ class SessionDB:
                 revision_params = (int(expected_revision),)
             cursor = conn.execute(
                 "UPDATE session_goals SET objective = ?, reason = ?, "
-                "blocked_reason = NULL, blocked_streak = 0, "
-                "blocked_audit_turn_id = NULL, updated_at = ?, revision = revision + 1 "
+                "blocked_reason = NULL, blocked_streak = 0, blocked_audit_turn_id = NULL, "
+                "updated_at = ?, revision = revision + 1 "
                 "WHERE session_id = ? AND status IN ('active', 'paused', 'blocked')" + revision_clause,
                 (normalized, reason, now, session_id, *revision_params),
             )
@@ -1054,13 +1054,21 @@ class SessionDB:
     def bind_session_goal_backend(
         self, session_id: str, *, backend: str, project_id: str | None,
         root_node_id: str | None, backend_status: str,
+        expected_revision: int | None = None,
     ) -> bool:
+        """Persist backend binding without overwriting a newer goal revision."""
         now = time.time()
         def _do(conn):
+            revision_clause = ""
+            revision_params: tuple[Any, ...] = ()
+            if expected_revision is not None:
+                revision_clause = " AND revision = ?"
+                revision_params = (int(expected_revision),)
             cursor = conn.execute(
                 "UPDATE session_goals SET backend = ?, project_id = ?, root_node_id = ?, "
-                "backend_status = ?, revision = revision + 1, updated_at = ? WHERE session_id = ?",
-                (backend, project_id, root_node_id, backend_status, now, session_id),
+                "backend_status = ?, revision = revision + 1, updated_at = ? "
+                "WHERE session_id = ?" + revision_clause,
+                (backend, project_id, root_node_id, backend_status, now, session_id, *revision_params),
             )
             return cursor.rowcount
         return bool(self._execute_write(_do))

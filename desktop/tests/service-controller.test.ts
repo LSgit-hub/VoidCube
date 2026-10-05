@@ -9,7 +9,14 @@ describe('service control protocol', () => {
       ok: true,
       generatedAt: '2026-08-09T00:00:00+00:00',
       services: [
-        { name: 'gateway', port: 6000, pid: 1234, state: 'healthy' },
+        {
+          name: 'gateway',
+          port: 6000,
+          pid: 1234,
+          state: 'healthy',
+          registered: true,
+          controlPlaneHealthy: true
+        },
         { name: 'memory', port: 6001, pid: null, state: 'stopped' }
       ],
       plugins: [{
@@ -40,10 +47,31 @@ describe('service control protocol', () => {
       name: 'gateway',
       port: 6000,
       pid: 1234,
-      state: 'healthy'
+      state: 'healthy',
+      registered: true,
+      controlPlaneHealthy: true
     })
     expect(result.executionContext?.backend).toBe('podman')
     expect(result.plugins?.[0]?.uiPath).toBe('/ui/goal-manager/')
+  })
+
+  it('accepts a structured restart-block reason from the service owner', () => {
+    const result = parseServiceControlResult(JSON.stringify({
+      schemaVersion: 1,
+      action: 'restart',
+      ok: false,
+      generatedAt: '2026-08-09T00:00:00+00:00',
+      error: 'service restart blocked: port release timeout',
+      services: [{
+        name: 'supervisor',
+        port: 6002,
+        pid: 123,
+        state: 'unhealthy',
+        restartBlocked: 'port_release_timeout'
+      }]
+    }))
+    expect(result.ok).toBe(false)
+    expect(result.services[0]?.restartBlocked).toBe('port_release_timeout')
   })
 
   it('rejects unknown protocol versions and service states', () => {
@@ -54,6 +82,40 @@ describe('service control protocol', () => {
       generatedAt: 'now',
       services: []
     }))).toThrow(/unsupported response/)
+
+    expect(() => parseServiceControlResult(JSON.stringify({
+      schemaVersion: 1,
+      action: 'status',
+      ok: false,
+      generatedAt: 'now',
+      services: [{ name: 'gateway', port: 6000, state: 'healthy', controlPlaneHealthy: 'yes' }]
+    }))).toThrow(/unsupported response/)
+
+    expect(() => parseServiceControlResult(JSON.stringify({
+      schemaVersion: 1,
+      action: 'status',
+      ok: true,
+      generatedAt: 'now',
+      services: [{ name: 'gateway', port: 0, state: 'healthy' }]
+    }))).toThrow(/unsupported response/)
+
+    expect(() => parseServiceControlResult(JSON.stringify({
+      schemaVersion: 1,
+      action: 'status',
+      ok: true,
+      generatedAt: 'now',
+      services: [{ name: 'gateway', port: 6000.5, state: 'healthy' }]
+    }))).toThrow(/unsupported response/)
+
+    for (const pid of [0, -1, 12.5]) {
+      expect(() => parseServiceControlResult(JSON.stringify({
+        schemaVersion: 1,
+        action: 'status',
+        ok: true,
+        generatedAt: 'now',
+        services: [{ name: 'gateway', port: 6000, pid, state: 'healthy' }]
+      }))).toThrow(/unsupported response/)
+    }
 
     expect(() => parseServiceControlResult(JSON.stringify({
       schemaVersion: 1,
@@ -69,6 +131,14 @@ describe('service control protocol', () => {
       ok: false,
       generatedAt: 'now',
       services: [{ name: 'gateway', port: 6000, state: 'unknown' }]
+    }))).toThrow(/unsupported response/)
+
+    expect(() => parseServiceControlResult(JSON.stringify({
+      schemaVersion: 1,
+      action: 'status',
+      ok: false,
+      generatedAt: 'now',
+      services: [{ name: 'gateway', port: 6000, state: 'healthy', registered: 'yes' }]
     }))).toThrow(/unsupported response/)
 
     expect(() => parseServiceControlResult(JSON.stringify({

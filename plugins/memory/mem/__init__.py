@@ -220,7 +220,7 @@ class MemMemoryProvider(MemoryProvider):
         from voidcube.application.goal_memory_context import (
             GoalMemoryContextBudget,
             build_goal_memory_context_block,
-            resolve_goal_memory_refs,
+            resolve_goal_memory_refs_with_metrics,
         )
 
         budget = GoalMemoryContextBudget(
@@ -229,13 +229,19 @@ class MemMemoryProvider(MemoryProvider):
             max_item_chars=900,
         )
         try:
-            resolution = resolve_goal_memory_refs(
+            resolution, metrics = resolve_goal_memory_refs_with_metrics(
                 memory_refs,
                 self._memory_client,
                 budget=budget,
                 session_id=str(session_id or self._session_id or "").strip() or None,
             )
-            return build_goal_memory_context_block(resolution, budget=budget)
+            context = build_goal_memory_context_block(resolution, budget=budget)
+            logger.info(
+                "Goal linked-memory context resolved: refs=%d resolved=%d skipped=%d truncated=%s elapsed_ms=%.3f",
+                metrics["reference_count"], metrics["resolved_count"], metrics["skipped_count"],
+                metrics["budget_truncated"], metrics["elapsed_ms"],
+            )
+            return context
         except Exception as exc:
             logger.warning("Goal linked-memory resolution unavailable: %s", exc)
             return ""

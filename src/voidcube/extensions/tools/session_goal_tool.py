@@ -87,15 +87,31 @@ def dispatch_session_goal(
     status: str | None = None,
     reason: str | None = None,
     turn_id: str = "",
-    allow_blocked: bool = False,
 ) -> str:
-    from ...interfaces.cli.session_goal_runtime import (
-        audit_blocked_goal,
-        clear_goal,
-        create_goal,
-        get_goal,
-        update_goal,
+    goal_port = getattr(host, "_session_goal_port", None)
+    if goal_port is None:
+        from ...application.ports import DefaultSessionGoalPort
+        goal_port = DefaultSessionGoalPort()
+    required_methods = (
+        "audit_blocked_goal",
+        "clear_goal",
+        "create_goal",
+        "get_goal",
+        "update_goal",
     )
+    missing_methods = [
+        name for name in required_methods if not callable(getattr(goal_port, name, None))
+    ]
+    if missing_methods:
+        return tool_error(
+            "session goal adapter is incomplete: missing "
+            + ", ".join(missing_methods)
+        )
+    audit_blocked_goal = goal_port.audit_blocked_goal
+    clear_goal = goal_port.clear_goal
+    create_goal = goal_port.create_goal
+    get_goal = goal_port.get_goal
+    update_goal = goal_port.update_goal
 
     if action == "create":
         normalized_objective = " ".join(str(objective or "").split())
@@ -140,10 +156,8 @@ def dispatch_session_goal(
         if status == "complete":
             status = "completed"
         allowed_statuses = {"paused", "completed"}
-        if allow_blocked:
-            allowed_statuses.add("blocked")
         if status not in allowed_statuses:
-            return tool_error("status must be paused, completed, or blocked")
+            return tool_error("status must be paused or completed")
         if not update_goal(host, status, reason):
             return tool_error("goal update rejected", goal=get_goal(host))
         return json.dumps(
@@ -189,7 +203,6 @@ def _individual_goal_dispatch(action: str, args: dict[str, Any], **kwargs: Any) 
         host=host,
         status=status,
         reason=args.get("reason"),
-        allow_blocked=True,
     )
 
 

@@ -11,10 +11,13 @@
 from __future__ import annotations
 
 import json
+import io
 import socket
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError
 import urllib.request
 from types import SimpleNamespace
 
@@ -148,6 +151,18 @@ def test_bad_manifest_skipped_and_isolated(plugin_env):
     assert "bad_plugin" not in names
 
 
+@pytest.mark.parametrize("port", [0, 65536, 6010.5, True])
+def test_manifest_rejects_invalid_service_ports(plugin_env, port):
+    manifest_path = plugin_env / PLUGIN_NAME / "plugin.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["service"]["port"] = port
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    pr.reset_scan_cache()
+
+    assert PLUGIN_NAME not in {item.name for item in pr.discover_plugin_manifests()}
+
+
 def test_empty_service_web_sections_produce_no_false_warnings(plugin_env, caplog):
     """无 service/web 段的插件不应触发误报 warning（回归：空 dict 走了段校验）。"""
     plain = plugin_env / "plain_plugin"
@@ -226,6 +241,18 @@ def test_service_config_and_app_build(plugin_env):
     assert resp.json()["service"] == PLUGIN_NAME
 
 
+def test_plugin_service_config_inherits_gateway_defaults(plugin_env):
+    system_config = SimpleNamespace(
+        gateway=SimpleNamespace(host="10.0.0.8", port=6123, auth_token="root-secret"),
+        goal_manager={},
+    )
+
+    config = sl._build_service_config(PLUGIN_NAME, 6010, system_config)
+
+    assert config["gateway_address"] == "http://10.0.0.8:6123"
+    assert config["gateway_auth_token"] == "root-secret"
+
+
 def test_gateway_service_types_contract(plugin_env):
     assert sl._required_gateway_service_types(PLUGIN_NAME) == ("goal",)
     # core 服务回归
@@ -262,6 +289,47 @@ def test_port_identity_with_real_server(plugin_env):
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+def test_port_identity_accepts_degraded_health_response(plugin_env, monkeypatch):
+    error = HTTPError(
+        "http://127.0.0.1:6010/health",
+        503,
+        "degraded",
+        {},
+        io.BytesIO(b'{"service":"fake_goal","status":"degraded"}'),
+    )
+
+    def raise_degraded(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(urllib.request, "urlopen", raise_degraded)
+
+    assert sl._health_endpoint_is_service(6010, PLUGIN_NAME, "/health") is True
+
+
+def test_health_probe_requires_http_200():
+    class Handler(BaseHTTPRequestHandler):
+        status = 503
+
+        def do_GET(self):
+            self.send_response(type(self).status)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        assert sl._health_check(port, timeout=1.0, health_path="/health") is False
+        Handler.status = 200
+        assert sl._health_check(port, timeout=1.0, health_path="/health") is True
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
 
 
 # ── 4. supervisor web 挂载 ──────────────────────────────────────
@@ -314,6 +382,43 @@ def test_plugin_config_overrides_declared_port(plugin_env, tmp_path, monkeypatch
     assert sl.SERVICES[PLUGIN_NAME].port == 6011
     config = sl._build_service_config(PLUGIN_NAME, 6011, SimpleNamespace())
     assert config["custom_value"] == "retained"
+
+
+def test_plugin_service_config_preserves_shared_review_session_settings(plugin_env, tmp_path, monkeypatch):
+    config_home = tmp_path / "VoidCube-home"
+    config_home.mkdir()
+    session_db = tmp_path / "shared" / "review.db"
+    (config_home / "config.yaml").write_text(
+        "goal_manager:\n"
+        "  enabled: true\n"
+        "  port: 6011\n"
+        "  human_review_token: launcher-secret\n"
+        f"  review_session_db_path: '{session_db.as_posix()}'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(config_home))
+    pr.reset_scan_cache()
+    sl._plugin_services_registered = False
+    sl.register_plugin_services(force=True)
+    config = sl._build_plugin_service_config(sl.SERVICES[PLUGIN_NAME], 6011, SimpleNamespace())
+    assert config["human_review_token"] == "launcher-secret"
+    assert config["review_session_db_path"] == session_db.resolve().as_posix()
+
+
+@pytest.mark.parametrize("port", [0, 65536, 6010.5, True])
+def test_plugin_service_rejects_invalid_configured_ports(plugin_env, tmp_path, monkeypatch, port):
+    config_home = tmp_path / "VoidCube-home"
+    config_home.mkdir()
+    rendered = "true" if port is True else str(port)
+    (config_home / "config.yaml").write_text(
+        f"goal_manager:\n  enabled: true\n  port: {rendered}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VOIDCUBE_HOME", str(config_home))
+
+    pr.reset_scan_cache()
+
+    assert pr.find_plugin_services() == []
 
 
 def test_web_declarations_reject_escape_and_reserved_mounts(plugin_env):

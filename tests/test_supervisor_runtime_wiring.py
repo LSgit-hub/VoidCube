@@ -791,7 +791,10 @@ async def test_supervisor_registers_embedded_executor_with_gateway(tmp_path, mon
             return False
 
         async def json(self):
-            return {"service_id": f"{self._service_type}-service"}
+            return {
+                "service_id": f"{self._service_type}-service",
+                "service_token": f"{self._service_type}-token",
+            }
 
     class _Session:
         async def __aenter__(self):
@@ -817,6 +820,57 @@ async def test_supervisor_registers_embedded_executor_with_gateway(tmp_path, mon
     assert registrations[1][1]["metadata"]["embedded_in"] == "supervisor"
     assert supervisor._gateway_service_id == "supervisor-service"
     assert supervisor._gateway_executor_service_id == "executor-service"
+    assert supervisor._gateway_service_tokens == {
+        "supervisor": "supervisor-token",
+        "executor": "executor-token",
+    }
+    assert supervisor._service_runtime.gateway_service_token == "supervisor-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_rejects_registration_without_service_token(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+
+    async def no_retry_delay(_delay):
+        return None
+
+    monkeypatch.setattr(
+        "voidcube.systems.supervisor.service_runtime.asyncio.sleep",
+        no_retry_delay,
+    )
+
+    class _Response:
+        status = 201
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"service_id": "supervisor-service"}
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    result = await supervisor._register_gateway_service(
+        "http://gateway.test/register",
+        {"service_type": "supervisor"},
+    )
+
+    assert result is None
+    assert supervisor._gateway_service_tokens == {}
 
 
 @pytest.mark.asyncio
@@ -867,6 +921,127 @@ async def test_supervisor_gateway_verification_isolates_single_request_failure(
     ]
     assert missing_service_types == {"executor"}
     supervisor._register_gateway_service_type.assert_awaited_once_with("executor")  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_gateway_verification_rejects_mismatched_service_identity(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-service"
+    supervisor._gateway_executor_service_id = None
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {
+                "service_id": "supervisor-service",
+                "service_type": "executor",
+                "address": "http://wrong-host:9999",
+            }
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    assert await supervisor._missing_gateway_service_types() == {"supervisor", "executor"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_reports_health_with_registered_service_token(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "supervisor-service"
+    supervisor._gateway_service_tokens = {"supervisor": "supervisor-token"}
+    monkeypatch.setenv("GATEWAY_AUTH_TOKEN", "root-token")
+    requests = []
+
+    class _Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json, headers, timeout):
+            requests.append((url, json, headers, timeout))
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    assert await supervisor._report_gateway_health(False) is True
+    assert requests == [
+        (
+            f"{supervisor.config.execution.gateway_address}/health/supervisor-service",
+            {"healthy": False},
+            {
+                "Authorization": "Bearer root-token",
+                "x-voidcube-service-token": "supervisor-token",
+            },
+            5,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_supervisor_clears_expired_gateway_credentials(tmp_path, monkeypatch):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor._gateway_service_id = "stale-supervisor-service"
+    supervisor._gateway_service_tokens = {"supervisor": "stale-token"}
+    supervisor._service_runtime.gateway_service_token = "stale-token"
+
+    class _Response:
+        status = 404
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setitem(sys.modules, "aiohttp", SimpleNamespace(ClientSession=_Session))
+
+    assert await supervisor._report_gateway_health(True) is False
+    assert supervisor._gateway_service_id is None
+    assert supervisor._gateway_service_tokens == {}
+    assert supervisor._service_runtime.gateway_service_token is None
 
 
 @pytest.mark.unit
@@ -4843,6 +5018,42 @@ def test_supervisor_lifespan_releases_database_on_exit(tmp_path, failure_stage):
             assert marker.exists()
     assert not marker.exists()
     supervisor._stop_periodic_tasks.assert_awaited_once()
+
+
+def test_supervisor_lifespan_closes_review_session_store(tmp_path):
+    supervisor = _make_supervisor(tmp_path)
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+    supervisor._start_periodic_tasks = AsyncMock()
+    supervisor._stop_periodic_tasks = AsyncMock()
+    review_store = supervisor.app.state.review_session_store
+    with TestClient(supervisor.app):
+        assert review_store.get("missing") is None
+    assert review_store.get("missing") is None
+
+
+def test_supervisor_reads_goal_manager_review_configuration(tmp_path, monkeypatch):
+    import voidcube.extensions.plugins.registry as registry
+
+    session_db = tmp_path / "configured-review.db"
+    monkeypatch.setattr(
+        registry,
+        "load_plugin_config",
+        lambda key: {
+            "human_review_token": "configured-reviewer",
+            "review_session_db_path": str(session_db),
+        } if key == "goal_manager" else {},
+    )
+    supervisor = _make_supervisor(tmp_path)
+    assert supervisor.app.state.review_session_store.path == session_db.resolve()
+    supervisor.register_with_gateway = AsyncMock(return_value="test-service")
+    supervisor._start_periodic_tasks = AsyncMock()
+    supervisor._stop_periodic_tasks = AsyncMock()
+    with TestClient(supervisor.app) as client:
+        response = client.post(
+            "/ui/review-session",
+            headers={"X-VoidCube-Review-Token": "configured-reviewer"},
+        )
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio

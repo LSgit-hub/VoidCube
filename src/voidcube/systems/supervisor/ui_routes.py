@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import secrets
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger("supervisor.ui")
@@ -41,12 +44,53 @@ class SupervisorUIRoutePorts:
     control_delivery: Callable[..., Any] | None = None
     upload_delivery_asset: Callable[..., Any] | None = None
     get_delivery_asset: Callable[..., Any] | None = None
+    review_session_token: str = ""
+    review_session_ttl_seconds: int = 300
+    review_session_store: Any = None
 
 
 def mount_supervisor_ui_routes(ports: SupervisorUIRoutePorts) -> None:
     if not ports.enabled:
         return
     app = ports.app
+
+    async def issue_review_session(request: Request) -> JSONResponse:
+        supplied = str(request.headers.get("x-voidcube-review-token") or "").strip()
+        expected = str(ports.review_session_token or "").strip()
+        if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+            return JSONResponse(status_code=401, content={"detail": "invalid reviewer credential"})
+        session_token = secrets.token_urlsafe(32)
+        sessions = ports.review_session_store
+        if sessions is None:
+            sessions = getattr(app.state, "review_sessions", None)
+            if sessions is None:
+                sessions = {}
+                app.state.review_sessions = sessions
+        now = time.time()
+        expiry = now + max(30, int(ports.review_session_ttl_seconds))
+        if hasattr(sessions, "prune"):
+            sessions.prune(now)
+        else:
+            for token, token_expiry in list(sessions.items()):
+                if token_expiry <= now:
+                    sessions.pop(token, None)
+        sessions[session_token] = expiry
+        return JSONResponse(content={"review_token": session_token, "expires_in": max(30, int(ports.review_session_ttl_seconds))})
+
+    async def revoke_review_session(request: Request) -> JSONResponse:
+        supplied = str(request.headers.get("x-voidcube-review-token") or "").strip()
+        if not supplied:
+            return JSONResponse(status_code=401, content={"detail": "review session token required"})
+        sessions = (
+            ports.review_session_store
+            if ports.review_session_store is not None
+            else getattr(app.state, "review_sessions", {})
+        )
+        revoked = bool(sessions.pop(supplied, None) is not None)
+        return JSONResponse(content={"revoked": revoked})
+
+    app.add_api_route("/ui/review-session", issue_review_session, methods=["POST"])
+    app.add_api_route("/ui/review-session", revoke_review_session, methods=["DELETE"])
     app.add_api_route(ports.ui_path, ports.get_ui, methods=["GET"])
     app.add_api_route("/ui/state", ports.get_state, methods=["GET"])
     app.add_api_route("/ui/events", ports.get_events, methods=["GET"])

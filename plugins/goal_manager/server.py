@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import logging
 import os
+import time
 from typing import Any
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,10 +19,54 @@ from .config import service_config
 from .db.connection import GoalStore
 from .domain.graph import GoalConflict
 from .domain.guard import ConfirmationRequired
+from voidcube.infrastructure.security.review_sessions import SQLiteReviewSessionStore
+
+logger = logging.getLogger("goal_manager")
+
+_HUMAN_REVIEW_ORIGINS = frozenset({
+    "http://127.0.0.1:6002",
+    "http://localhost:6002",
+})
+
+
+def _service_token_matches(request: Request, expected: str) -> bool:
+    candidates = []
+    header_token = str(request.headers.get("x-goal-service-token") or "").strip()
+    if header_token:
+        candidates.append(header_token)
+    authorization = str(request.headers.get("authorization") or "").strip()
+    scheme, separator, value = authorization.partition(" ")
+    if separator and scheme.lower() == "bearer":
+        bearer_token = value.strip()
+        if bearer_token:
+            candidates.append(bearer_token)
+    return any(hmac.compare_digest(candidate, expected) for candidate in candidates)
+
+
+def _require_human_review_context(request: Request, actor_type: str) -> None:
+    """Require the local UI origin and a server-issued reviewer credential."""
+    if actor_type not in {"user", "supervisor"}:
+        raise ValueError("review approval requires actor_type user or supervisor")
+    origin = str(request.headers.get("origin") or "").strip().rstrip("/")
+    if origin not in _HUMAN_REVIEW_ORIGINS:
+        raise HTTPException(status_code=403, detail="human review requires Supervisor UI origin")
+    supplied = str(request.headers.get("x-voidcube-review-token") or "").strip()
+    sessions = getattr(request.app.state, "review_sessions", {})
+    now = time.time()
+    if hasattr(sessions, "prune"):
+        sessions.prune(now)
+    else:
+        for token, expiry in list(sessions.items()):
+            if expiry <= now:
+                sessions.pop(token, None)
+    session_expiry = sessions.get(supplied) if hasattr(sessions, "get") else None
+    if session_expiry is not None and session_expiry > now:
+        return
+    raise HTTPException(status_code=401, detail="human review requires a live review session")
 
 
 class ProjectCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     name: str
     description: str = ""
     created_by: str = "agent"
@@ -32,7 +79,7 @@ class ProjectCreate(BaseModel):
 
 
 class NodeCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     project_id: str
     node_type: str | None = None
     type: str | None = None
@@ -57,7 +104,7 @@ class NodeCreate(BaseModel):
 
 
 class NodeUpdate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     expected_version: int
     patch: dict[str, Any] = Field(default_factory=dict)
     reason: str
@@ -67,6 +114,7 @@ class NodeUpdate(BaseModel):
 
 
 class NodeComplete(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     reason: str
     actor_type: str = "agent"
     actor_id: str | None = None
@@ -74,6 +122,7 @@ class NodeComplete(BaseModel):
 
 
 class EvidenceVerificationApply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     verification_id: str
     expected_version: int
     reason: str
@@ -83,6 +132,7 @@ class EvidenceVerificationApply(BaseModel):
 
 
 class ReviewSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     expected_version: int
     reason: str
     actor_type: str = "agent"
@@ -91,6 +141,7 @@ class ReviewSubmission(BaseModel):
 
 
 class ReviewApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     expected_version: int
     reason: str
     actor_type: str = "user"
@@ -99,6 +150,7 @@ class ReviewApproval(BaseModel):
 
 
 class ReviewRejection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     expected_version: int
     reason: str
     actor_type: str = "user"
@@ -107,7 +159,7 @@ class ReviewRejection(BaseModel):
 
 
 class EdgeCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     source_id: str
     target_id: str
     edge_type: str
@@ -121,7 +173,7 @@ class EdgeCreate(BaseModel):
 
 
 class BatchRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     project_id: str
     reason: str
     operations: list[dict[str, Any]]
@@ -133,17 +185,17 @@ class BatchRequest(BaseModel):
 
 
 class RollbackRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     batch_id: str
     reason: str = "rollback batch"
-    confirm: bool = False
+    confirm_token: str | None = None
     actor_type: str = "agent"
     actor_id: str | None = None
     session_id: str | None = None
 
 
 class RedoRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     project_id: str | None = None
     batch_id: str | None = None
     reason: str = "redo batch"
@@ -153,7 +205,7 @@ class RedoRequest(BaseModel):
 
 
 class EvidenceCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     evidence_type: str
     title: str | None = None
     content: str | None = None
@@ -166,7 +218,7 @@ class EvidenceCreate(BaseModel):
 
 
 class MemoryReferenceCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     memory_id: str
     relation_type: str = "context"
     confidence: float = Field(default=1, ge=0, le=1)
@@ -178,7 +230,7 @@ class MemoryReferenceCreate(BaseModel):
 
 
 class ExecutionResultCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     status: str
     summary: str
     outputs: list[Any] | dict[str, Any] = Field(default_factory=list)
@@ -189,7 +241,7 @@ class ExecutionResultCreate(BaseModel):
 
 
 class ObservationCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     execution_result_id: str | None = None
     summary: str
     signals: list[Any] | dict[str, Any] = Field(default_factory=list)
@@ -200,7 +252,7 @@ class ObservationCreate(BaseModel):
 
 
 class EvidenceVerificationCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     evidence_id: str | None = None
     accepted: bool
     summary: str
@@ -212,7 +264,7 @@ class EvidenceVerificationCreate(BaseModel):
 
 
 class ResultAcceptanceCreate(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     accepted: bool
     summary: str
     accepted_by: str | None = None
@@ -223,7 +275,7 @@ class ResultAcceptanceCreate(BaseModel):
 
 
 class IntentContractRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     outcome: str
     success_criteria: list[str] = Field(default_factory=list)
     scope: list[str] = Field(default_factory=list)
@@ -237,7 +289,7 @@ class IntentContractRequest(BaseModel):
 
 
 class PlanVersionRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     reason: str = "create plan version"
     actor_type: str = "agent"
     actor_id: str | None = None
@@ -275,24 +327,49 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
             "http://127.0.0.1:6002",
             "http://localhost:6002",
         ],
-        allow_origin_regex=r"http://(127\.0\.0\.1|localhost):\d+",
         allow_credentials=False,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Accept", "Content-Type", "Authorization", "X-Goal-Service-Token"],
+        allow_headers=[
+            "Accept", "Content-Type", "Authorization", "X-Goal-Service-Token",
+            "X-VoidCube-Review-Token",
+        ],
     )
     store = GoalStore(runtime_config["db_path"])
     app.state.goal_store = store
     configured_token = str(runtime_config.get("service_token") or "").strip()
+    app.state.goal_service_token = configured_token
+    app.state.review_sessions = {}
+    review_session_db = runtime_config.get("review_session_db_path")
+    if review_session_db:
+        app.state.review_sessions = SQLiteReviewSessionStore(review_session_db)
+    app.state.gateway_service_id = None
+    app.state.gateway_service_token = None
 
     @app.middleware("http")
     async def require_service_token(request: Request, call_next):
         if configured_token and request.url.path.startswith("/api/"):
-            supplied = str(
-                request.headers.get("x-goal-service-token")
-                or request.headers.get("authorization", "").removeprefix("Bearer ")
-            ).strip()
-            if supplied != configured_token:
+            if not _service_token_matches(request, configured_token):
                 return JSONResponse(status_code=401, content={"detail": "invalid goal service token"})
+            # A service credential authenticates an internal agent/service, not
+            # a human reviewer. Reject role escalation before the route sees
+            # the payload, including query-based DELETE calls.
+            actor_type = str(request.query_params.get("actor_type") or "").strip()
+            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+                body = await request.body()
+                if body:
+                    try:
+                        decoded = json.loads(body.decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        decoded = None
+                    if isinstance(decoded, dict):
+                        actor_type = str(decoded.get("actor_type") or actor_type).strip()
+                if body:
+                    request._body = body
+            if actor_type in {"user", "supervisor"}:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "service credentials cannot assume human actor roles"},
+                )
         return await call_next(request)
 
     @app.exception_handler(GoalConflict)
@@ -314,10 +391,6 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     @app.exception_handler(Exception)
     async def handle_exception(_request: Request, exc: Exception):
         return _error_response(exc)
-
-    @app.on_event("shutdown")
-    def close_store() -> None:
-        store.close()
 
     async def register_with_gateway() -> None:
         gateway = str(
@@ -343,15 +416,133 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         try:
             import httpx
             async with httpx.AsyncClient(timeout=3.0) as client:
-                await client.post(f"{gateway}/register", json=payload, headers=headers)
+                response = await client.post(f"{gateway}/register", json=payload, headers=headers)
+                if response.is_success:
+                    result = response.json()
+                    service_id = str(result.get("service_id") or "").strip()
+                    service_token = str(result.get("service_token") or "").strip()
+                    if service_id and service_token:
+                        app.state.gateway_service_id = service_id
+                        app.state.gateway_service_token = service_token
         except Exception:
             # Gateway registration is an optional control-plane signal; the
             # Goal Service remains directly usable when Gateway is unavailable.
             return
 
+    app.state.register_with_gateway = register_with_gateway
+
+    async def report_gateway_health(healthy: bool = True) -> bool:
+        service_id = str(getattr(app.state, "gateway_service_id", "") or "").strip()
+        service_token = str(getattr(app.state, "gateway_service_token", "") or "").strip()
+        if not service_id or not service_token:
+            return False
+        gateway = str(
+            runtime_config.get("gateway_address")
+            or os.getenv("GATEWAY_ADDRESS")
+            or "http://127.0.0.1:6000"
+        ).rstrip("/")
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                response = await client.post(
+                    f"{gateway}/health/{service_id}",
+                    json={"healthy": bool(healthy)},
+                    headers={
+                        "x-voidcube-service-token": service_token,
+                        **(
+                            {"Authorization": f"Bearer {gateway_token}"}
+                            if (gateway_token := str(
+                                runtime_config.get("gateway_auth_token")
+                                or os.getenv("GATEWAY_AUTH_TOKEN")
+                                or ""
+                            ).strip())
+                            else {}
+                        ),
+                    },
+                )
+            status = int(
+                getattr(
+                    response,
+                    "status_code",
+                    getattr(response, "status", 200 if response.is_success else 0),
+                )
+                or 0
+            )
+            if status in {401, 404}:
+                app.state.gateway_service_id = None
+                app.state.gateway_service_token = None
+                return False
+            return response.is_success
+        except Exception:
+            return False
+
+    app.state.report_gateway_health = report_gateway_health
+
+    async def refresh_gateway_health(healthy: bool | None = None) -> bool:
+        if not (
+            str(getattr(app.state, "gateway_service_id", "") or "").strip()
+            and str(getattr(app.state, "gateway_service_token", "") or "").strip()
+        ):
+            await register_with_gateway()
+        if healthy is None:
+            database = store.health_snapshot()
+            healthy = bool(database["readable"] and database["integrity"] == "ok")
+        reported = await report_gateway_health(healthy)
+        if not reported and not (
+            str(getattr(app.state, "gateway_service_id", "") or "").strip()
+            and str(getattr(app.state, "gateway_service_token", "") or "").strip()
+        ):
+            await register_with_gateway()
+            if (
+                str(getattr(app.state, "gateway_service_id", "") or "").strip()
+                and str(getattr(app.state, "gateway_service_token", "") or "").strip()
+            ):
+                return await report_gateway_health(healthy)
+        return reported
+
+    app.state.refresh_gateway_health = refresh_gateway_health
+
+    async def gateway_health_loop() -> None:
+        interval = float(runtime_config["gateway_health_interval_seconds"])
+        initial_registration = getattr(app.state, "gateway_registration_task", None)
+        if initial_registration is not None:
+            try:
+                await asyncio.shield(initial_registration)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Initial Goal Manager Gateway registration failed: %s", exc)
+        while True:
+            try:
+                await refresh_gateway_health()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Goal Manager Gateway health report failed: %s", exc)
+            await asyncio.sleep(interval)
+
     @app.on_event("startup")
     async def schedule_gateway_registration() -> None:
         app.state.gateway_registration_task = asyncio.create_task(register_with_gateway())
+        app.state.gateway_health_task = asyncio.create_task(gateway_health_loop())
+
+    @app.on_event("shutdown")
+    async def stop_gateway_tasks() -> None:
+        tasks = [
+            getattr(app.state, "gateway_registration_task", None),
+            getattr(app.state, "gateway_health_task", None),
+        ]
+        for task in tasks:
+            if task is not None and not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
+        app.state.gateway_registration_task = None
+        app.state.gateway_health_task = None
+        review_sessions = getattr(app.state, "review_sessions", None)
+        if hasattr(review_sessions, "close"):
+            review_sessions.close()
+        store.close()
 
     @app.get("/")
     def root() -> dict[str, Any]:
@@ -359,7 +550,16 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        return {"service": "goal_manager", "status": "ok"}
+        database = store.health_snapshot()
+        healthy = bool(database["readable"] and database["integrity"] == "ok")
+        return JSONResponse(
+            content={
+                "service": "goal_manager",
+                "status": "ok" if healthy else "degraded",
+                "database": database,
+            },
+            status_code=200 if healthy else 503,
+        )
 
     @app.get("/api/goals/projects")
     def list_projects() -> dict[str, Any]:
@@ -468,11 +668,13 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
         return store.submit_for_review(node_id, **payload.model_dump())
 
     @app.post("/api/goals/nodes/{node_id}/approve-review")
-    def approve_review(node_id: str, payload: ReviewApproval) -> dict[str, Any]:
+    def approve_review(node_id: str, payload: ReviewApproval, request: Request) -> dict[str, Any]:
+        _require_human_review_context(request, payload.actor_type)
         return store.approve_review(node_id, **payload.model_dump())
 
     @app.post("/api/goals/nodes/{node_id}/reject-review")
-    def reject_review(node_id: str, payload: ReviewRejection) -> dict[str, Any]:
+    def reject_review(node_id: str, payload: ReviewRejection, request: Request) -> dict[str, Any]:
+        _require_human_review_context(request, payload.actor_type)
         return store.reject_review(node_id, **payload.model_dump())
 
     @app.delete("/api/goals/nodes/{node_id}")

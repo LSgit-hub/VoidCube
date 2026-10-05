@@ -9,7 +9,11 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from voidcube.infrastructure.gateway.executor import ExecutorOpsClient, default_gateway_url
+from voidcube.infrastructure.gateway.executor import (
+    ExecutorOpsClient,
+    ExecutorOpsClientError,
+    default_gateway_url,
+)
 
 
 def test_executor_ops_default_gateway_matches_service_config(monkeypatch):
@@ -102,3 +106,59 @@ def test_executor_ops_client_fails_closed_when_executor_route_is_unavailable():
 
     assert post.call_count == 1
     assert post.call_args_list[0].args[0] == "http://gateway.local/api/executor/body/upgrade/execute"
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), "invalid"])
+def test_executor_ops_client_rejects_invalid_timeout(timeout):
+    with pytest.raises(ValueError, match="finite positive number"):
+        ExecutorOpsClient(gateway_url="http://gateway.local", timeout=timeout)
+
+
+def test_executor_ops_client_encodes_slot_id_as_one_path_segment():
+    response = Mock()
+    response.json.return_value = {"slot": {"slot_id": "safe"}}
+    response.raise_for_status.return_value = None
+
+    with patch("voidcube.infrastructure.gateway.executor.requests.get", return_value=response) as get:
+        ExecutorOpsClient(gateway_url="http://gateway.local").get_body_slot("slot?A#B")
+
+    assert get.call_args.args[0] == "http://gateway.local/api/executor/body/slots/slot%3FA%23B"
+
+
+def test_executor_ops_client_rejects_slot_path_separator():
+    client = ExecutorOpsClient(gateway_url="http://gateway.local")
+
+    with pytest.raises(ValueError, match="path separators"):
+        client.get_body_slot("slot/A")
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_executor_ops_client_rejects_non_object_response(method):
+    response = Mock()
+    response.json.return_value = []
+    response.raise_for_status.return_value = None
+    request_method = "requests.get" if method == "get" else "requests.post"
+
+    with patch(f"voidcube.infrastructure.gateway.executor.{request_method}", return_value=response):
+        client = ExecutorOpsClient(gateway_url="http://gateway.local")
+        with pytest.raises(ExecutorOpsClientError, match="non-object"):
+            if method == "get":
+                client.get_body_registry()
+            else:
+                client.execute_body_upgrade({})
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_executor_ops_client_rejects_malformed_json_response(method):
+    response = Mock()
+    response.json.side_effect = ValueError("invalid json")
+    response.raise_for_status.return_value = None
+    request_method = "requests.get" if method == "get" else "requests.post"
+
+    with patch(f"voidcube.infrastructure.gateway.executor.{request_method}", return_value=response):
+        client = ExecutorOpsClient(gateway_url="http://gateway.local")
+        with pytest.raises(ExecutorOpsClientError, match="invalid JSON"):
+            if method == "get":
+                client.get_body_registry()
+            else:
+                client.execute_body_upgrade({})

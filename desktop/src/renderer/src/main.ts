@@ -22,14 +22,15 @@ import './style.css'
 import { MonitorHealthGate } from './monitor-health'
 import type {
   ServiceControlResult,
+  ServiceControlAction,
   ExecutionContext,
-  PluginControlAction,
   PluginInfo,
   ServiceInfo,
   ServiceLifecycleAction,
   TerminalBackend,
   TerminalState
 } from '../../shared/contracts'
+import { serviceLabel } from './service-state'
 
 type LayoutMode = 'split' | 'monitor' | 'terminal'
 
@@ -177,6 +178,7 @@ let serviceActionPending = false
 let pluginActionPending: string | undefined
 let activePluginName: string | undefined
 let backendChangePending = false
+let lastServiceResult: ServiceControlResult | undefined
 let splitPercent = readSplitPercent()
 let layoutMode = readLayoutMode()
 let dragStartY = 0
@@ -189,12 +191,13 @@ function requiredElement<T extends HTMLElement>(id: string): T {
 }
 
 function applyTerminalState(state: TerminalState): void {
-  terminalError.hidden = true
+  terminalError.hidden = state.phase !== 'exited' && state.phase !== 'error'
   switch (state.phase) {
     case 'starting':
       terminalMeta.textContent = '正在创建 PTY'
       break
     case 'running':
+      terminalError.hidden = true
       terminalMeta.textContent = state.pid ? `PID ${state.pid}` : '运行中'
       requestAnimationFrame(fitTerminal)
       if (layoutMode !== 'monitor') terminal.focus()
@@ -273,6 +276,11 @@ function showMonitorStale(): void {
 }
 
 async function connectMonitor(forceReload = false): Promise<void> {
+  if (lastServiceResult?.ok === false) {
+    showMonitorFailure(lastServiceResult.error ?? '后台服务启动失败')
+    return
+  }
+  const generation = ++monitorProbeGeneration
   if (monitorTimer !== undefined) {
     window.clearTimeout(monitorTimer)
     monitorTimer = undefined
@@ -284,6 +292,7 @@ async function connectMonitor(forceReload = false): Promise<void> {
     url: '',
     message: error instanceof Error ? error.message : String(error)
   }))
+  if (generation !== monitorProbeGeneration) return
   if (result.ready) {
     monitorHealth.observe(true)
     if (forceReload || monitorFrame.getAttribute('src') !== result.url) {
@@ -295,7 +304,9 @@ async function connectMonitor(forceReload = false): Promise<void> {
   }
 
   monitorOverlayDetail.textContent = 'VoidCube 服务仍在启动，请稍候'
-  monitorTimer = window.setTimeout(() => void connectMonitor(), 1500)
+  monitorTimer = window.setTimeout(() => {
+    if (generation === monitorProbeGeneration) void connectMonitor()
+  }, 1500)
 }
 
 function showMonitorFailure(message: string): void {
@@ -407,6 +418,12 @@ function setBackendSelectionBusy(busy: boolean): void {
   backendChangePending = busy
   executionSelector.classList.toggle('busy', busy)
   for (const button of backendButtons) button.disabled = busy
+  updateServiceButtonsDisabled()
+}
+
+function updateServiceButtonsDisabled(): void {
+  const disabled = serviceActionPending || pluginActionPending !== undefined || backendChangePending
+  for (const button of serviceButtons) button.disabled = disabled
 }
 
 function showBackendSelectionStatus(message: string, error = false): void {
@@ -443,12 +460,6 @@ function applyExecutionContext(context?: ExecutionContext): void {
     `回退到系统终端：${context.fallbackToLocal ? '允许' : '禁止'}`
   ].join('\n')
   executionSelectorSummary.title = '点击切换执行环境'
-}
-
-function serviceLabel(service: ServiceInfo): string {
-  if (service.state === 'healthy') return service.pid ? `PID ${service.pid}` : '正常'
-  if (service.state === 'unhealthy') return '无响应'
-  return '已停止'
 }
 
 function serviceDisplayName(service: ServiceInfo, plugins: PluginInfo[]): string {
@@ -494,23 +505,48 @@ function renderServiceRows(services: ServiceInfo[], plugins: PluginInfo[]): void
 }
 
 function applyServiceResult(result: ServiceControlResult): void {
+  const hasAuthoritativeSnapshot = Boolean(
+    result.services.length > 0 || result.plugins !== undefined || result.executionContext !== undefined
+  )
+  if (hasAuthoritativeSnapshot || !lastServiceResult) {
+    lastServiceResult = result
+  }
   servicesError.hidden = !result.error
   servicesError.textContent = result.error ?? ''
-  applyPluginResult(result)
-
-  renderServiceRows(result.services, result.plugins ?? [])
-  const serviceByName = new Map(result.services.map((service) => [service.name, service]))
+  const visibleServices = result.services.length > 0 || !result.error
+    ? result.services
+    : (lastServiceResult?.services ?? [])
+  const visiblePlugins = result.plugins ?? lastServiceResult?.plugins ?? []
+  const visibleResult = visiblePlugins !== result.plugins || visibleServices !== result.services
+    ? { ...result, services: visibleServices, plugins: visiblePlugins }
+    : result
+  applyPluginResult(visibleResult)
+  renderServiceRows(visibleServices, visiblePlugins)
+  const serviceByName = new Map(visibleServices.map((service) => [service.name, service]))
 
   if (result.error) {
-    servicesSummary.textContent = '控制不可用'
+    servicesSummary.textContent = visibleServices.some((service) => service.restartBlocked)
+      ? '重启受阻'
+      : '控制不可用'
+    return
+  }
+
+  if (visibleServices.length === 0) {
+    servicesSummary.textContent = '没有可管理的服务'
     return
   }
 
   applyExecutionContext(result.executionContext)
 
-  const healthyCount = result.services.filter((service) => service.state === 'healthy').length
-  const stoppedCount = result.services.filter((service) => service.state === 'stopped').length
-  const total = result.services.length
+  const healthyCount = visibleServices.filter(
+    (service) => (
+      service.state === 'healthy' &&
+      service.registered !== false &&
+      service.controlPlaneHealthy !== false
+    )
+  ).length
+  const stoppedCount = visibleServices.filter((service) => service.state === 'stopped').length
+  const total = visibleServices.length
   servicesSummary.textContent = `${healthyCount}/${total} 正常`
   if (total > 0 && stoppedCount === total) servicesSummary.textContent = '已全部停止'
 
@@ -529,6 +565,38 @@ function applyServiceResult(result: ServiceControlResult): void {
 function pluginStateClass(plugin: PluginInfo): string {
   if (!plugin.enabled) return 'disabled'
   return plugin.service?.state ?? 'available'
+}
+
+function pluginStateLabel(plugin: PluginInfo): string {
+  if (!plugin.enabled) return '已禁用'
+  if (!plugin.service) return '可用'
+  if (plugin.service.restartBlocked === 'port_release_timeout') return '端口未释放，重启已阻止'
+  if (plugin.service.restartBlocked) return `重启已阻止：${plugin.service.restartBlocked}`
+  if (plugin.service.registered === false) return '未注册'
+  if (plugin.service.controlPlaneHealthy === false) return '控制面不可用'
+  if (plugin.service.state === 'healthy') return '正常'
+  if (plugin.service.state === 'unhealthy') return '无响应'
+  return '已停止'
+}
+
+function pluginStateTone(plugin: PluginInfo): string {
+  if (!plugin.enabled) return 'disabled'
+  if (!plugin.service) return 'available'
+  if (
+    plugin.service.restartBlocked ||
+    plugin.service.state === 'unhealthy' ||
+    plugin.service.registered === false ||
+    plugin.service.controlPlaneHealthy === false
+  ) return 'unhealthy'
+  return plugin.service.state
+}
+
+function pluginServiceAvailable(plugin: PluginInfo): boolean {
+  return !plugin.service || (
+    plugin.service.state === 'healthy' &&
+    plugin.service.registered !== false &&
+    plugin.service.controlPlaneHealthy !== false
+  )
 }
 
 function renderPlugin(plugin: PluginInfo): HTMLElement {
@@ -554,7 +622,12 @@ function renderPlugin(plugin: PluginInfo): HTMLElement {
   name.textContent = plugin.displayName
   const version = document.createElement('small')
   version.textContent = `v${plugin.version}`
+  const state = document.createElement('small')
+  state.className = 'plugin-state-label'
+  state.dataset.state = pluginStateTone(plugin)
+  state.textContent = pluginStateLabel(plugin)
   heading.append(name, version)
+  heading.append(state)
   copy.append(heading)
   row.append(stateDot, copy)
   return row
@@ -572,9 +645,7 @@ function applyPluginResult(result: ServiceControlResult): void {
     for (const plugin of plugins) pluginList.append(renderPlugin(plugin))
   }
   const enabled = plugins.filter((plugin) => plugin.enabled)
-  const available = enabled.filter(
-    (plugin) => !plugin.service || plugin.service.state === 'healthy'
-  )
+  const available = enabled.filter(pluginServiceAvailable)
   pluginsSummary.textContent = result.error
     ? '控制不可用'
     : `${available.length}/${enabled.length} 可用`
@@ -585,7 +656,7 @@ function applyPluginResult(result: ServiceControlResult): void {
   })
   if (activePluginName) {
     const activePlugin = plugins.find((plugin) => plugin.name === activePluginName)
-    if (!activePlugin || (activePlugin.service && activePlugin.service.state !== 'healthy')) {
+    if (!activePlugin || !pluginServiceAvailable(activePlugin)) {
       closePluginView()
     }
   }
@@ -593,7 +664,7 @@ function applyPluginResult(result: ServiceControlResult): void {
 
 function setServiceBusy(action?: ServiceLifecycleAction): void {
   serviceActionPending = action !== undefined
-  for (const button of serviceButtons) button.disabled = serviceActionPending
+  updateServiceButtonsDisabled()
   serviceProcessMenu.classList.toggle('busy', serviceActionPending)
   if (!action) return
   const labels: Record<ServiceLifecycleAction, string> = {
@@ -604,25 +675,30 @@ function setServiceBusy(action?: ServiceLifecycleAction): void {
   servicesSummary.textContent = labels[action]
 }
 
+function serviceErrorResult(
+  action: ServiceControlAction,
+  error: unknown,
+  snapshot = lastServiceResult
+): ServiceControlResult {
+  return {
+    schemaVersion: 1,
+    action,
+    ok: false,
+    generatedAt: new Date().toISOString(),
+    services: snapshot?.services ?? [],
+    plugins: snapshot?.plugins,
+    executionContext: snapshot?.executionContext,
+    error: error instanceof Error ? error.message : String(error)
+  }
+}
+
 function setPluginBusy(name?: string): void {
   pluginActionPending = name
   pluginMenu.classList.toggle('busy', pluginActionPending !== undefined)
   for (const button of pluginList.querySelectorAll<HTMLButtonElement>('.plugin-openable')) {
     button.disabled = pluginActionPending !== undefined
   }
-}
-
-async function runPluginAction(name: string, action: PluginControlAction): Promise<void> {
-  if (pluginActionPending) return
-  setPluginBusy(name)
-  try {
-    applyServiceResult(await api.plugins.control(name, action))
-  } catch (error) {
-    pluginsError.hidden = false
-    pluginsError.textContent = error instanceof Error ? error.message : String(error)
-  } finally {
-    setPluginBusy()
-  }
+  updateServiceButtonsDisabled()
 }
 
 async function supervisorOrigin(): Promise<string | undefined> {
@@ -640,54 +716,54 @@ async function supervisorOrigin(): Promise<string | undefined> {
 }
 
 async function openPlugin(name: string): Promise<void> {
-  if (pluginActionPending) return
-  let plugin: PluginInfo | undefined
+  if (pluginActionPending || serviceActionPending || backendChangePending) return
+  setPluginBusy(name)
   try {
-    plugin = (await api.services.status()).plugins?.find((item) => item.name === name)
-  } catch (error) {
-    pluginsError.hidden = false
-    pluginsError.textContent = error instanceof Error ? error.message : String(error)
-    return
-  }
-  if (!plugin || !plugin.enabled || !plugin.uiPath) return
-  if (plugin.service && plugin.service.state !== 'healthy') {
-    setPluginBusy(name)
-    try {
+    let plugin = (await api.services.status()).plugins?.find((item) => item.name === name)
+    if (!plugin || !plugin.enabled || !plugin.uiPath) return
+    if (plugin.service && !pluginServiceAvailable(plugin)) {
       const result = await api.plugins.control(name, 'start')
       applyServiceResult(result)
       const refreshed = result.plugins?.find((item) => item.name === name)
-      if (!refreshed || (refreshed.service && refreshed.service.state !== 'healthy')) return
+      if (!refreshed || !pluginServiceAvailable(refreshed)) return
       plugin = refreshed
-    } catch (error) {
-      pluginsError.hidden = false
-      pluginsError.textContent = error instanceof Error ? error.message : String(error)
-      return
-    } finally {
-      setPluginBusy()
     }
-  }
-  const origin = await supervisorOrigin()
-  if (!origin) {
+    const origin = await supervisorOrigin()
+    if (!origin) {
+      pluginsError.hidden = false
+      pluginsError.textContent = 'Supervisor 页面尚未就绪'
+      return
+    }
+    if (!plugin.uiPath) return
+    if (layoutMode === 'terminal') setLayoutMode('split', true)
+    showPluginView(name, plugin.displayName, new URL(plugin.uiPath, origin).toString())
+    pluginMenu.open = false
+  } catch (error) {
+    applyServiceResult(serviceErrorResult('status', error))
     pluginsError.hidden = false
-    pluginsError.textContent = 'Supervisor 页面尚未就绪'
-    return
+    pluginsError.textContent = error instanceof Error ? error.message : String(error)
+  } finally {
+    setPluginBusy()
   }
-  if (!plugin.uiPath) return
-  if (layoutMode === 'terminal') setLayoutMode('split', true)
-  showPluginView(name, plugin.displayName, new URL(plugin.uiPath, origin).toString())
-  pluginMenu.open = false
 }
 
 async function runServiceAction(action: ServiceLifecycleAction): Promise<ServiceControlResult> {
+  if (pluginActionPending || backendChangePending) {
+    return serviceErrorResult(action, '服务控制操作正在进行中')
+  }
   setServiceBusy(action)
   try {
     const result = await api.services.control(action)
     applyServiceResult(result)
-    if (action !== 'stop' && result.services.some(
+    if (result.ok && action !== 'stop' && result.services.some(
       (service) => service.name === 'supervisor' && service.state === 'healthy'
     )) {
       await connectMonitor(true)
     }
+    return result
+  } catch (error) {
+    const result = serviceErrorResult(action, error)
+    applyServiceResult(result)
     return result
   } finally {
     setServiceBusy()
@@ -695,7 +771,7 @@ async function runServiceAction(action: ServiceLifecycleAction): Promise<Service
 }
 
 async function changeTerminalBackend(backend: TerminalBackend): Promise<void> {
-  if (backendChangePending || executionSelector.dataset.backend === backend) {
+  if (backendChangePending || serviceActionPending || pluginActionPending || executionSelector.dataset.backend === backend) {
     executionSelector.open = false
     return
   }
@@ -706,6 +782,7 @@ async function changeTerminalBackend(backend: TerminalBackend): Promise<void> {
   try {
     const result = await api.services.setBackend(backend)
     if (!result.ok) {
+      if (result.services) applyServiceResult(result.services)
       showBackendSelectionStatus(result.error ?? '执行环境切换失败', true)
       return
     }
@@ -718,6 +795,7 @@ async function changeTerminalBackend(backend: TerminalBackend): Promise<void> {
       if (!executionSelector.open) showBackendSelectionStatus('')
     }, 2400)
   } catch (error) {
+    applyServiceResult(serviceErrorResult('restart', error))
     showBackendSelectionStatus(error instanceof Error ? error.message : String(error), true)
   } finally {
     setBackendSelectionBusy(false)
@@ -731,11 +809,15 @@ function scheduleServicePoll(): void {
 }
 
 async function refreshServiceStatus(): Promise<void> {
-  if (serviceActionPending || document.hidden) {
+  if (serviceActionPending || pluginActionPending || backendChangePending || document.hidden) {
     scheduleServicePoll()
     return
   }
-  applyServiceResult(await api.services.status())
+  try {
+    applyServiceResult(await api.services.status())
+  } catch (error) {
+    applyServiceResult(serviceErrorResult('status', error))
+  }
   scheduleServicePoll()
 }
 

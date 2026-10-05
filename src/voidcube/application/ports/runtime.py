@@ -87,6 +87,153 @@ class EventPort(Protocol):
     def emit(self, event: Any) -> EffectOutcome: ...
 
 
+class TurnEventJournalPort(Protocol):
+    """Durable turn event storage required by application orchestration."""
+
+    def append(self, event: Any) -> int: ...
+
+    def recover_active_turn(self, session_id: str) -> Mapping[str, Any] | None: ...
+
+    def session_summary(self, session_id: str) -> Mapping[str, Any]: ...
+
+
+class ApprovalJournalPort(Protocol):
+    """Durable approval storage required by application orchestration."""
+
+    def request(self, *, session_id: str, turn_id: str, command: str, description: str) -> str: ...
+
+    def resolve(self, request_id: str, status: str, reason: str = "") -> bool: ...
+
+    def pending(self, session_id: str) -> list[Mapping[str, Any]]: ...
+
+
+class SessionGoalPort(Protocol):
+    """Session goal operations exposed to tool adapters."""
+
+    def get_goal(self, host: Any) -> Mapping[str, Any] | None: ...
+
+    def create_goal(self, host: Any, objective: str) -> Mapping[str, Any]: ...
+
+    def update_goal(self, host: Any, status: str, reason: str | None = None) -> bool: ...
+
+    def clear_goal(self, host: Any) -> bool: ...
+
+    def audit_blocked_goal(self, host: Any, reason: str, *, turn_id: str) -> Mapping[str, Any] | None: ...
+
+    def update_goal_objective(self, host: Any, objective: str, *, reason: str | None = None) -> bool: ...
+
+    def bind_goal_backend(self, host: Any, objective: str) -> Mapping[str, Any] | None: ...
+
+    def backend_status(self, host: Any, goal: Mapping[str, Any]) -> Mapping[str, Any] | None: ...
+
+    def complete_backend(self, host: Any, reason: str | None) -> bool: ...
+
+    def goal_update_error(self, host: Any) -> str | None: ...
+
+    def resolve_goal_memory_context(self, host: Any, goal: Mapping[str, Any] | None) -> str: ...
+
+    def goal_prompt(self, goal: Mapping[str, Any] | None) -> str: ...
+
+    def stop_goal_after_turn(self, host: Any, reason: str) -> bool: ...
+
+    def finish_goal_audit_turn(self, host: Any, turn_id: str) -> None: ...
+
+
+class DefaultSessionGoalPort:
+    """Bind application session-goal use cases for runtime composition."""
+
+    def get_goal(self, host: Any) -> Mapping[str, Any] | None:
+        from ..session_goal import get_goal
+        return get_goal(host)
+
+    def create_goal(self, host: Any, objective: str) -> Mapping[str, Any]:
+        from ..session_goal import create_goal
+        return create_goal(host, objective)
+
+    def update_goal(self, host: Any, status: str, reason: str | None = None) -> bool:
+        from ..session_goal import update_goal
+        return update_goal(host, status, reason)
+
+    def clear_goal(self, host: Any) -> bool:
+        from ..session_goal import clear_goal
+        return clear_goal(host)
+
+    def audit_blocked_goal(self, host: Any, reason: str, *, turn_id: str) -> Mapping[str, Any] | None:
+        from ..session_goal import audit_blocked_goal
+        return audit_blocked_goal(host, reason, turn_id=turn_id)
+
+    def update_goal_objective(self, host: Any, objective: str, *, reason: str | None = None) -> bool:
+        from ..session_goal import update_goal_objective
+        return update_goal_objective(host, objective, reason=reason)
+
+    def bind_goal_backend(self, host: Any, objective: str) -> Mapping[str, Any] | None:
+        from ..session_goal import bind_goal_backend
+        return bind_goal_backend(host, objective)
+
+    def backend_status(self, host: Any, goal: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        from ..session_goal import backend_status
+        return backend_status(host, goal)
+
+    def complete_backend(self, host: Any, reason: str | None) -> bool:
+        from ..session_goal import complete_goal_backend
+        return complete_goal_backend(host, reason)
+
+    def goal_update_error(self, host: Any) -> str | None:
+        from ..session_goal import goal_update_error
+        return goal_update_error(host)
+
+    def resolve_goal_memory_context(self, host: Any, goal: Mapping[str, Any] | None) -> str:
+        from ..session_goal import resolve_goal_memory_context
+        return resolve_goal_memory_context(host, goal)
+
+    def goal_prompt(self, goal: Mapping[str, Any] | None) -> str:
+        from ..session_goal import goal_prompt
+        return goal_prompt(goal)
+
+    def stop_goal_after_turn(self, host: Any, reason: str) -> bool:
+        from ..session_goal import stop_goal_after_turn
+        return stop_goal_after_turn(host, reason)
+
+    def finish_goal_audit_turn(self, host: Any, turn_id: str) -> None:
+        from ..session_goal import finish_goal_audit_turn
+        return finish_goal_audit_turn(host, turn_id)
+
+
+class GoalManagerPort(Protocol):
+    """Goal Manager service operations used by session goal orchestration."""
+
+    def health(self) -> bool: ...
+
+    def create_session_project(self, objective: str, session_id: str) -> Mapping[str, Any]: ...
+
+    def complete_node(self, node_id: str, reason: str, *, session_id: str | None = None) -> Mapping[str, Any]: ...
+
+    def project(self, project_id: str) -> Mapping[str, Any]: ...
+
+    def update_node_status(
+        self, node_id: str, expected_version: int, status: str, reason: str,
+        *, session_id: str | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    def context(self, node_id: str) -> Mapping[str, Any]: ...
+
+
+class UnavailableGoalManagerPort:
+    """Fail-closed default when the optional Goal Manager is not composed."""
+
+    def health(self) -> bool:
+        return False
+
+    def _unavailable(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("Goal Manager backend is unavailable")
+
+    create_session_project = _unavailable
+    complete_node = _unavailable
+    project = _unavailable
+    update_node_status = _unavailable
+    context = _unavailable
+
+
 class CallbackEventPort:
     """Adapt a legacy event callback to the structured event port."""
 
@@ -203,4 +350,9 @@ __all__ = [
     "CallbackTaskPort",
     "CallbackToolPort",
     "CallbackGovernancePort",
+    "TurnEventJournalPort",
+    "ApprovalJournalPort",
+    "SessionGoalPort",
+    "GoalManagerPort",
+    "UnavailableGoalManagerPort",
 ]

@@ -8,6 +8,7 @@ const DEFAULT_ROWS = 30
 
 export class TerminalSession {
   private process?: pty.IPty
+  private gracefulExitTimer?: ReturnType<typeof setTimeout>
   private state: TerminalState = { phase: 'stopped' }
   private columns = DEFAULT_COLUMNS
   private rows = DEFAULT_ROWS
@@ -80,12 +81,21 @@ export class TerminalSession {
   }
 
   requestGracefulExit(): void {
-    if (!this.process) return
-    this.process.write('\x03')
-    setTimeout(() => this.process?.write('/quit\r'), 120)
+    const child = this.process
+    if (!child) return
+    if (this.gracefulExitTimer) return
+    child.write('\x03')
+    this.gracefulExitTimer = setTimeout(() => {
+      this.gracefulExitTimer = undefined
+      if (this.process === child) child.write('/quit\r')
+    }, 120)
   }
 
   kill(): void {
+    if (this.gracefulExitTimer) {
+      clearTimeout(this.gracefulExitTimer)
+      this.gracefulExitTimer = undefined
+    }
     const child = this.process
     this.process = undefined
     if (!child) return

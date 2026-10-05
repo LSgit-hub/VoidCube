@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from typing import Optional
 
 from voidcube.systems.supervisor.config_models import SupervisorConfig
 from voidcube.systems.supervisor.supervisor import Supervisor
+
+
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 
 class PlaywrightSupervisor(Supervisor):

@@ -13,7 +13,12 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from voidcube.infrastructure.gateway.internal_gateway import GatewayConfig, InternalGateway, ServiceInfo
+from voidcube.infrastructure.gateway.internal_gateway import (
+    GatewayConfig,
+    InternalGateway,
+    RouteEntry,
+    ServiceInfo,
+)
 
 
 @pytest.mark.asyncio
@@ -629,6 +634,39 @@ def test_gateway_register_session_does_not_override_existing_active_cli_executor
     assert status["active_cli_executor"]["session_id"] == "cli-session-1"
 
 
+def test_gateway_register_session_reclaims_stale_active_cli_executor():
+    gateway = InternalGateway(GatewayConfig(session_ttl_seconds=1))
+    client = TestClient(gateway.app)
+
+    first = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-stale",
+            "model": "model",
+            "provider": "provider",
+            "source": "cli",
+        },
+    )
+    assert first.status_code == 200
+    gateway._agent_session_cache["cli-session-stale"]["last_used_at"] = (
+        datetime.now() - timedelta(seconds=5)
+    )
+
+    second = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "cli-session-new",
+            "model": "model",
+            "provider": "provider",
+            "source": "cli",
+        },
+    )
+
+    assert second.status_code == 200
+    assert second.json()["active_cli_session_id"] == "cli-session-new"
+    assert "cli-session-stale" not in gateway._session_credentials
+
+
 def test_gateway_idle_scene_does_not_steal_active_cli_executor():
     gateway = InternalGateway(GatewayConfig())
     client = TestClient(gateway.app)
@@ -1032,6 +1070,34 @@ def test_gateway_replaces_previous_instance_for_routed_singleton_service(
     assert route["target_instance"] == f"{service_type}-new"
 
 
+def test_gateway_rejects_service_id_collision_across_service_identity():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    first = client.post(
+        "/register",
+        json={
+            "service_id": "shared-id",
+            "service_name": "memory-a",
+            "service_type": "memory",
+            "address": "http://memory-a",
+        },
+    )
+    conflict = client.post(
+        "/register",
+        json={
+            "service_id": "shared-id",
+            "service_name": "supervisor-a",
+            "service_type": "supervisor",
+            "address": "http://supervisor-a",
+        },
+    )
+
+    assert first.status_code == 201
+    assert conflict.status_code == 409
+    assert client.get("/admin/services/shared-id").json()["service_type"] == "memory"
+
+
 @pytest.mark.parametrize(
     ("service_type", "gateway_path", "upstream_path"),
     [
@@ -1084,6 +1150,252 @@ def test_gateway_registration_validation_preserves_bad_request_status():
     assert response.json()["detail"] == "Missing required fields"
 
 
+def test_gateway_registration_rejects_malformed_json_with_client_error():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    malformed = client.post(
+        "/register",
+        content=b"not-json",
+        headers={"content-type": "application/json"},
+    )
+    array = client.post(
+        "/register",
+        json=["service", "not", "an", "object"],
+    )
+
+    assert malformed.status_code == 400
+    assert array.status_code == 422
+
+
+def test_gateway_registration_rejects_invalid_upstream_identity():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    invalid_address = client.post(
+        "/register",
+        json={
+            "service_name": "bad",
+            "service_type": "agent",
+            "address": "file:///tmp/service",
+        },
+    )
+    invalid_health = client.post(
+        "/register",
+        json={
+            "service_name": "bad",
+            "service_type": "agent",
+            "address": "http://agent.test",
+            "health_endpoint": "http://health.test",
+        },
+    )
+    malformed_address = client.post(
+        "/register",
+        json={
+            "service_name": "bad",
+            "service_type": "agent",
+            "address": "http://[malformed",
+        },
+    )
+    query_address = client.post(
+        "/register",
+        json={
+            "service_name": "bad",
+            "service_type": "agent",
+            "address": "http://agent.test/base?route=wrong",
+        },
+    )
+
+    assert invalid_address.status_code == 422
+    assert invalid_health.status_code == 422
+    assert malformed_address.status_code == 422
+    assert query_address.status_code == 422
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536])
+def test_gateway_config_rejects_invalid_port(port):
+    with pytest.raises(ValueError):
+        GatewayConfig(port=port)
+
+
+@pytest.mark.parametrize("field", ["session_ttl_seconds", "active_cli_stale_after_seconds"])
+def test_gateway_config_rejects_non_positive_lifecycle_ttl(field):
+    with pytest.raises(ValueError):
+        GatewayConfig(**{field: 0})
+
+
+@pytest.mark.parametrize("host", ["", "x" * 256])
+def test_gateway_config_rejects_invalid_host_length(host):
+    with pytest.raises(ValueError):
+        GatewayConfig(host=host)
+
+
+def test_gateway_route_admin_preserves_client_errors():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    missing = client.post("/admin/routes", json={"path_prefix": "/x/"})
+    malformed = client.post(
+        "/admin/routes",
+        content=b"not-json",
+        headers={"content-type": "application/json"},
+    )
+    unknown = client.put("/admin/routes/missing", json={"enabled": False})
+
+    assert missing.status_code == 400
+    assert missing.json()["detail"] == "target_service and target_instance are required"
+    assert malformed.status_code == 400
+    assert unknown.status_code == 404
+
+
+def test_gateway_route_admin_requires_registered_matching_target():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    missing = client.post(
+        "/admin/routes",
+        json={"path_prefix": "/missing/", "target_service": "agent", "target_instance": "agent-1"},
+    )
+    client.post(
+        "/register",
+        json={
+            "service_id": "memory-1",
+            "service_name": "memory",
+            "service_type": "memory",
+            "address": "http://memory.test",
+        },
+    )
+    mismatch = client.post(
+        "/admin/routes",
+        json={"path_prefix": "/mismatch/", "target_service": "agent", "target_instance": "memory-1"},
+    )
+
+    assert missing.status_code == 404
+    assert mismatch.status_code == 409
+
+
+def test_gateway_route_admin_can_update_and_delete_slash_prefixed_route():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    registered = client.post(
+        "/register",
+        json={
+            "service_id": "agent-1",
+            "service_name": "agent",
+            "service_type": "agent",
+            "address": "http://agent.test",
+        },
+    )
+
+    created = client.post(
+        "/admin/routes",
+        json={
+            "path_prefix": "/custom/",
+            "target_service": "agent",
+            "target_instance": "agent-1",
+        },
+    )
+    updated = client.put("/admin/routes/%2Fcustom%2F", json={"enabled": False})
+    deleted = client.delete("/admin/routes/%2Fcustom%2F")
+
+    assert registered.status_code == 201
+    assert created.status_code == 200
+    assert updated.status_code == 200
+    assert deleted.status_code == 200
+    assert all(item["path_prefix"] != "/custom/" for item in client.get("/admin/routes").json()["routes"])
+
+
+def test_gateway_route_admin_rejects_ambiguous_prefix():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    response = client.post(
+        "/admin/routes",
+        json={"path_prefix": "/custom", "target_service": "agent"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_gateway_activity_session_and_gate_inputs_preserve_client_errors():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    activity = client.post(
+        "/admin/activity/touch",
+        json={"activity_kind": "agent_work", "metadata": []},
+    )
+    session = client.post(
+        "/v1/sessions/register",
+        json={"model": "missing-session-id"},
+    )
+    gate = client.post(
+        "/admin/autonomous-chain-gate",
+        json={"active": "false"},
+    )
+
+    assert activity.status_code == 422
+    assert session.status_code == 422
+    assert gate.status_code == 422
+
+
+def test_gateway_session_registration_rejects_blank_session_id():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    response = client.post(
+        "/v1/sessions/register",
+        json={"session_id": "   ", "model": "model", "provider": "provider"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "session_id is required"
+
+
+def test_gateway_session_registration_rejects_oversized_identity_fields():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    response = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "s" * 301,
+            "model": "model",
+            "provider": "provider",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_gateway_session_registration_normalizes_identity_whitespace():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    response = client.post(
+        "/v1/sessions/register",
+        json={
+            "session_id": "  cli-normalized  ",
+            "model": "model",
+            "provider": "provider",
+            "owner_id": "  owner  ",
+            "workspace_id": "  workspace  ",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "cli-normalized"
+    assert gateway._agent_session_cache["cli-normalized"]["owner_id"] == "owner"
+    assert gateway._agent_session_cache["cli-normalized"]["workspace_id"] == "workspace"
+
+
+def test_gateway_removed_agent_query_and_task_decision_preserve_input_errors():
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+
+    malformed_query = client.post(
+        "/v1/agent/query",
+        content=b"not-json",
+        headers={"content-type": "application/json"},
+    )
+    array_query = client.post("/v1/agent/query", json=[])
+    assert malformed_query.status_code == 400
+    assert array_query.status_code == 422
+
+
 def test_gateway_health_update_preserves_missing_service_status():
     client = TestClient(InternalGateway(GatewayConfig()).app)
 
@@ -1091,6 +1403,75 @@ def test_gateway_health_update_preserves_missing_service_status():
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Service not found"
+
+
+def test_gateway_health_update_requires_registered_service_credential():
+    gateway = InternalGateway(GatewayConfig())
+    service = _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+
+    service_id = service.service_id
+    assert client.post(f"/health/{service_id}", json={"healthy": False}).status_code == 401
+    assert client.post(
+        f"/health/{service_id}",
+        json={"healthy": False},
+        headers={gateway.SERVICE_TOKEN_HEADER: "wrong"},
+    ).status_code == 401
+    assert client.post(
+        f"/health/{service_id}",
+        json={"healthy": False},
+        headers={gateway.SERVICE_TOKEN_HEADER: gateway._service_credentials[service_id]},
+    ).status_code == 200
+    assert gateway._services[service_id].healthy is False
+
+
+@pytest.mark.parametrize("value", ["false", 0, 1, None, []])
+def test_gateway_health_update_requires_boolean_payload(value):
+    gateway = InternalGateway(GatewayConfig())
+    service = _register_supervisor(gateway)
+    client = TestClient(gateway.app)
+
+    response = client.post(
+        f"/health/{service.service_id}",
+        json={"healthy": value},
+        headers={gateway.SERVICE_TOKEN_HEADER: gateway._service_credentials[service.service_id]},
+    )
+
+    assert response.status_code == 422
+
+
+def test_gateway_health_update_requires_root_and_service_tokens_when_auth_enabled():
+    gateway = InternalGateway(GatewayConfig(auth_token="root-secret"))
+    client = TestClient(gateway.app)
+    registration = client.post(
+        "/register",
+        json={
+            "service_id": "secured-service",
+            "service_name": "secured-service",
+            "service_type": "agent",
+            "address": "http://agent-service",
+        },
+        headers={"Authorization": "Bearer root-secret"},
+    )
+    assert registration.status_code == 201
+    service_token = registration.json()["service_token"]
+
+    assert client.post(
+        "/health/secured-service",
+        json={"healthy": False},
+        headers={gateway.SERVICE_TOKEN_HEADER: service_token},
+    ).status_code == 401
+    response = client.post(
+        "/health/secured-service",
+        json={"healthy": False},
+        headers={
+            "Authorization": "Bearer root-secret",
+            gateway.SERVICE_TOKEN_HEADER: service_token,
+        },
+    )
+
+    assert response.status_code == 200
+    assert gateway._services["secured-service"].healthy is False
 
 
 def test_gateway_keeps_distinct_agent_slot_registrations():
@@ -1186,7 +1567,7 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
         },
     )
 
-    assert response.status_code in {500, 504}
+    assert response.status_code in {503, 504}
     activity = client.get("/admin/activity").json()
     assert activity["last_autonomous_chain_execute_at"] is not None
     assert activity["last_autonomous_chain_activity_at"] is not None
@@ -1206,6 +1587,378 @@ def test_gateway_executor_route_updates_execute_activity_even_when_upstream_fail
     assert activity["recent_metadata"]["autonomous_chain_execute"]["task_identity"]["requested_kind"] == "body_switch"
     assert "task_type" not in activity["recent_metadata"]["autonomous_chain_execute"]
     assert "task_type_label" not in activity["recent_metadata"]["autonomous_chain_execute"]
+
+
+def test_gateway_proxy_preserves_upstream_503_response(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    registration = client.post(
+        "/register",
+        json={
+            "service_id": "executor-proxy-503",
+            "service_name": "executor-service",
+            "service_type": "executor",
+            "address": "http://executor.test",
+        },
+    )
+    assert registration.status_code == 201
+
+    class _Response:
+        status = 503
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def read(self):
+            return b'{"detail":"executor degraded"}'
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, method, url, **kwargs):
+            assert method == "GET"
+            assert url == "http://executor.test/executor/health"
+            return _Response()
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
+        _Session,
+    )
+
+    response = client.get("/api/executor/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "executor degraded"}
+
+
+def test_gateway_proxy_maps_upstream_timeout_to_504(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    registration = client.post(
+        "/register",
+        json={
+            "service_id": "executor-proxy-timeout",
+            "service_name": "executor-service",
+            "service_type": "executor",
+            "address": "http://executor.test",
+        },
+    )
+    assert registration.status_code == 201
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, *_args, **_kwargs):
+            raise asyncio.TimeoutError
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
+        _Session,
+    )
+
+    response = client.get("/api/executor/health")
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "Gateway timeout"
+
+
+def test_gateway_proxy_maps_upstream_connection_failure_to_503(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    registration = client.post(
+        "/register",
+        json={
+            "service_id": "executor-proxy-unavailable",
+            "service_name": "executor-service",
+            "service_type": "executor",
+            "address": "http://executor.test",
+        },
+    )
+    assert registration.status_code == 201
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, *_args, **_kwargs):
+            raise aiohttp.ClientError("connection refused")
+
+    import aiohttp
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
+        _Session,
+    )
+
+    response = client.get("/api/executor/health")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Upstream service unavailable"
+
+
+def test_gateway_proxy_does_not_forward_control_plane_credentials(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    client = TestClient(gateway.app)
+    registration = client.post(
+        "/register",
+        json={
+            "service_id": "executor-proxy-headers",
+            "service_name": "executor-service",
+            "service_type": "executor",
+            "address": "http://executor.test",
+        },
+    )
+    assert registration.status_code == 201
+    captured = {}
+
+    class _Response:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def read(self):
+            return b'{"status":"ok"}'
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, _method, _url, **kwargs):
+            captured.update(kwargs)
+            return _Response()
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
+        _Session,
+    )
+
+    response = client.get(
+        "/api/executor/health",
+        headers={
+            "Authorization": "Bearer root-secret",
+            gateway.GATEWAY_TOKEN_HEADER: "gateway-secret",
+            gateway.SERVICE_ID_HEADER: "service-id",
+            gateway.SERVICE_TOKEN_HEADER: "service-secret",
+            gateway.SESSION_TOKEN_HEADER: "session-secret",
+            "X-Trace-Id": "trace-1",
+        },
+    )
+
+    assert response.status_code == 200
+    forwarded = {key.lower(): value for key, value in captured["headers"].items()}
+    assert "authorization" not in forwarded
+    assert gateway.GATEWAY_TOKEN_HEADER not in forwarded
+    assert gateway.SERVICE_ID_HEADER not in forwarded
+    assert gateway.SERVICE_TOKEN_HEADER not in forwarded
+    assert gateway.SESSION_TOKEN_HEADER not in forwarded
+    assert forwarded["x-trace-id"] == "trace-1"
+
+
+def test_gateway_proxy_returns_404_for_unknown_route():
+    client = TestClient(InternalGateway(GatewayConfig()).app)
+
+    response = client.get("/api/unknown/health")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No route found for path"
+
+
+def test_gateway_proxy_prefers_longest_matching_route_prefix(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    gateway._services["short-service"] = ServiceInfo(
+        service_id="short-service",
+        service_name="short-service",
+        service_type="agent",
+        address="http://short.test",
+        health_endpoint="/health",
+    )
+    gateway._services["long-service"] = ServiceInfo(
+        service_id="long-service",
+        service_name="long-service",
+        service_type="agent",
+        address="http://long.test",
+        health_endpoint="/health",
+    )
+    gateway._routes["/foo/"] = RouteEntry(
+        path_prefix="/foo/", target_service="agent", target_instance="short-service"
+    )
+    gateway._routes["/foo/specific/"] = RouteEntry(
+        path_prefix="/foo/specific/", target_service="agent", target_instance="long-service"
+    )
+    captured = {}
+
+    class _Response:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def read(self):
+            return b"{}"
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, _method, url, **_kwargs):
+            captured["url"] = url
+            return _Response()
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
+        _Session,
+    )
+
+    response = TestClient(gateway.app).get("/api/foo/specific/health")
+
+    assert response.status_code == 200
+    assert captured["url"] == "http://long.test/foo/specific/health"
+
+
+def test_gateway_proxy_rebuilds_framing_headers_from_response_body(monkeypatch):
+    gateway = InternalGateway(GatewayConfig())
+    gateway._services["header-service"] = ServiceInfo(
+        service_id="header-service",
+        service_name="header-service",
+        service_type="agent",
+        address="http://header.test",
+        health_endpoint="/health",
+    )
+    gateway._routes["/headers/"] = RouteEntry(
+        path_prefix="/headers/",
+        target_service="agent",
+        target_instance="header-service",
+    )
+
+    class _Response:
+        status = 200
+        headers = {
+            "content-type": "application/json",
+            "content-length": "999",
+            "connection": "close",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+        }
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def read(self):
+            return b"{}"
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(
+        "voidcube.infrastructure.gateway.internal_gateway.aiohttp.ClientSession",
+        _Session,
+    )
+
+    response = TestClient(gateway.app).get("/api/headers/health")
+
+    assert response.status_code == 200
+    assert response.headers.get("content-length") == "2"
+    assert response.headers.get("connection") != "close"
+    assert response.headers.get("transfer-encoding") != "chunked"
+    assert response.headers.get("content-encoding") is None
+
+
+@pytest.mark.asyncio
+async def test_gateway_scene_refresh_clears_stale_supervisor_scene_on_probe_failure():
+    gateway = InternalGateway(GatewayConfig())
+    gateway._services["supervisor-scene"] = ServiceInfo(
+        service_id="supervisor-scene",
+        service_name="supervisor",
+        service_type="supervisor",
+        address="http://supervisor.test",
+        health_endpoint="/health",
+    )
+    gateway._scenes_cache["supervisor"].update(
+        {"scene": "planning", "title": "Old", "summary": "Stale", "reachable": True}
+    )
+    async def failed_probe(*_args, **_kwargs):
+        return None
+
+    gateway._http_get_json = failed_probe  # type: ignore[method-assign]
+
+    await gateway._refresh_supervisor_scene()
+
+    assert gateway._scenes_cache["supervisor"]["reachable"] is False
+    assert gateway._scenes_cache["supervisor"]["scene"] == "idle"
+    assert gateway._scenes_cache["supervisor"]["title"] is None
+    assert gateway._scenes_cache["supervisor"]["summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_gateway_scene_refresh_probes_independently_and_serializes_refreshes():
+    gateway = InternalGateway(GatewayConfig())
+    active = 0
+    maximum = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def probe(*_args, **_kwargs):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        started.set()
+        await release.wait()
+        active -= 1
+
+    gateway._refresh_supervisor_scene = probe  # type: ignore[method-assign]
+    gateway._refresh_agent_scene = probe  # type: ignore[method-assign]
+    gateway._refresh_executor_scene = probe  # type: ignore[method-assign]
+
+    first = asyncio.create_task(gateway.refresh_scenes())
+    await started.wait()
+    second = asyncio.create_task(gateway.refresh_scenes())
+    await asyncio.sleep(0)
+    assert not second.done()
+    release.set()
+    await first
+    await second
+
+    assert maximum == 3
 
 
 def _post_agent_scene(client, session_id, metadata):
@@ -1385,6 +2138,8 @@ def _register_supervisor(gateway, address="http://127.0.0.1:6002"):
         last_health_check=datetime.now(),
         healthy=True,
     )
+    gateway._service_credentials["supervisor-1"] = "supervisor-token"
+    return gateway._services["supervisor-1"]
 
 
 

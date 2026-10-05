@@ -1020,14 +1020,20 @@ def _goal_command_ports(
     emit: Callable[[str], None],
     translate: Callable[..., str],
 ) -> GoalCommandPorts:
-    from ..session_goal_runtime import (
-        clear_goal,
-        create_goal,
-        get_goal,
-        update_goal_objective,
-        update_goal,
-        goal_update_error,
-    )
+    goal_port = getattr(host, "_session_goal_port", None)
+    if goal_port is None:
+        from ....application.ports import DefaultSessionGoalPort
+        goal_port = DefaultSessionGoalPort()
+    if getattr(host, "_goal_manager_port", None) is None:
+        factory = getattr(host, "_goal_manager_factory", None)
+        if callable(factory):
+            host._goal_manager_port = factory()
+    clear_goal = goal_port.clear_goal
+    create_goal = goal_port.create_goal
+    get_goal = goal_port.get_goal
+    update_goal_objective = goal_port.update_goal_objective
+    update_goal = goal_port.update_goal
+    goal_update_error = goal_port.goal_update_error
 
     pending_input = getattr(host, "_pending_input", None)
     enqueue_pending = getattr(host, "_enqueue_pending_input", None)
@@ -1078,22 +1084,8 @@ def _goal_command_ports(
             if pending_input is not None or enqueue_pending is not None
             else None
         ),
-        bind_backend=lambda objective: mutate(
-            __import__(
-                "voidcube.interfaces.cli.session_goal_runtime",
-                fromlist=["bind_goal_backend"],
-            ).bind_goal_backend,
-            host,
-            objective,
-        ),
-        get_backend_status=lambda goal: mutate(
-            __import__(
-                "voidcube.interfaces.cli.session_goal_runtime",
-                fromlist=["backend_status"],
-            ).backend_status,
-            host,
-            goal,
-        ),
+        bind_backend=lambda objective: mutate(goal_port.bind_goal_backend, host, objective),
+        get_backend_status=lambda goal: mutate(goal_port.backend_status, host, goal),
         get_update_error=lambda: goal_update_error(host),
         reset_agent=reset_goal_agent,
         emit=emit,
@@ -1997,7 +1989,7 @@ def _autonomous_observation_summary_sections(host: Any) -> Sequence[str]:
 
 
 def _session_goal_snapshot(host: Any) -> Mapping[str, Any]:
-    from ..session_goal_runtime import get_goal
+    from ....application.session_goal import get_goal
 
     return get_goal(host) or {}
 

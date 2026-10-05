@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import uuid
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlsplit
 
 import aiohttp
 
@@ -11,15 +13,48 @@ logger = logging.getLogger("gateway.agent_adapter")
 
 
 class GatewayAgentAdapter:
-    def __init__(self, gateway_url: str, session_id: Optional[str] = None):
-        self.gateway_url = gateway_url.rstrip("/")
+    def __init__(
+        self,
+        gateway_url: str,
+        session_id: Optional[str] = None,
+        *,
+        timeout_seconds: float = 30.0,
+    ):
+        normalized_url = str(gateway_url or "").strip().rstrip("/")
+        parsed_url = urlsplit(normalized_url)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.netloc
+            or parsed_url.username
+            or parsed_url.password
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
+            raise ValueError("Gateway URL must use http or https")
+        self.gateway_url = normalized_url
         self.session_id = session_id or str(uuid.uuid4())
+        try:
+            normalized_timeout = float(timeout_seconds)
+        except (TypeError, ValueError):
+            raise ValueError("Gateway adapter timeout must be a finite positive number") from None
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("Gateway adapter timeout must be a finite positive number")
+        self.timeout_seconds = normalized_timeout
         self._client_session: Optional[aiohttp.ClientSession] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._client_session is None or self._client_session.closed:
-            self._client_session = aiohttp.ClientSession()
+            self._client_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout_seconds)
+            )
         return self._client_session
+
+    @staticmethod
+    async def _json_object(response: Any) -> Dict[str, Any]:
+        payload = await response.json()
+        if not isinstance(payload, dict):
+            raise RuntimeError("Gateway returned a non-object response")
+        return payload
 
     async def chat_completion(self, messages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
         session = await self._get_session()
@@ -38,7 +73,7 @@ class GatewayAgentAdapter:
             if response.status != 200:
                 error_text = await response.text()
                 raise RuntimeError(f"Gateway request failed: {response.status} - {error_text}")
-            return await response.json()
+            return await self._json_object(response)
 
     async def agent_query(self, messages: List[Dict[str, Any]], **kwargs) -> Dict[str, Any]:
         session = await self._get_session()
@@ -57,27 +92,27 @@ class GatewayAgentAdapter:
             if response.status != 200:
                 error_text = await response.text()
                 raise RuntimeError(f"Gateway request failed: {response.status} - {error_text}")
-            return await response.json()
+            return await self._json_object(response)
 
     async def get_session_info(self) -> Dict[str, Any]:
         session = await self._get_session()
-        url = f"{self.gateway_url}/v1/sessions/{self.session_id}"
+        url = f"{self.gateway_url}/v1/sessions/{quote(self.session_id, safe='')}"
         
         async with session.get(url) as response:
             if response.status != 200:
                 error_text = await response.text()
                 raise RuntimeError(f"Failed to get session info: {response.status} - {error_text}")
-            return await response.json()
+            return await self._json_object(response)
 
     async def delete_session(self) -> Dict[str, Any]:
         session = await self._get_session()
-        url = f"{self.gateway_url}/v1/sessions/{self.session_id}"
+        url = f"{self.gateway_url}/v1/sessions/{quote(self.session_id, safe='')}"
         
         async with session.delete(url) as response:
             if response.status != 200:
                 error_text = await response.text()
                 raise RuntimeError(f"Failed to delete session: {response.status} - {error_text}")
-            return await response.json()
+            return await self._json_object(response)
 
     async def health_check(self) -> Dict[str, Any]:
         session = await self._get_session()
@@ -87,7 +122,7 @@ class GatewayAgentAdapter:
             if response.status != 200:
                 error_text = await response.text()
                 raise RuntimeError(f"Health check failed: {response.status} - {error_text}")
-            return await response.json()
+            return await self._json_object(response)
 
     async def close(self):
         if self._client_session and not self._client_session.closed:

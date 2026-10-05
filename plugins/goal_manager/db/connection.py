@@ -122,6 +122,22 @@ class GoalStore:
     def close(self) -> None:
         self.owner_lease.close()
 
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return a lightweight read-only database health snapshot."""
+        try:
+            with self._connect() as conn:
+                result = str(conn.execute("PRAGMA quick_check").fetchone()[0]).strip()
+            return {
+                "readable": True,
+                "integrity": "ok" if result.casefold() == "ok" else result,
+            }
+        except Exception as exc:
+            return {
+                "readable": False,
+                "integrity": "unavailable",
+                "error": type(exc).__name__,
+            }
+
     def _initialize(self) -> None:
         with self._connect() as conn:
             schema_path = Path(__file__).with_name("schema.sql")
@@ -473,9 +489,13 @@ class GoalStore:
             project = self._ensure_project(conn, project_id)
             result = dict(project)
             result["progress"] = self._project_progress(conn, project_id)
-            result["root"] = _node_payload(dict(conn.execute(
-                "SELECT * FROM goal_nodes WHERE id = ?", (project["root_node_id"],)
-            ).fetchone()))
+            root_row = conn.execute(
+                "SELECT * FROM goal_nodes WHERE id=? AND project_id=? AND deleted_at IS NULL",
+                (project["root_node_id"], project_id),
+            ).fetchone()
+            if root_row is None:
+                raise RuntimeError(f"project root node is missing: {project_id}")
+            result["root"] = _node_payload(dict(root_row))
             return result
 
     def set_intent_contract(
@@ -529,8 +549,13 @@ class GoalStore:
             (project_id,),
         ).fetchall()]
         edges = [_edge_payload(dict(row)) for row in conn.execute(
-            "SELECT * FROM goal_edges WHERE project_id=? AND deleted_at IS NULL ORDER BY created_at",
-            (project_id,),
+            "SELECT e.* FROM goal_edges e "
+            "JOIN goal_nodes s ON s.id=e.source_id "
+            "JOIN goal_nodes t ON t.id=e.target_id "
+            "WHERE e.project_id=? AND s.project_id=? AND t.project_id=? "
+            "AND s.deleted_at IS NULL AND t.deleted_at IS NULL "
+            "AND e.deleted_at IS NULL ORDER BY e.created_at",
+            (project_id, project_id, project_id),
         ).fetchall()]
         return dict(project), nodes, edges
 
@@ -741,6 +766,9 @@ class GoalStore:
         with self._transaction() as conn:
             node = self._guard_delete(conn, node_id, cascade, confirm_token)
             project_id = node["project_id"]
+            project_before = _row(conn.execute(
+                "SELECT * FROM goal_projects WHERE id = ?", (project_id,)
+            ).fetchone())
             now = utc_now()
             conn.execute("UPDATE goal_nodes SET deleted_at=?, version=version+1, updated_at=? WHERE id=?",
                          (now, now, node_id))
@@ -764,6 +792,19 @@ class GoalStore:
                         entity_id=edge["id"], before=edge, after=edge_after, reason=reason,
                         batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
                     )
+            if node_id == project_before["root_node_id"]:
+                conn.execute(
+                    "UPDATE goal_projects SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
+                    (now, now, project_id),
+                )
+                project_after = _row(conn.execute(
+                    "SELECT * FROM goal_projects WHERE id = ?", (project_id,)
+                ).fetchone())
+                self._event(
+                    conn, project_id=project_id, event_type="delete_project", entity_type="project",
+                    entity_id=project_id, before=project_before, after=project_after, reason=reason,
+                    batch_id=batch_id, actor_type=actor_type, actor_id=actor_id, session_id=session_id,
+                )
             self._recompute_project_progress(conn, project_id)
             return {"node": after, "batch_id": batch_id}
 
@@ -878,7 +919,7 @@ class GoalStore:
         results: list[dict[str, Any]] = []
         with self._transaction() as conn:
             self._ensure_project(conn, project_id)
-            for operation in operations:
+            for operation_index, operation in enumerate(operations):
                 op = str(operation.get("op") or "").strip()
                 if op == "create_node":
                     temp_id = _text(operation.get("temp_id"), "temp_id") or None
@@ -941,6 +982,12 @@ class GoalStore:
                 elif op == "delete_node":
                     node_id = temp_ids.get(operation.get("node_id"), operation.get("node_id"))
                     node = self._guard_delete(conn, node_id, bool(operation.get("cascade")), confirm_token)
+                    project_before = None
+                    project_row = _row(conn.execute(
+                        "SELECT * FROM goal_projects WHERE id = ?", (project_id,)
+                    ).fetchone())
+                    if node_id == project_row["root_node_id"]:
+                        project_before = project_row
                     now = utc_now()
                     conn.execute("UPDATE goal_nodes SET deleted_at=?, version=version+1, updated_at=? WHERE id=?",
                                  (now, now, node_id))
@@ -968,6 +1015,22 @@ class GoalStore:
                                 after=edge_after, reason=reason, batch_id=batch_id,
                                 actor_type=actor_type, actor_id=actor_id, session_id=session_id,
                             )
+                    if project_before is not None:
+                        conn.execute(
+                            "UPDATE goal_projects SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL",
+                            (now, now, project_id),
+                        )
+                        project_after = _row(conn.execute(
+                            "SELECT * FROM goal_projects WHERE id = ?", (project_id,)
+                        ).fetchone())
+                        self._event(
+                            conn, project_id=project_id, event_type="delete_project", entity_type="project",
+                            entity_id=project_id, before=project_before, after=project_after,
+                            reason=reason, batch_id=batch_id, actor_type=actor_type,
+                            actor_id=actor_id, session_id=session_id,
+                        )
+                        if operation_index != len(operations) - 1:
+                            raise GoalConflict("deleting the project root must be the final batch operation")
                     results.append({"op": op, "node": after})
                 elif op == "delete_edge":
                     edge = self._get_edge(conn, operation.get("edge_id"))
@@ -1165,19 +1228,37 @@ class GoalStore:
             ]
             return node
 
-    def _completion_check(self, conn: sqlite3.Connection, node: dict[str, Any]) -> dict[str, Any]:
+    def _completion_check(
+        self,
+        conn: sqlite3.Connection,
+        node: dict[str, Any],
+        *,
+        allow_waiting_review: bool = False,
+    ) -> dict[str, Any]:
+        blockers: list[dict[str, Any]] = []
+        blocked_statuses = {"blocked", "cancelled"}
+        if not allow_waiting_review:
+            blocked_statuses.add("waiting_review")
+        if node["status"] in blocked_statuses:
+            blockers.append(
+                {
+                    "code": "node_status_not_completable",
+                    "status": node["status"],
+                }
+            )
         children = [
             _node_payload(dict(row)) for row in conn.execute(
                 "SELECT n.* FROM goal_nodes n JOIN goal_edges e ON e.target_id=n.id "
-                "WHERE e.source_id=? AND e.edge_type='decomposes_to' AND e.required=1 "
+                "WHERE e.project_id=? AND n.project_id=? AND e.source_id=? "
+                "AND e.edge_type='decomposes_to' AND e.required=1 "
                 "AND e.deleted_at IS NULL AND n.deleted_at IS NULL ORDER BY n.created_at",
-                (node["id"],),
+                (node["project_id"], node["project_id"], node["id"]),
             ).fetchall()
         ]
-        blockers = [
+        blockers.extend([
             {"code": "child_incomplete", "node_id": child["id"], "title": child["title"], "status": child["status"]}
             for child in children if child["status"] != "completed"
-        ]
+        ])
         blockers.extend(
             {"code": "acceptance_criteria_unmet", "index": index, "criterion": criterion}
             for index, criterion in enumerate(node.get("acceptance_criteria") or [])
@@ -1268,7 +1349,7 @@ class GoalStore:
             return {"node": self._get_node(conn, node_id), "verification": verification, "batch_id": batch_id}
 
     def _review_ready_check(self, conn: sqlite3.Connection, node: dict[str, Any]) -> dict[str, Any]:
-        check = self._completion_check(conn, node)
+        check = self._completion_check(conn, node, allow_waiting_review=True)
         blockers = list(check["blockers"])
         if float(node["progress"]) < 1:
             blockers.append({"code": "progress_incomplete", "progress": node["progress"]})
@@ -1400,10 +1481,18 @@ class GoalStore:
                 raise GoalConflict("goal completion blocked", blockers=check["blockers"], latest=before)
             fields = self._validate_node_fields({**before, "status": "completed", "progress": 1}, creating=False)
             now = utc_now()
-            conn.execute(
-                "UPDATE goal_nodes SET status=?, progress=?, completed_at=?, version=version+1, updated_at=? WHERE id=?",
-                (fields["status"], fields["progress"], now, now, node_id),
+            cursor = conn.execute(
+                "UPDATE goal_nodes SET status=?, progress=?, completed_at=?, version=version+1, updated_at=? "
+                "WHERE id=? AND version=? AND deleted_at IS NULL",
+                (fields["status"], fields["progress"], now, now, node_id, before["version"]),
             )
+            if cursor.rowcount != 1:
+                latest = self._get_node(conn, node_id)
+                raise GoalConflict(
+                    "node version conflict",
+                    latest=latest,
+                    expected_version=before["version"],
+                )
             after = self._get_node(conn, node_id)
             self._event(
                 conn, project_id=after["project_id"], event_type="update_node", entity_type="node",
@@ -1418,17 +1507,21 @@ class GoalStore:
             project = self._ensure_project(conn, project_id)
             focus_id = node_id or project["root_node_id"]
             focus = self._get_node(conn, focus_id)
+            if focus["project_id"] != project_id:
+                raise KeyError(f"node not found in project: {focus_id}")
             children = [
                 _node_payload(dict(row)) for row in conn.execute(
                     "SELECT n.* FROM goal_nodes n JOIN goal_edges e ON e.target_id=n.id "
-                    "WHERE e.source_id=? AND e.edge_type='decomposes_to' AND e.deleted_at IS NULL "
+                    "WHERE e.project_id=? AND n.project_id=? AND e.source_id=? "
+                    "AND e.edge_type='decomposes_to' "
+                    "AND e.deleted_at IS NULL "
                     "AND n.deleted_at IS NULL ORDER BY n.priority DESC, n.created_at",
-                    (focus_id,),
+                    (project_id, project_id, focus_id),
                 ).fetchall()
             ]
             parents = conn.execute(
-                "SELECT COUNT(*) AS count FROM goal_edges WHERE target_id=? "
-                "AND edge_type='decomposes_to' AND deleted_at IS NULL", (focus_id,)
+                "SELECT COUNT(*) AS count FROM goal_edges WHERE project_id=? AND target_id=? "
+                "AND edge_type='decomposes_to' AND deleted_at IS NULL", (project_id, focus_id)
             ).fetchone()["count"]
             return {
                 "focus": focus, "children": children, "parent_hint_count": parents,
@@ -1446,8 +1539,13 @@ class GoalStore:
             ).fetchall()]
             allowed = {"decomposes_to"} if mode == "parents_only" else EDGE_TYPES
             edges = [_edge_payload(dict(row)) for row in conn.execute(
-                "SELECT * FROM goal_edges WHERE project_id=? AND deleted_at IS NULL ORDER BY created_at",
-                (project_id,),
+                "SELECT e.* FROM goal_edges e "
+                "JOIN goal_nodes s ON s.id=e.source_id "
+                "JOIN goal_nodes t ON t.id=e.target_id "
+                "WHERE e.project_id=? AND s.project_id=? AND t.project_id=? "
+                "AND s.deleted_at IS NULL AND t.deleted_at IS NULL "
+                "AND e.deleted_at IS NULL ORDER BY e.created_at",
+                (project_id, project_id, project_id),
             ).fetchall() if row["edge_type"] in allowed]
             return {"nodes": nodes, "edges": edges, "mode": mode}
 
@@ -1457,8 +1555,16 @@ class GoalStore:
             raise ValueError("depth must be between 0 and 3")
         with self._connect() as conn:
             self._ensure_project(conn, project_id)
+            start = self._get_node(conn, start_node)
+            if start["project_id"] != project_id:
+                raise KeyError(f"node not found in project: {start_node}")
             all_edges = [_edge_payload(dict(row)) for row in conn.execute(
-                "SELECT * FROM goal_edges WHERE project_id=? AND deleted_at IS NULL", (project_id,)
+                "SELECT e.* FROM goal_edges e "
+                "JOIN goal_nodes s ON s.id=e.source_id "
+                "JOIN goal_nodes t ON t.id=e.target_id "
+                "WHERE e.project_id=? AND s.project_id=? AND t.project_id=? "
+                "AND s.deleted_at IS NULL AND t.deleted_at IS NULL "
+                "AND e.deleted_at IS NULL", (project_id, project_id, project_id)
             ).fetchall()]
             node_ids, edges = bounded_subgraph(start_node, depth, all_edges, set(edge_types or []))
             placeholders = ",".join("?" for _ in node_ids) or "?"
@@ -1473,13 +1579,17 @@ class GoalStore:
             node = self._get_node(conn, node_id)
             children = [_node_payload(dict(row)) for row in conn.execute(
                 "SELECT n.* FROM goal_nodes n JOIN goal_edges e ON e.target_id=n.id "
-                "WHERE e.source_id=? AND e.edge_type='decomposes_to' AND e.deleted_at IS NULL "
-                "AND n.deleted_at IS NULL", (node_id,)
+                "WHERE e.project_id=? AND n.project_id=? AND e.source_id=? "
+                "AND e.edge_type='decomposes_to' AND e.deleted_at IS NULL "
+                "AND n.deleted_at IS NULL",
+                (node["project_id"], node["project_id"], node_id),
             ).fetchall()]
             deps, blocks = [], []
             for row in conn.execute(
                 "SELECT e.*, n.* FROM goal_edges e JOIN goal_nodes n ON n.id=e.target_id "
-                "WHERE e.source_id=? AND e.deleted_at IS NULL AND n.deleted_at IS NULL", (node_id,)
+                "WHERE e.project_id=? AND n.project_id=? AND e.source_id=? "
+                "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
+                (node["project_id"], node["project_id"], node_id),
             ).fetchall():
                 item = dict(row)
                 if item.get("edge_type") == "depends_on":
@@ -1803,7 +1913,7 @@ class GoalStore:
                 ),
             )
         elif event["entity_type"] == "project":
-            conn.execute(
+            cursor = conn.execute(
                 "UPDATE goal_projects SET name=?, description=?, root_node_id=?, created_by=?, "
                 "created_at=?, updated_at=?, deleted_at=? WHERE id=?",
                 (
@@ -1811,6 +1921,17 @@ class GoalStore:
                     after["created_at"], after["updated_at"], after.get("deleted_at"), entity_id,
                 ),
             )
+            if cursor.rowcount == 0 and event["event_type"] == "delete_project":
+                conn.execute(
+                    "INSERT INTO goal_projects "
+                    "(id, name, description, root_node_id, created_by, created_at, updated_at, deleted_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        entity_id, after["name"], after["description"], after.get("root_node_id"),
+                        after["created_by"], after["created_at"], after["updated_at"],
+                        after.get("deleted_at"),
+                    ),
+                )
         elif event["entity_type"] == "intent_contract" and event["event_type"] == "set_intent_contract":
             # Intent contracts are event-backed; redo republishes the original
             # payload so the latest non-rolled-back event becomes authoritative.
@@ -1914,7 +2035,8 @@ class GoalStore:
 
     def rollback(self, batch_id: str, *, reason: str = "rollback batch",
                  actor_type: str = "agent", actor_id: str | None = None,
-                 session_id: str | None = None, confirm: bool = False) -> dict[str, Any]:
+                 session_id: str | None = None,
+                 confirm_token: str | None = None) -> dict[str, Any]:
         actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
         batch_id = _text(batch_id, "batch_id", required=True)
         with self._transaction() as conn:
@@ -1925,6 +2047,8 @@ class GoalStore:
             if not events:
                 raise KeyError(f"batch not found: {batch_id}")
             project_id = events[0]["project_id"]
+            if self._batch_marker(conn, batch_id) == "rollback":
+                raise GoalConflict("batch has already been rolled back")
             latest = conn.execute(
                 "SELECT e.batch_id, MAX(e.rowid) AS last_rowid FROM goal_events e "
                 "WHERE e.project_id=? AND e.batch_id IS NOT NULL "
@@ -1938,11 +2062,12 @@ class GoalStore:
             )
             if latest_active and latest_active["batch_id"] != batch_id:
                 raise GoalConflict("only the latest unrolled batch can be rolled back", latest_batch_id=latest_active["batch_id"])
-            if self._batch_marker(conn, batch_id) == "rollback":
-                raise GoalConflict("batch has already been rolled back")
-            if not confirm and len(events) > 10:
-                # Keep large replays explicit while preserving the same token contract.
-                self.guard.require_or_consume("rollback", {"batch_id": batch_id}, None)
+            if len(events) > 10:
+                # Large replays always require a one-time confirmation token.
+                # A caller-controlled boolean cannot establish an approval boundary.
+                self.guard.require_or_consume(
+                    "rollback", {"batch_id": batch_id}, confirm_token,
+                )
             for event in events:
                 before = load_json(event["before_json"])
                 after = load_json(event["after_json"])
@@ -1973,8 +2098,19 @@ class GoalStore:
                         conn.execute("UPDATE goal_edges SET deleted_at=NULL WHERE id=?", (entity_id,))
                 elif event["entity_type"] == "evidence" and event["event_type"] == "attach_evidence":
                     conn.execute("UPDATE goal_evidence SET deleted_at=? WHERE id=?", (utc_now(), entity_id))
-                elif event["entity_type"] == "project" and after:
-                    conn.execute("UPDATE goal_projects SET deleted_at=? WHERE id=?", (utc_now(), entity_id))
+                elif event["entity_type"] == "project":
+                    if event["event_type"] == "create_project" and after:
+                        conn.execute("UPDATE goal_projects SET deleted_at=? WHERE id=?", (utc_now(), entity_id))
+                    elif event["event_type"] == "delete_project" and before:
+                        conn.execute(
+                            "UPDATE goal_projects SET name=?, description=?, root_node_id=?, created_by=?, "
+                            "created_at=?, updated_at=?, deleted_at=? WHERE id=?",
+                            (
+                                before["name"], before["description"], before.get("root_node_id"),
+                                before["created_by"], before["created_at"], before["updated_at"],
+                                before.get("deleted_at"), entity_id,
+                            ),
+                        )
             self._event(
                 conn, project_id=project_id, event_type="rollback", entity_type="batch",
                 entity_id=batch_id, before={"batch_id": batch_id}, after=None,

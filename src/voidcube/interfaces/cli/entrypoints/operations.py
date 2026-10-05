@@ -97,7 +97,8 @@ def cmd_serve(args):
     action = getattr(args, "serve_action", None) or "status"
     if action == "start":
         foreground = getattr(args, "foreground", False)
-        start_all(foreground=foreground)
+        if start_all(foreground=foreground) is False:
+            raise SystemExit(1)
     elif action == "stop":
         stop_all()
     else:

@@ -169,6 +169,9 @@ def _show_goal(ports: GoalCommandPorts) -> None:
     reason = str(goal.get("reason") or "").strip()
     if reason:
         lines.append(ports.translate("goal_command.reason", reason=reason))
+    backend_status = str(goal.get("backend_status") or "").strip()
+    if goal.get("backend") == "goal_manager" and backend_status == "unavailable":
+        lines.append(ports.translate("goal_command.backend_unavailable"))
     ports.emit("\n".join(lines))
 
 

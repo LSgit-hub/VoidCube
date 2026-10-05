@@ -10,10 +10,10 @@ from contextlib import asynccontextmanager
 from collections import deque
 from datetime import datetime
 from typing import Any, Deque, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ...domain.tasks.runtime_profile import derive_runtime_task_profile
 from ...systems.supervisor.autonomous_chain_contract import (
     AUTONOMOUS_CHAIN_TASKS_ROUTE,
@@ -31,6 +31,21 @@ from plugins.memory.mem.outbox import (
 from ..config.runtime_paths import get_VoidCube_home
 
 logger = logging.getLogger("internal_gateway")
+
+_HOP_BY_HOP_HEADERS = frozenset({
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-encoding",
+    "accept-encoding",
+    "host",
+})
 
 
 class ServiceInfo(BaseModel):
@@ -54,14 +69,17 @@ class RouteEntry(BaseModel):
 
 
 class GatewayConfig(BaseModel):
-    host: str = "127.0.0.1"
-    port: int = 6000
+    host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
+    port: int = Field(default=6000, ge=1, le=65535)
     auth_token: Optional[str] = None
     log_level: str = "INFO"
-    activity_log_limit: int = 200
+    activity_log_limit: int = Field(default=200, ge=1, le=10000)
     activity_log_path: str = ""  # disk path; "" = auto-derive from VoidCube home
-    session_ttl_seconds: int = DEFAULT_CLI_SESSION_TTL_SECONDS
-    active_cli_stale_after_seconds: int = DEFAULT_ACTIVE_CLI_STALE_AFTER_SECONDS
+    session_ttl_seconds: int = Field(default=DEFAULT_CLI_SESSION_TTL_SECONDS, ge=1)
+    active_cli_stale_after_seconds: int = Field(
+        default=DEFAULT_ACTIVE_CLI_STALE_AFTER_SECONDS,
+        ge=1,
+    )
 
 
 class AgentRequest(BaseModel):
@@ -88,12 +106,12 @@ class ActivityTouchRequest(BaseModel):
 
 
 class SessionRegisterRequest(BaseModel):
-    session_id: str
-    model: Optional[str] = None
-    provider: Optional[str] = None
-    source: str = "cli"
-    owner_id: str = "local-user"
-    workspace_id: str = "default"
+    session_id: str = Field(min_length=1, max_length=300)
+    model: Optional[str] = Field(default=None, max_length=200)
+    provider: Optional[str] = Field(default=None, max_length=200)
+    source: str = Field(default="cli", min_length=1, max_length=50)
+    owner_id: str = Field(default="local-user", min_length=1, max_length=300)
+    workspace_id: str = Field(default="default", min_length=1, max_length=300)
 
 
 class InternalGateway:
@@ -157,6 +175,7 @@ class InternalGateway:
         )
         self._memory_outbox_task: asyncio.Task[Any] | None = None
         self._last_memory_outbox_health_report_at = 0.0
+        self._scene_refresh_lock = asyncio.Lock()
         # NOTE(SB-03): Session cache is body-runtime state, not gateway operations
         # state.  Long-term session ownership should belong to the agent body
         # instances.  The gateway should only hold routing metadata.  TTL eviction
@@ -458,8 +477,8 @@ class InternalGateway:
         
         self.app.add_api_route("/admin/routes", self.list_routes, methods=["GET"])
         self.app.add_api_route("/admin/routes", self.add_route, methods=["POST"])
-        self.app.add_api_route("/admin/routes/{path_prefix}", self.update_route, methods=["PUT"])
-        self.app.add_api_route("/admin/routes/{path_prefix}", self.delete_route, methods=["DELETE"])
+        self.app.add_api_route("/admin/routes/{path_prefix:path}", self.update_route, methods=["PUT"])
+        self.app.add_api_route("/admin/routes/{path_prefix:path}", self.delete_route, methods=["DELETE"])
         
         self.app.add_api_route("/admin/body/status", self.get_body_status, methods=["GET"])
         self.app.add_api_route("/admin/activity", self.get_activity_status, methods=["GET"])
@@ -1280,7 +1299,13 @@ class InternalGateway:
 
     async def touch_activity(self, request: Request):
         try:
-            payload = ActivityTouchRequest.model_validate(await request.json())
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="activity payload must be an object")
+            payload = ActivityTouchRequest.model_validate(data)
             self._touch_activity(
                 payload.activity_kind,
                 source_service=payload.source_service,
@@ -1291,51 +1316,69 @@ class InternalGateway:
                 "status": "updated",
                 "activity": self._build_activity_snapshot(),
             }
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         except Exception as e:
             logger.error(f"Error updating activity state: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     async def register_session(self, request: Request):
         try:
-            payload = SessionRegisterRequest.model_validate(await request.json())
-            existing = dict(self._agent_session_cache.get(payload.session_id) or {})
+            self._evict_stale_sessions()
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="session payload must be an object")
+            payload = SessionRegisterRequest.model_validate(data)
+            session_id = payload.session_id.strip()
+            owner_id = payload.owner_id.strip()
+            workspace_id = payload.workspace_id.strip()
+            if not session_id:
+                raise HTTPException(status_code=422, detail="session_id is required")
+            existing = dict(self._agent_session_cache.get(session_id) or {})
             existing_owner = existing.get("owner_id")
             existing_workspace = existing.get("workspace_id")
             if (
                 existing_owner is not None
-                and str(existing_owner) != payload.owner_id
+                and str(existing_owner) != owner_id
             ) or (
                 existing_workspace is not None
-                and str(existing_workspace) != payload.workspace_id
+                and str(existing_workspace) != workspace_id
             ):
                 raise HTTPException(
                     status_code=409,
                     detail="Gateway session scope cannot be changed",
                 )
-            self._touch_session(payload.session_id, source=payload.source)
-            existing = dict(self._agent_session_cache.get(payload.session_id) or {})
-            self._agent_session_cache[payload.session_id] = {
+            self._touch_session(session_id, source=payload.source)
+            existing = dict(self._agent_session_cache.get(session_id) or {})
+            self._agent_session_cache[session_id] = {
                 **existing,
                 "model": payload.model,
                 "provider": payload.provider,
                 "source": payload.source,
-                "owner_id": payload.owner_id,
-                "workspace_id": payload.workspace_id,
+                "owner_id": owner_id,
+                "workspace_id": workspace_id,
             }
             if payload.source == "cli" and not self._active_cli_session_id:
-                self._active_cli_session_id = payload.session_id
+                self._active_cli_session_id = session_id
             session_token = self._session_credentials.setdefault(
-                payload.session_id,
+                session_id,
                 self._new_credential(),
             )
             return {
                 "status": "registered",
-                "session_id": payload.session_id,
+                "session_id": session_id,
                 "session_token": session_token,
                 "active_cli_session_id": self._active_cli_session_id,
             }
         except HTTPException:
             raise
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
         except Exception as e:
             logger.error(f"Error registering session: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1346,19 +1389,33 @@ class InternalGateway:
         This is the canonical supervisor-owned switch for the autonomous chain.
         """
         try:
-            data = await request.json()
-            active = bool(data.get("active", False))
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="gate payload must be an object")
+            active = data.get("active", False)
+            if not isinstance(active, bool):
+                raise HTTPException(status_code=422, detail="active must be a boolean")
             self._autonomous_chain_gate_active = active
             logger.info("Gateway autonomous chain gate set to: %s", active)
             return {"autonomous_chain_gate_active": active}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error setting autonomous chain gate: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     async def register_service(self, request: Request):
         try:
-            data = await request.json()
-            service_id = str(data.get("service_id") or uuid.uuid4()).strip()
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="registration payload must be an object")
+            service_id = str(data.get("service_id") or "").strip() or str(uuid.uuid4())
             service_name = str(data.get("service_name") or "").strip()
             service_type = str(data.get("service_type") or "").strip()
             address = str(data.get("address") or "").strip().rstrip("/")
@@ -1366,6 +1423,36 @@ class InternalGateway:
             
             if not all([service_name, service_type, address]):
                 raise HTTPException(status_code=400, detail="Missing required fields")
+            if any(len(value) > limit for value, limit in (
+                (service_id, 300), (service_name, 200), (service_type, 100),
+                (address, 2000), (health_endpoint, 300),
+            )):
+                raise HTTPException(status_code=422, detail="service registration field is too long")
+            try:
+                address_parts = urlsplit(address)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="address must be an HTTP or HTTPS URL")
+            if (
+                address_parts.scheme not in {"http", "https"}
+                or not address_parts.netloc
+                or address_parts.username
+                or address_parts.password
+                or address_parts.query
+                or address_parts.fragment
+            ):
+                raise HTTPException(status_code=422, detail="address must be an HTTP or HTTPS URL")
+            if not health_endpoint.startswith("/") or "://" in health_endpoint:
+                raise HTTPException(status_code=422, detail="health_endpoint must be a relative path")
+
+            existing = self._services.get(service_id)
+            if existing is not None and (
+                existing.service_name != service_name
+                or existing.service_type != service_type
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="service_id is already registered for another service",
+                )
             
             service_info = ServiceInfo(
                 service_id=service_id,
@@ -1498,16 +1585,35 @@ class InternalGateway:
 
     async def update_health(self, service_id: str, request: Request):
         try:
-            data = await request.json()
-            healthy = data.get("healthy", True)
-            
-            if service_id in self._services:
-                self._services[service_id].healthy = healthy
-                self._services[service_id].last_health_check = datetime.now()
-                logger.debug(f"Health updated for {service_id}: {healthy}")
-                return {"status": "updated"}
-            else:
+            service = self._services.get(service_id)
+            if service is None:
                 raise HTTPException(status_code=404, detail="Service not found")
+            supplied_token = str(
+                request.headers.get(self.SERVICE_TOKEN_HEADER) or ""
+            ).strip()
+            expected_token = self._service_credentials.get(service_id, "")
+            if (
+                not supplied_token
+                or not expected_token
+                or not hmac.compare_digest(supplied_token, expected_token)
+            ):
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid Gateway service credential",
+                )
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="health payload must be an object")
+            healthy = data.get("healthy", True)
+            if not isinstance(healthy, bool):
+                raise HTTPException(status_code=422, detail="healthy must be a boolean")
+            service.healthy = healthy
+            service.last_health_check = datetime.now()
+            logger.debug("Health updated for %s: %s", service_id, healthy)
+            return {"status": "updated"}
         except HTTPException:
             raise
         except Exception as e:
@@ -1539,15 +1645,45 @@ class InternalGateway:
             "executor_access_policy": self._build_executor_access_policy(),
         }
 
+    def _validate_route_target(self, target_service: Any, target_instance: Any) -> tuple[str, str]:
+        service_type = str(target_service or "").strip()
+        service_id = str(target_instance or "").strip()
+        if not service_type or not service_id:
+            raise HTTPException(
+                status_code=400,
+                detail="target_service and target_instance are required",
+            )
+        target = self._services.get(service_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Target service not found")
+        if target.service_type != service_type:
+            raise HTTPException(
+                status_code=409,
+                detail="target_service does not match target_instance",
+            )
+        return service_type, service_id
+
     async def add_route(self, request: Request):
         try:
-            data = await request.json()
-            path_prefix = data.get("path_prefix")
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="route payload must be an object")
+            path_prefix = str(data.get("path_prefix") or "").strip()
             target_service = data.get("target_service")
             target_instance = data.get("target_instance")
             
-            if not path_prefix or not target_service:
+            if (
+                not path_prefix
+                or not path_prefix.startswith("/")
+                or not path_prefix.endswith("/")
+            ):
                 raise HTTPException(status_code=400, detail="Missing required fields")
+            target_service, target_instance = self._validate_route_target(
+                target_service, target_instance,
+            )
             
             self._routes[path_prefix] = RouteEntry(
                 path_prefix=path_prefix,
@@ -1559,6 +1695,8 @@ class InternalGateway:
             
             logger.info(f"Route added: {path_prefix} -> {target_service}")
             return {"status": "added"}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error adding route: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1568,18 +1706,33 @@ class InternalGateway:
             raise HTTPException(status_code=404, detail="Route not found")
         
         try:
-            data = await request.json()
+            try:
+                data = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="request body must be valid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="route payload must be an object")
             route = self._routes[path_prefix]
             
             if "target_instance" in data:
-                route.target_instance = data["target_instance"]
+                _, target_instance = self._validate_route_target(
+                    route.target_service, data["target_instance"],
+                )
+                route.target_instance = target_instance
             if "weight" in data:
-                route.weight = data["weight"]
+                weight = data["weight"]
+                if isinstance(weight, bool) or not isinstance(weight, int) or weight < 0:
+                    raise HTTPException(status_code=422, detail="weight must be a non-negative integer")
+                route.weight = weight
             if "enabled" in data:
+                if not isinstance(data["enabled"], bool):
+                    raise HTTPException(status_code=422, detail="enabled must be a boolean")
                 route.enabled = data["enabled"]
             
             logger.info(f"Route updated: {path_prefix}")
             return {"status": "updated"}
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error updating route: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -1625,10 +1778,17 @@ class InternalGateway:
         }
 
     async def refresh_scenes(self):
-        """Force a fresh scene fetch from every reachable service."""
-        await self._refresh_supervisor_scene()
-        await self._refresh_agent_scene()
-        await self._refresh_executor_scene()
+        """Force a fresh scene fetch from every reachable service.
+
+        The probes are independent, but cache mutation is serialized so two
+        concurrent refresh requests cannot interleave stale snapshots.
+        """
+        async with self._scene_refresh_lock:
+            await asyncio.gather(
+                self._refresh_supervisor_scene(),
+                self._refresh_agent_scene(),
+                self._refresh_executor_scene(),
+            )
         return {"status": "refreshed", "scenes": self._scenes_cache}
 
     def _build_scene_summary(self) -> Dict[str, str]:
@@ -1681,6 +1841,10 @@ class InternalGateway:
         supervisors = self._find_services("supervisor")
         cache = self._scenes_cache["supervisor"]
         cache["reachable"] = False
+        cache["scene"] = "idle"
+        cache["title"] = None
+        cache["summary"] = None
+        cache["scene_changed_at"] = None
         if not supervisors:
             cache["last_fetched_at"] = datetime.now().isoformat()
             return
@@ -1728,6 +1892,8 @@ class InternalGateway:
     async def _refresh_executor_scene(self) -> None:
         cache = self._scenes_cache["executor"]
         cache["reachable"] = False
+        cache["scene"] = "idle"
+        cache["scene_changed_at"] = None
         executors = self._find_services("executor")
         if not executors:
             cache["last_fetched_at"] = datetime.now().isoformat()
@@ -1766,7 +1932,9 @@ class InternalGateway:
         
         try:
             matched_route = None
-            for prefix, route in self._routes.items():
+            for prefix, route in sorted(
+                self._routes.items(), key=lambda item: len(item[0]), reverse=True
+            ):
                 if path.startswith(prefix[1:]) and route.enabled:
                     matched_route = route
                     break
@@ -1795,7 +1963,24 @@ class InternalGateway:
                 target_service.service_type,
                 path,
             )
-            headers = dict(request.headers)
+            # Gateway and service credentials authenticate this hop only. Never
+            # forward them to a registered upstream service, where they could
+            # be logged or interpreted as that service's own credentials.
+            upstream_credential_headers = {
+                "authorization",
+                self.GATEWAY_TOKEN_HEADER,
+                self.SERVICE_ID_HEADER,
+                self.SERVICE_TOKEN_HEADER,
+                self.SESSION_TOKEN_HEADER,
+            }
+            headers = {
+                key: value
+                for key, value in request.headers.items()
+                if (
+                    key.lower() not in upstream_credential_headers
+                    and key.lower() not in _HOP_BY_HOP_HEADERS
+                )
+            }
             query_params = list(request.query_params.multi_items())
             if (
                 target_service.service_type == "memory"
@@ -1852,7 +2037,11 @@ class InternalGateway:
                         headers=headers,
                     ) as response:
                         response_body = await response.read()
-                        response_headers = dict(response.headers)
+                        response_headers = {
+                            key: value
+                            for key, value in response.headers.items()
+                            if key.lower() not in _HOP_BY_HOP_HEADERS
+                        }
                         
                         return Response(
                             content=response_body,
@@ -1866,6 +2055,17 @@ class InternalGateway:
                 "request_id": request_id, "error_type": "timeout", "path": path,
             })
             raise HTTPException(status_code=504, detail="Gateway timeout")
+        except aiohttp.ClientError as exc:
+            logger.warning("Upstream request %s failed: %s", request_id, exc)
+            self._touch_activity("agent_error", metadata={
+                "request_id": request_id,
+                "error_type": "upstream_unavailable",
+                "path": path,
+            })
+            raise HTTPException(
+                status_code=503,
+                detail="Upstream service unavailable",
+            ) from exc
         except HTTPException:
             raise
         except Exception as e:
@@ -2275,7 +2475,9 @@ class InternalGateway:
         try:
             body = await request.body()
             data = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="task decision payload must be an object")
+        except (UnicodeDecodeError, json.JSONDecodeError):
             raise HTTPException(status_code=400, detail="Invalid JSON")
 
         decision = str(data.get("decision") or default_decision).strip().lower()
@@ -2390,7 +2592,9 @@ class InternalGateway:
         try:
             body = await request.body()
             report = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
+            if not isinstance(report, dict):
+                raise HTTPException(status_code=422, detail="improvement report payload must be an object")
+        except (UnicodeDecodeError, json.JSONDecodeError):
             raise HTTPException(status_code=400, detail="Invalid JSON")
 
         url = f"{supervisor_service.address}/body/improvement-report"
@@ -2458,7 +2662,12 @@ class InternalGateway:
         request_id = str(uuid.uuid4())
         
         try:
-            data = await request.json()
+            try:
+                data = await request.json()
+            except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                raise HTTPException(status_code=400, detail="Invalid JSON")
+            if not isinstance(data, dict):
+                raise HTTPException(status_code=422, detail="agent query payload must be an object")
 
             session_id = data.get("session_id") or str(uuid.uuid4())
             activity_metadata = self._extract_activity_metadata_from_payload(data)

@@ -99,6 +99,22 @@ def test_session_goal_tool_requires_three_turns_to_mark_blocked():
     assert third["goal"]["status"] == "blocked"
 
 
+def test_individual_update_goal_cannot_bypass_blocker_audit():
+    host = SimpleNamespace(session_id="session-a", _session_goals={})
+    create_goal(host, "Finish the task")
+
+    rejected = json.loads(
+        _handle_update_goal(
+            {"status": "blocked", "reason": "Missing access"},
+            host=host,
+        )
+    )
+
+    assert rejected["success"] is False
+    assert rejected["error"] == "status must be paused or completed"
+    assert get_goal(host)["status"] == "active"
+
+
 def test_turn_failure_stops_active_goal_until_explicit_resume():
     host = SimpleNamespace(session_id="session-a", _session_goals={})
     create_goal(host, "Finish the task")
@@ -198,6 +214,48 @@ def test_aggregate_goal_tool_accepts_complete_status_alias():
     assert result["goal"]["status"] == "completed"
 
 
+def test_session_goal_completion_uses_injected_port_backend():
+    calls = []
+
+    class Port:
+        def get_goal(self, host):
+            from voidcube.application.session_goal import get_goal
+            return get_goal(host)
+
+        def create_goal(self, host, objective):
+            from voidcube.application.session_goal import create_goal
+            return create_goal(host, objective)
+
+        def update_goal(self, host, status, reason=None):
+            from voidcube.application.session_goal import update_goal
+            return update_goal(host, status, reason)
+
+        def clear_goal(self, host):
+            return False
+
+        def audit_blocked_goal(self, host, reason, *, turn_id):
+            return None
+
+        def update_goal_objective(self, host, objective, *, reason=None):
+            return False
+
+        def complete_backend(self, host, reason):
+            calls.append((host.session_id, reason))
+            return True
+
+    host = SimpleNamespace(
+        session_id="session-a",
+        _session_goals={},
+        _session_goal_port=Port(),
+    )
+    create_goal(host, "Finish the task")
+
+    result = json.loads(dispatch_session_goal("update", host=host, status="complete"))
+
+    assert result["success"] is True
+    assert calls == [("session-a", None)]
+
+
 def test_agent_routes_individual_goal_tool_names_to_session_backend(tmp_path):
     db = SessionDB(tmp_path / "sessions.db")
     agent = object.__new__(AIAgent)
@@ -231,4 +289,20 @@ def test_agent_routes_individual_goal_tool_names_to_session_backend(tmp_path):
         "goal.created",
         "goal.completed",
     ]
+    db.close()
+
+
+def test_default_session_goal_port_finishes_persistent_audit_turn(tmp_path):
+    from voidcube.application.ports import DefaultSessionGoalPort
+
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session_goal("session-a", "Finish the task")
+    db.audit_session_goal_blocker("session-a", "Missing access", turn_id="turn-1")
+    host = SimpleNamespace(session_id="session-a", _session_db=db)
+
+    DefaultSessionGoalPort().finish_goal_audit_turn(host, "turn-2")
+
+    goal = db.get_session_goal("session-a")
+    assert goal["blocked_reason"] is None
+    assert goal["blocked_streak"] == 0
     db.close()

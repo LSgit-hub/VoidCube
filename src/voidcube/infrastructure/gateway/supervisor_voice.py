@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import urllib.error
 import urllib.request
 from typing import Any, Dict
+from urllib.parse import urlsplit
 
 from .presence import default_gateway_url
 
@@ -18,8 +20,25 @@ class SupervisorVoiceClient:
     """Route terminal voice controls through the Gateway to Supervisor."""
 
     def __init__(self, *, base_url: str | None = None, timeout_seconds: float = 60.0) -> None:
-        self.base_url = (base_url or default_gateway_url()).rstrip("/")
-        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        normalized_url = (base_url or default_gateway_url()).strip().rstrip("/")
+        parsed_url = urlsplit(normalized_url)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.netloc
+            or parsed_url.username
+            or parsed_url.password
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
+            raise ValueError("Gateway URL must use http or https")
+        try:
+            normalized_timeout = float(timeout_seconds)
+        except (TypeError, ValueError):
+            raise ValueError("Supervisor voice timeout must be a finite positive number") from None
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("Supervisor voice timeout must be a finite positive number")
+        self.base_url = normalized_url
+        self.timeout_seconds = normalized_timeout
 
     def status(self) -> Dict[str, Any]:
         return self._request_json("GET", "/voice/status", {})
@@ -69,7 +88,9 @@ class SupervisorVoiceClient:
             raise SupervisorVoiceClientError(f"HTTP {exc.code}: {exc.reason}") from exc
         except Exception as exc:
             raise SupervisorVoiceClientError(str(exc)) from exc
-        return dict(decoded) if isinstance(decoded, dict) else {}
+        if not isinstance(decoded, dict):
+            raise SupervisorVoiceClientError("Supervisor voice returned a non-object response")
+        return decoded
 
 
 __all__ = ["SupervisorVoiceClient", "SupervisorVoiceClientError"]

@@ -20,24 +20,115 @@
     pollTimer: null,
     streamRetryTimer: null,
     menuNode: null,
+    menuPreviousFocus: null,
     dialogAction: null,
+    dialogPreviousFocus: null,
     history: null,
     reviewQueue: []
   };
+  var projectRequestId = 0;
+  var detailRequestId = 0;
+  var eventStreamGeneration = 0;
   var $ = function (id) { return document.getElementById(id); };
   var svgNs = "http://www.w3.org/2000/svg";
+  function currentProjectValid(projectId) {
+    return Boolean(state.project && state.project.id === projectId);
+  }
+  function currentProjectRequestValid(projectId, requestId) {
+    return currentProjectValid(projectId) && requestId === projectRequestId;
+  }
+
+  function loadReviewToken() {
+    var input = $("review-token-input");
+    if (input) input.value = window.sessionStorage.getItem("voidcube_review_token") || "";
+  }
+
+  function saveReviewToken() {
+    var input = $("review-token-input");
+    var value = input ? input.value.trim() : "";
+    if (value) window.sessionStorage.setItem("voidcube_review_token", value);
+    else window.sessionStorage.removeItem("voidcube_review_token");
+  }
+
+  function revokeReviewSession() {
+    var token = window.sessionStorage.getItem("voidcube_review_token");
+    if (!token) return Promise.resolve();
+    return fetch("/ui/review-session", {
+      method: "DELETE",
+      headers: { "X-VoidCube-Review-Token": token }
+    }).catch(function () {}).then(function () {
+      window.sessionStorage.removeItem("voidcube_review_token");
+    });
+  }
+
+  function exchangeReviewSession() {
+    var token = window.sessionStorage.getItem("voidcube_review_token");
+    if (!token) return Promise.resolve(false);
+    return fetch("/ui/review-session", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "X-VoidCube-Review-Token": token
+      }
+    }).then(function (response) {
+      if (!response.ok) {
+        window.sessionStorage.removeItem("voidcube_review_token");
+        return false;
+      }
+      return response.json().then(function (payload) {
+        if (payload && payload.review_token) {
+          window.sessionStorage.setItem("voidcube_review_token", payload.review_token);
+          return true;
+        }
+        return false;
+      });
+    }).catch(function () { return false; });
+  }
+
+  function reviewSessionError() {
+    return new Error("审核会话不可用，请重新输入审核凭证");
+  }
 
   function api(path, options) {
     options = options || {};
+    saveReviewToken();
     var headers = { Accept: "application/json" };
+    var reviewToken = window.sessionStorage.getItem("voidcube_review_token");
+    if (reviewToken) headers["X-VoidCube-Review-Token"] = reviewToken;
     if (options.body) headers["Content-Type"] = "application/json";
-    return fetch(serviceUrl + path, {
+    var controller = typeof AbortController === "function" ? new AbortController() : null;
+    var timedOut = false;
+    var timeoutMs = Number(options.timeout);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) timeoutMs = 30000;
+    var timeoutId = controller ? window.setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs) : null;
+    var requestOptions = {
       method: options.method || "GET",
       headers: headers,
       body: options.body ? JSON.stringify(options.body) : undefined
-    }).then(function (response) {
+    };
+    if (controller) requestOptions.signal = controller.signal;
+    return fetch(serviceUrl + path, requestOptions).then(function (response) {
       return response.text().then(function (text) {
-        var payload = text ? JSON.parse(text) : {};
+        var payload = {};
+        if (text) {
+          try {
+            payload = JSON.parse(text);
+          } catch (_error) {
+            var invalidPayload = new Error("Goal Service 返回了无效响应");
+            invalidPayload.status = response.status;
+            invalidPayload.payload = {};
+            throw invalidPayload;
+          }
+        }
+        if (response.ok && (!payload || typeof payload !== "object" || Array.isArray(payload))) {
+          var invalidSuccess = new Error("Goal Service 返回了无效响应");
+          invalidSuccess.status = response.status;
+          invalidSuccess.payload = {};
+          throw invalidSuccess;
+        }
         if (!response.ok) {
           var error = new Error(payload.detail || "Goal Service 请求失败");
           error.payload = payload;
@@ -46,6 +137,19 @@
         }
         return payload;
       });
+    }).catch(function (error) {
+      if (timedOut) {
+        var timeoutError = new Error("Goal Service 请求超时，请稍后重试");
+        timeoutError.code = "timeout";
+        throw timeoutError;
+      }
+      if (error && error.status != null) throw error;
+      var networkError = new Error("Goal Service 不可用");
+      networkError.code = "network_error";
+      networkError.cause = error;
+      throw networkError;
+    }).finally(function () {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
     });
   }
 
@@ -143,39 +247,89 @@
   function setLoading(loading) {
     state.loading = loading;
     $("loading-state").hidden = !loading;
+    $("loading-state").setAttribute("aria-busy", loading ? "true" : "false");
+    $("refresh-button").disabled = loading;
+    $("refresh-button").setAttribute("aria-busy", loading ? "true" : "false");
+    updateHistoryButtons();
   }
 
   function updateHistoryButtons() {
     var history = state.history || {};
-    $("undo-button").disabled = !history.can_undo;
-    $("redo-button").disabled = !history.can_redo;
+    var disabled = state.loading || !state.project;
+    $("undo-button").disabled = disabled || !history.can_undo;
+    $("redo-button").disabled = disabled || !history.can_redo;
   }
 
-  function loadHistory() {
+  function loadHistory(expectedProjectId) {
     if (!state.project) {
       state.history = null;
       updateHistoryButtons();
       return Promise.resolve();
     }
-    return api("/api/goals/projects/" + encodeURIComponent(state.project.id) + "/history")
+    var projectId = expectedProjectId || state.project.id;
+    var requestId = projectRequestId;
+    return api("/api/goals/projects/" + encodeURIComponent(projectId) + "/history")
       .then(function (payload) {
+        if (!currentProjectRequestValid(projectId, requestId)) return null;
         state.history = payload;
         updateHistoryButtons();
       })
       .catch(function (error) {
+        if (!currentProjectRequestValid(projectId, requestId)) return null;
         state.history = null;
         updateHistoryButtons();
-        setStatus(error.message || "历史状态加载失败", true);
+        return reportProjectError(projectId, error.message || "历史状态加载失败");
       });
   }
 
   function showError(error) {
-    setStatus(error && error.message ? error.message : "Goal Service 不可用", true);
-    $("loading-state").textContent = "无法连接 Goal Service，请确认 6003 服务正在运行。";
+    var message = error && error.message ? error.message : "Goal Service 不可用";
+    if (error && error.status === 409 && error.payload && error.payload.latest) {
+      message = "目标已被更新，已刷新当前数据，请重新检查后重试";
+      var latestId = error.payload.latest.id;
+      if (latestId) {
+        var projectId = state.project && state.project.id;
+        loadNodeDetail(latestId).catch(function () {
+          if (!currentProjectValid(projectId)) return null;
+          return null;
+        });
+      }
+    }
+    setStatus(message, true);
+    if (message === "审核会话不可用，请重新输入审核凭证") {
+      var reviewInput = $("review-token-input");
+      if (reviewInput) {
+        reviewInput.value = "";
+        reviewInput.focus();
+      }
+    }
+    $("loading-state").textContent = message === "Goal Service 不可用" ?
+      "无法连接 Goal Service，请确认 6003 服务正在运行。" : message;
     $("loading-state").hidden = false;
   }
 
+  function reportProjectError(projectId, message) {
+    if (!currentProjectValid(projectId)) return null;
+    setStatus(message, true);
+    $("loading-state").textContent = message;
+    $("loading-state").hidden = false;
+    return null;
+  }
+
+  function showProjectError(error, projectId, requestId) {
+    if (projectId == null && requestId == null) {
+      if (state.project) return null;
+    } else if (projectId == null) {
+      if (requestId != null && requestId !== projectRequestId) return null;
+    } else if (requestId == null ? !currentProjectValid(projectId) : !currentProjectRequestValid(projectId, requestId)) {
+      return null;
+    }
+    showError(error);
+    return null;
+  }
+
   function stopEventStream() {
+    eventStreamGeneration += 1;
     if (state.eventSource) {
       state.eventSource.close();
       state.eventSource = null;
@@ -192,17 +346,21 @@
 
   function pollEvents() {
     if (!state.project) return;
-    var path = "/api/goals/events?project_id=" + encodeURIComponent(state.project.id);
+    var projectId = state.project.id;
+    var streamGeneration = eventStreamGeneration;
+    var path = "/api/goals/events?project_id=" + encodeURIComponent(projectId);
     if (state.lastEventId) path += "&after=" + encodeURIComponent(state.lastEventId);
     api(path).then(function (payload) {
+      if (!currentProjectValid(projectId) || streamGeneration !== eventStreamGeneration) return;
       var events = payload.events || [];
       if (!events.length) return;
       state.lastEventId = events[events.length - 1].id || state.lastEventId;
       var focusedId = state.focus && state.focus.focus && state.focus.focus.id;
       setStatus("轮询发现目标更新，正在刷新...", false);
       if (focusedId) loadFocus(focusedId);
-      else loadProjects(state.project.id);
+      else loadProjects(projectId);
     }).catch(function (error) {
+      if (!currentProjectValid(projectId) || streamGeneration !== eventStreamGeneration) return;
       setStatus(error.message || "目标更新检查失败", true);
     });
   }
@@ -216,14 +374,26 @@
   function startEventStream() {
     stopEventStream();
     if (!state.project) return;
+    var projectId = state.project.id;
+    var streamGeneration = eventStreamGeneration;
+    var activeStream = function (source) {
+      return currentProjectValid(projectId) && streamGeneration === eventStreamGeneration &&
+        (!source || state.eventSource === source);
+    };
     var open = function () {
-      var query = "?project_id=" + encodeURIComponent(state.project.id);
+      if (!activeStream()) return;
+      var query = "?project_id=" + encodeURIComponent(projectId);
       if (state.lastEventId) query += "&after=" + encodeURIComponent(state.lastEventId);
       var source = new EventSource(
-        serviceUrl + "/api/goals/projects/" + encodeURIComponent(state.project.id) + "/events" + query
+        serviceUrl + "/api/goals/projects/" + encodeURIComponent(projectId) + "/events" + query
       );
       state.eventSource = source;
       source.onopen = function () {
+        if (!activeStream(source)) {
+          source.close();
+          if (state.eventSource === source) state.eventSource = null;
+          return;
+        }
         if (state.pollTimer) {
           window.clearInterval(state.pollTimer);
           state.pollTimer = null;
@@ -231,6 +401,7 @@
         setStatus("实时更新已连接", false);
       };
       source.onmessage = function (message) {
+        if (!activeStream(source)) return;
         var event;
         try {
           event = JSON.parse(message.data);
@@ -241,16 +412,17 @@
         setStatus("收到目标更新，正在刷新...", false);
         var focusedId = state.focus && state.focus.focus && state.focus.focus.id;
         if (focusedId) loadFocus(focusedId);
-        else loadProjects(state.project.id);
+        else loadProjects(projectId);
       };
       source.onerror = function () {
         source.close();
         if (state.eventSource === source) state.eventSource = null;
+        if (!activeStream()) return;
         startPollingFallback();
-        if (state.project && !state.eventSource && !state.streamRetryTimer) {
+        if (activeStream() && !state.eventSource && !state.streamRetryTimer) {
           state.streamRetryTimer = window.setTimeout(function () {
             state.streamRetryTimer = null;
-            if (state.project && !state.eventSource) startEventStream();
+            if (activeStream() && !state.eventSource) startEventStream();
           }, 3000);
         }
       };
@@ -259,11 +431,14 @@
       open();
       return;
     }
-    api("/api/goals/events/latest?project_id=" + encodeURIComponent(state.project.id))
+    api("/api/goals/events/latest?project_id=" + encodeURIComponent(projectId))
       .then(function (payload) {
+        if (!activeStream()) return;
         state.lastEventId = payload.event_id || null;
         open();
-      }).catch(open);
+      }).catch(function () {
+        if (activeStream()) open();
+      });
   }
 
   function svg(tag, attrs) {
@@ -286,6 +461,23 @@
     return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : chars.join("");
   }
 
+  function svgPointToClient(svgElement, x, y) {
+    var rect = svgElement.getBoundingClientRect();
+    var viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
+    if (!viewBox || !viewBox.width || !viewBox.height) {
+      return { x: rect.left + x, y: rect.top + y };
+    }
+    return {
+      x: rect.left + (x - viewBox.x) * rect.width / viewBox.width,
+      y: rect.top + (y - viewBox.y) * rect.height / viewBox.height
+    };
+  }
+
+  function openNodeMenuAtSvgPoint(node, svgElement, x, y) {
+    var point = svgPointToClient(svgElement, x, y);
+    openNodeMenu(node, point.x, point.y);
+  }
+
   function makeNodeGroup(node, x, y, radius, focused) {
     var circumference = 2 * Math.PI * (radius + 10);
     var group = svg("g", {
@@ -293,7 +485,8 @@
       "data-node-id": node.id,
       tabindex: "0",
       role: "button",
-      "aria-label": node.title + " " + percent(node.progress)
+      "aria-label": node.title + "，" + statusLabel(node.status) + "，完成度 " + percent(node.progress),
+      "aria-keyshortcuts": "Enter Space Shift+F10"
     });
     var arc = svg("circle", {
       "class": "progress-arc",
@@ -332,6 +525,11 @@
       openNodeMenu(node, event.clientX, event.clientY);
     });
     group.addEventListener("keydown", function (event) {
+      if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+        event.preventDefault();
+        openNodeMenuAtSvgPoint(node, $("radial-svg"), x, y);
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         group.click();
@@ -349,6 +547,9 @@
     if (!focus) {
       $("empty-state").hidden = false;
       $("focus-heading").textContent = "没有焦点目标";
+      $("project-progress").textContent = "项目进度 --";
+      $("breadcrumb").innerHTML = "";
+      updateNavigationButtons();
       return;
     }
     $("empty-state").hidden = true;
@@ -405,44 +606,63 @@
 
   function loadFocus(nodeId) {
     if (!state.project) return Promise.resolve();
+    var projectId = state.project.id;
+    var requestId = ++projectRequestId;
     setLoading(true);
-    var path = "/api/goals/projects/" + encodeURIComponent(state.project.id) + "/focus";
+    var path = "/api/goals/projects/" + encodeURIComponent(projectId) + "/focus";
     if (nodeId) path += "?node=" + encodeURIComponent(nodeId);
     return api(path).then(function (payload) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       state.focus = payload;
       setLoading(false);
       setStatus("目标图已更新", false);
       renderRadial();
-      return Promise.all([loadOverview(), loadHistory(), loadProjectSummary(), loadReviewQueue()]).then(function () {
+      return Promise.all([
+        loadOverview(projectId), loadHistory(projectId), loadProjectSummary(projectId), loadReviewQueue(projectId)
+      ]).then(function () {
+        if (!currentProjectRequestValid(projectId, requestId)) return null;
         renderDetail(state.selected);
       });
     }).catch(function (error) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       setLoading(false);
       showError(error);
+      return null;
     });
   }
 
-  function loadOverview() {
+  function loadOverview(expectedProjectId) {
     if (!state.project) return Promise.resolve();
-    var path = "/api/goals/projects/" + encodeURIComponent(state.project.id) +
+    var projectId = expectedProjectId || state.project.id;
+    var requestId = projectRequestId;
+    var path = "/api/goals/projects/" + encodeURIComponent(projectId) +
       "/overview?mode=" + encodeURIComponent(state.overviewMode);
     return api(path).then(function (payload) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       state.overview = payload;
-      renderOverview();
+      renderOverview(projectId, requestId);
     }).catch(function (error) {
-      setStatus(error.message || "总览加载失败", true);
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
+      return reportProjectError(projectId, error.message || "总览加载失败");
     });
   }
 
-  function loadProjectSummary() {
+  function loadProjectSummary(expectedProjectId) {
     if (!state.project) return Promise.resolve();
-    return api("/api/goals/projects/" + encodeURIComponent(state.project.id)).then(function (payload) {
+    var projectId = expectedProjectId || state.project.id;
+    var requestId = projectRequestId;
+    return api("/api/goals/projects/" + encodeURIComponent(projectId)).then(function (payload) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       state.project = normalizeProject(payload);
       renderRadial();
+    }).catch(function (error) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
+      return reportProjectError(projectId, error.message || "项目摘要加载失败");
     });
   }
 
   function focusNode(nodeId, pushHistory) {
+    if (!state.project || !nodeId) return Promise.resolve(null);
     var current = state.focus && state.focus.focus && state.focus.focus.id;
     if (pushHistory && current && current !== nodeId) {
       state.backStack.push(current);
@@ -454,24 +674,51 @@
     return loadFocus(nodeId);
   }
 
+  function updateNodeHash(nodeId) {
+    var hash = nodeId ? "#" + encodeURIComponent(nodeId) : "";
+    window.history.replaceState(nodeId ? { nodeId: nodeId } : {}, "", hash || window.location.pathname);
+  }
+
+  function readNodeHash() {
+    var encoded = window.location.hash.slice(1);
+    if (!encoded) return null;
+    try {
+      return decodeURIComponent(encoded) || null;
+    } catch (_error) {
+      updateNodeHash(null);
+      return null;
+    }
+  }
+
   function selectNode(nodeId) {
-    if (!state.focus) return;
+    if (!state.project || !state.focus) return;
     var focus = normalizeNode(state.focus.focus);
     var child = (state.focus.children || []).map(normalizeNode).find(function (node) {
       return node && node.id === nodeId;
     });
     state.selected = focus && focus.id === nodeId ? focus : child || null;
+    if (!state.selected || (state.selected.projectId && state.selected.projectId !== state.project.id)) {
+      state.selected = null;
+      return;
+    }
     state.editing = false;
+    updateNodeHash(state.selected.id);
     renderDetail(state.selected);
     if (state.selected) loadNodeDetail(state.selected.id);
   }
 
   function loadNodeDetail(nodeId) {
+    var projectId = state.project && state.project.id;
+    var requestId = ++detailRequestId;
     return Promise.all([
       api("/api/goals/nodes/" + encodeURIComponent(nodeId)),
       api("/api/goals/nodes/" + encodeURIComponent(nodeId) + "/lifecycle")
     ]).then(function (results) {
+      if (!currentProjectValid(projectId) || requestId !== detailRequestId) return null;
       var node = normalizeNode(results[0]);
+      if (!node || node.projectId !== projectId) {
+        throw new Error("当前目标已不属于所选项目，请刷新后重试");
+      }
       node.lifecycle = normalizeLifecycle(results[1]);
       if (state.selected && state.selected.id === nodeId) {
         state.selected = Object.assign(state.selected, node);
@@ -479,24 +726,28 @@
       }
       return node;
     }).catch(function (error) {
-      setStatus(error.message || "详情加载失败", true);
-      return null;
+      if (!currentProjectValid(projectId) || requestId !== detailRequestId) return null;
+      return reportProjectError(projectId, error.message || "详情加载失败");
     });
   }
 
-  function loadReviewQueue() {
+  function loadReviewQueue(expectedProjectId) {
     if (!state.project) {
       state.reviewQueue = [];
       return Promise.resolve();
     }
-    return api("/api/goals/projects/" + encodeURIComponent(state.project.id) + "/overview")
+    var projectId = expectedProjectId || state.project.id;
+    var requestId = projectRequestId;
+    return api("/api/goals/projects/" + encodeURIComponent(projectId) + "/overview")
       .then(function (payload) {
+        if (!currentProjectRequestValid(projectId, requestId)) return null;
         state.reviewQueue = (payload.nodes || []).map(normalizeNode).filter(function (node) {
           return node.status === "waiting_review";
         });
       }).catch(function (error) {
-        state.reviewQueue = [];
-        setStatus(error.message || "待审核队列加载失败", true);
+        if (currentProjectRequestValid(projectId, requestId)) state.reviewQueue = [];
+        if (!currentProjectRequestValid(projectId, requestId)) return null;
+        return reportProjectError(projectId, error.message || "待审核队列加载失败");
       });
   }
 
@@ -517,23 +768,53 @@
   }
 
   function closeNodeMenu() {
+    var previousFocus = state.menuPreviousFocus;
     $("node-menu").hidden = true;
     state.menuNode = null;
+    state.menuPreviousFocus = null;
+    if (previousFocus && document.contains(previousFocus) && previousFocus !== document.activeElement) previousFocus.focus();
   }
 
   function closeDialog() {
+    if ($("goal-dialog").hidden) {
+      state.dialogAction = null;
+      state.dialogPreviousFocus = null;
+      return;
+    }
+    var previousFocus = state.dialogPreviousFocus;
     $("goal-dialog").hidden = true;
+    $("goal-dialog").setAttribute("aria-hidden", "true");
     $("dialog-content").innerHTML = "";
     state.dialogAction = null;
+    state.dialogPreviousFocus = null;
+    if (previousFocus && document.contains(previousFocus) && previousFocus !== document.activeElement) previousFocus.focus();
+  }
+
+  function invalidatePendingInteraction() {
+    state.dialogAction = null;
+    state.menuNode = null;
+    state.menuPreviousFocus = null;
+    state.dialogPreviousFocus = null;
+    closeNodeMenu();
+    closeDialog();
+    detailRequestId += 1;
+  }
+
+  function dialogFocusableElements() {
+    return $("goal-dialog").querySelectorAll("button, input, select, textarea, [href], [tabindex]:not([tabindex=\"-1\"])");
   }
 
   function openDialog(title, content, action, confirmLabel) {
+    state.dialogPreviousFocus = document.activeElement;
     closeNodeMenu();
     $("dialog-title").textContent = title;
     $("dialog-content").innerHTML = content;
     $("dialog-confirm-button").textContent = confirmLabel || "确认";
     state.dialogAction = action;
     $("goal-dialog").hidden = false;
+    $("goal-dialog").setAttribute("aria-hidden", "false");
+    var firstField = $("dialog-content").querySelector("input, select, textarea, button");
+    (firstField || $("dialog-confirm-button")).focus();
   }
 
   function openConfirm(title, message, action, confirmLabel) {
@@ -545,9 +826,25 @@
     );
   }
 
+  function runDialogAction() {
+    var action = state.dialogAction;
+    if (!action || $("goal-dialog").hidden) return;
+    state.dialogAction = null;
+    action();
+  }
+
   function freshNode(node) {
+    var projectId = state.project && state.project.id;
+    var requestId = ++detailRequestId;
     return api("/api/goals/nodes/" + encodeURIComponent(node.id))
-      .then(function (payload) { return normalizeNode(payload); });
+      .then(function (payload) {
+        if (!currentProjectValid(projectId) || requestId !== detailRequestId) return null;
+        var fresh = normalizeNode(payload);
+        if (fresh.projectId !== projectId) {
+          throw new Error("当前目标已不属于所选项目，请刷新后重试");
+        }
+        return fresh;
+      });
   }
 
   function latestBatchId(node) {
@@ -618,17 +915,23 @@
   }
 
   function submitCreateChild(parent) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || (parent.projectId && parent.projectId !== projectId)) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
     var title = $("create-child-title").value.trim();
     var reason = $("create-child-reason").value.trim();
     if (!title || !reason) {
       setStatus("子目标标题和原因不能为空", true);
       return;
     }
+    var requestId = projectRequestId;
     setStatus("正在创建子目标...", false);
     api("/api/goals/batch", {
       method: "POST",
       body: {
-        project_id: parent.projectId || state.project.id,
+        project_id: projectId,
         reason: reason,
         created_by: "user",
         actor_type: "user",
@@ -657,6 +960,7 @@
         ]
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("子目标已创建", false);
       return focusNode(parent.id, false).then(function () {
@@ -665,15 +969,21 @@
         renderDetail(parent);
         return loadNodeDetail(parent.id);
       });
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function submitEvidence(node) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
     var reason = $("evidence-reason").value.trim();
     if (!reason) {
       setStatus("证据原因不能为空", true);
       return;
     }
+    var requestId = projectRequestId;
     setStatus("正在写入证据...", false);
     api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/evidence", {
       method: "POST",
@@ -687,10 +997,11 @@
         actor_type: "user"
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("证据已写入", false);
       return refreshAfterNodeChange(node.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function openVerifyEvidenceDialog(node) {
@@ -726,12 +1037,18 @@
   }
 
   function submitEvidenceVerification(node) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
     var reason = $("verify-reason").value.trim();
     var summary = $("verify-summary").value.trim();
     if (!reason || !summary) {
       setStatus("核验摘要和原因不能为空", true);
       return;
     }
+    var requestId = projectRequestId;
     setStatus("正在写入核验记录...", false);
     api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/evidence-verifications", {
       method: "POST",
@@ -744,63 +1061,80 @@
         actor_type: "user"
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("核验记录已写入", false);
       return refreshAfterNodeChange(node.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
-  function requestRollback(node, confirm) {
+  function requestRollback(node, confirmToken) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
     var batchId = latestBatchId(node);
     if (!batchId) {
       setStatus("该目标没有可回滚的批次", true);
       return;
     }
-    requestRollbackBatch(batchId, confirm, node.id);
+    requestRollbackBatch(batchId, confirmToken, node.id);
   }
 
-  function requestRollbackBatch(batchId, confirm, nodeId) {
+  function requestRollbackBatch(batchId, confirmToken, nodeId) {
+    var projectId = state.project && state.project.id;
+    if (!projectId) return;
+    var focusedId = state.focus && state.focus.focus && state.focus.focus.id;
+    var requestId = projectRequestId;
     api("/api/goals/rollback", {
       method: "POST",
       body: {
         batch_id: batchId,
         reason: "通过目标管理界面回滚批次",
-        confirm: Boolean(confirm),
+        confirm_token: confirmToken || undefined,
         actor_type: "user"
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("批次已回滚", false);
+      if (focusedId && state.focus && state.focus.focus && state.focus.focus.id !== focusedId) return null;
       return refreshAfterNodeChange(nodeId);
     }).catch(function (error) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       if (error.payload && error.payload.requires_confirm) {
         openConfirm(
           "服务端确认回滚",
           "该批次包含较多变更，服务端要求再次确认后才会回滚。",
-          function () { requestRollbackBatch(batchId, true, nodeId); },
+          function () { requestRollbackBatch(batchId, error.payload.confirm_token, nodeId); },
           "确认回滚"
         );
         return;
       }
-      showError(error);
+      return showProjectError(error, projectId, requestId);
     });
   }
 
   function requestRedo(batchId) {
+    var projectId = state.project && state.project.id;
+    if (!projectId) return;
+    var focusedId = state.focus && state.focus.focus && state.focus.focus.id;
+    var requestId = projectRequestId;
     api("/api/goals/redo", {
       method: "POST",
       body: {
-        project_id: state.project && state.project.id,
+        project_id: projectId,
         batch_id: batchId,
         reason: "通过目标管理界面重做批次",
         actor_type: "user"
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("批次已重做", false);
-      var focusedId = state.focus && state.focus.focus && state.focus.focus.id;
-      return focusedId ? loadFocus(focusedId) : loadProjects(state.project && state.project.id);
-    }).catch(showError);
+      return focusedId ? loadFocus(focusedId) : loadProjects(projectId);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function openUndoDialog() {
@@ -838,13 +1172,20 @@
   }
 
   function requestDelete(node, confirmToken) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
     var currentFocusId = state.focus && state.focus.focus && state.focus.focus.id;
+    var requestId = projectRequestId;
     var query = "?reason=" + encodeURIComponent("通过目标管理界面删除节点") +
       "&actor_type=user";
     if (confirmToken) query += "&confirm_token=" + encodeURIComponent(confirmToken);
     api("/api/goals/nodes/" + encodeURIComponent(node.id) + query, {
       method: "DELETE"
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       state.selected = null;
       state.editing = false;
@@ -856,6 +1197,7 @@
       setStatus("节点已删除", false);
       return refreshAfterNodeChange(node.id);
     }).catch(function (error) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       if (error.payload && error.payload.requires_confirm) {
         openConfirm(
           "服务端确认删除",
@@ -865,38 +1207,50 @@
         );
         return;
       }
-      showError(error);
+      return showProjectError(error, projectId, requestId);
     });
   }
 
   function beginNodeEdit(node) {
+    var projectId = state.project && state.project.id;
+    var requestId = detailRequestId;
     freshNode(node).then(function (fresh) {
       if (!fresh) return;
       state.selected = fresh;
       state.editing = true;
       renderDetail(fresh);
       $("detail-edit-title").focus();
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function blockNode(node) {
+    var projectId = state.project && state.project.id;
+    var requestId = detailRequestId;
     freshNode(node).then(function (fresh) {
       if (fresh) patchNode(fresh, { status: "blocked" }, "通过目标管理界面标记阻塞");
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function openNodeMenu(node, clientX, clientY) {
+    if (!node || !state.project || (node.projectId && node.projectId !== state.project.id)) return;
+    state.menuPreviousFocus = document.activeElement;
     state.menuNode = node;
     var menu = $("node-menu");
     menu.hidden = false;
     menu.style.left = Math.max(8, Math.min(clientX, window.innerWidth - 176)) + "px";
     menu.style.top = Math.max(8, Math.min(clientY, window.innerHeight - 220)) + "px";
+    var firstItem = menu.querySelector("button");
+    if (firstItem) firstItem.focus();
+  }
+
+  function nodeMenuFocusableElements() {
+    return Array.prototype.slice.call($("node-menu").querySelectorAll("button:not([disabled])"));
   }
 
   function handleMenuAction(action) {
     var node = state.menuNode;
     closeNodeMenu();
-    if (!node) return;
+    if (!node || !state.project || (node.projectId && node.projectId !== state.project.id)) return;
     if (action === "view") {
       state.selected = normalizeNode(node);
       state.editing = false;
@@ -909,8 +1263,14 @@
     } else if (action === "block") {
       blockNode(node);
     } else if (action === "evidence") {
-      freshNode(node).then(function (fresh) { if (fresh) openEvidenceDialog(fresh); }).catch(showError);
+      var projectId = state.project && state.project.id;
+      var requestId = detailRequestId;
+      freshNode(node).then(function (fresh) { if (fresh) openEvidenceDialog(fresh); }).catch(function (error) {
+        return showProjectError(error, projectId, requestId);
+      });
     } else if (action === "rollback") {
+      var rollbackProjectId = state.project && state.project.id;
+      var rollbackRequestId = detailRequestId;
       freshNode(node).then(function (fresh) {
         if (!fresh || !latestBatchId(fresh)) {
           setStatus("该目标没有可回滚的批次", true);
@@ -922,8 +1282,12 @@
           function () { requestRollback(fresh, false); },
           "继续回滚"
         );
-      }).catch(showError);
+      }).catch(function (error) {
+        return showProjectError(error, rollbackProjectId, rollbackRequestId);
+      });
     } else if (action === "delete") {
+      var deleteProjectId = state.project && state.project.id;
+      var deleteRequestId = detailRequestId;
       freshNode(node).then(function (fresh) {
         if (fresh) {
           openConfirm(
@@ -933,19 +1297,30 @@
             "继续删除"
           );
         }
-      }).catch(showError);
+      }).catch(function (error) {
+        return showProjectError(error, deleteProjectId, deleteRequestId);
+      });
     }
   }
 
   function refreshAfterNodeChange(nodeId) {
+    var projectId = state.project && state.project.id;
     var focusedId = state.focus && state.focus.focus && state.focus.focus.id;
     var refresh = focusedId ? loadFocus(focusedId) : loadProjects(state.project && state.project.id);
     return refresh.then(function () {
-      if (state.selected && state.selected.id === nodeId) loadNodeDetail(nodeId);
-    });
+      if (!currentProjectValid(projectId)) return null;
+      if (state.selected && state.selected.id === nodeId) return loadNodeDetail(nodeId);
+      return null;
+    }).catch(function (error) { return showProjectError(error, projectId); });
   }
 
   function patchNode(node, patch, reason) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return Promise.resolve(null);
+    }
+    var requestId = projectRequestId;
     return api("/api/goals/nodes/" + encodeURIComponent(node.id), {
       method: "PATCH",
       body: {
@@ -955,14 +1330,15 @@
         actor_type: "user"
       }
     }).then(function (payload) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       state.selected = normalizeNode(payload.node);
       state.editing = false;
       renderDetail(state.selected);
       setStatus("目标已更新", false);
       return refreshAfterNodeChange(node.id);
     }).catch(function (error) {
-      renderDetail(state.selected);
-      showError(error);
+      if (currentProjectRequestValid(projectId, requestId)) renderDetail(state.selected);
+      return showProjectError(error, projectId, requestId);
     });
   }
 
@@ -1094,6 +1470,12 @@
   }
 
   function requestApplyVerification(node, verificationId) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
+    var requestId = projectRequestId;
     setStatus("正在应用核验结论...", false);
     api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/apply-evidence-verification", {
       method: "POST",
@@ -1104,12 +1486,19 @@
         actor_type: "user"
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       setStatus("核验结论已应用", false);
       return refreshAfterNodeChange(node.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function requestSubmitForReview(node) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
+    var requestId = projectRequestId;
     setStatus("正在提交审核...", false);
     api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/submit-for-review", {
       method: "POST",
@@ -1119,42 +1508,63 @@
         actor_type: "user"
       }
     }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("目标已进入待审核", false);
       return refreshAfterNodeChange(node.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function requestApproveReview(node) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
+    var requestId = projectRequestId;
+    saveReviewToken();
     setStatus("正在批准审核...", false);
-    api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/approve-review", {
+    exchangeReviewSession().then(function (ready) {
+      if (!ready) throw reviewSessionError();
+      return api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/approve-review", {
       method: "POST",
       body: {
         expected_version: node.version,
         reason: "通过目标管理界面批准审核",
         actor_type: "user"
       }
-    }).then(function () {
+    }); }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("审核已批准，目标完成", false);
       return refreshAfterNodeChange(node.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function requestRejectReview(node) {
+    var projectId = state.project && state.project.id;
+    if (!projectId || node.projectId !== projectId) {
+      setStatus("当前目标已不属于所选项目，请刷新后重试", true);
+      return;
+    }
+    var requestId = projectRequestId;
+    saveReviewToken();
     setStatus("正在退回审核...", false);
-    api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/reject-review", {
+    exchangeReviewSession().then(function (ready) {
+      if (!ready) throw reviewSessionError();
+      return api("/api/goals/nodes/" + encodeURIComponent(node.id) + "/reject-review", {
       method: "POST",
       body: {
         expected_version: node.version,
         reason: "通过目标管理界面退回审核",
         actor_type: "user"
       }
-    }).then(function () {
+    }); }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
       closeDialog();
       setStatus("审核已退回", false);
       return refreshAfterNodeChange(node.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, projectId, requestId); });
   }
 
   function renderDetail(node) {
@@ -1361,12 +1771,15 @@
     });
   }
 
-  function renderOverview() {
+  function renderOverview(expectedProjectId, expectedRequestId) {
     var root = $("overview-content");
     var payload = state.overview;
     var requestId = state.overviewRequestId + 1;
     state.overviewRequestId = requestId;
     while (root.firstChild) root.removeChild(root.firstChild);
+    if (expectedProjectId && !currentProjectRequestValid(expectedProjectId, expectedRequestId)) {
+      return Promise.resolve();
+    }
     if (!payload || !payload.nodes || !payload.nodes.length) {
       $("overview-empty").hidden = false;
       return Promise.resolve();
@@ -1379,6 +1792,7 @@
       Promise.resolve(computeOverviewLayout(nodes, edges));
     return layoutPromise.then(function (layout) {
       if (requestId !== state.overviewRequestId) return;
+      if (expectedProjectId && !currentProjectRequestValid(expectedProjectId, expectedRequestId)) return;
       var positions = layout.positions;
       var overviewSvg = $("overview-svg");
       overviewSvg.setAttribute("viewBox", "0 0 " + layout.width + " " + layout.height);
@@ -1408,7 +1822,8 @@
         if (directIds[node.id]) groupClass += " direct";
         var group = svg("g", {
           "class": groupClass, "data-node-id": node.id, tabindex: "0", role: "button",
-          "aria-label": node.title + " " + percent(node.progress)
+          "aria-label": node.title + "，" + statusLabel(node.status) + "，完成度 " + percent(node.progress),
+          "aria-keyshortcuts": "Enter Space Shift+F10"
         });
         group.appendChild(svg("circle", {
           cx: position.x, cy: position.y, r: node.id === focusId ? 13 : compact ? 7 : 9,
@@ -1430,6 +1845,11 @@
           openNodeMenu(node, event.clientX, event.clientY);
         });
         group.addEventListener("keydown", function (event) {
+          if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
+            event.preventDefault();
+            openNodeMenuAtSvgPoint(node, $("overview-svg"), position.x, position.y);
+            return;
+          }
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             group.click();
@@ -1450,6 +1870,14 @@
     var select = $("project-select");
     select.innerHTML = "";
     if (!state.projects.length) {
+      state.project = null;
+      state.focus = null;
+      state.selected = null;
+      state.overview = null;
+      state.history = null;
+      state.reviewQueue = [];
+      updateHistoryButtons();
+      renderDetail(null);
       var option = document.createElement("option");
       option.value = "";
       option.textContent = "暂无项目";
@@ -1468,8 +1896,12 @@
   }
 
   function loadProjects(selectId) {
+    var requestId = ++projectRequestId;
+    invalidatePendingInteraction();
+    stopEventStream();
     setLoading(true);
     return api("/api/goals/projects").then(function (payload) {
+      if (requestId !== projectRequestId) return null;
       state.projects = (payload.projects || []).map(normalizeProject);
       state.project = state.projects.find(function (project) {
         return project.id === selectId;
@@ -1477,15 +1909,25 @@
       state.lastEventId = null;
       populateProjects();
       if (!state.project) {
+        state.focus = null;
+        state.selected = null;
+        state.overview = null;
+        state.history = null;
+        state.reviewQueue = [];
+        updateHistoryButtons();
         setStatus("请创建第一个项目", false);
         setLoading(false);
         stopEventStream();
+        renderRadial();
+        renderOverview();
+        renderDetail(null);
         return;
       }
       return loadFocus(state.project.rootNodeId).then(startEventStream);
     }).catch(function (error) {
+      if (requestId !== projectRequestId) return null;
       setLoading(false);
-      showError(error);
+      return showProjectError(error, state.project && state.project.id, requestId);
     });
   }
 
@@ -1502,6 +1944,7 @@
       return;
     }
     setStatus("正在创建项目...", false);
+    var requestId = ++projectRequestId;
     api("/api/goals/projects", {
       method: "POST",
       body: {
@@ -1512,15 +1955,18 @@
         actor_type: "user"
       }
     }).then(function (payload) {
+      if (requestId !== projectRequestId) return null;
       toggleProjectForm(false);
       var project = normalizeProject(payload.project);
       state.backStack = [];
       state.forwardStack = [];
       return loadProjects(project.id);
-    }).catch(showError);
+    }).catch(function (error) { return showProjectError(error, null, requestId); });
   }
 
   $("project-select").addEventListener("change", function (event) {
+    invalidatePendingInteraction();
+    stopEventStream();
     state.project = state.projects.find(function (project) {
       return project.id === event.target.value;
     }) || null;
@@ -1528,6 +1974,7 @@
     state.forwardStack = [];
     state.selected = null;
     state.lastEventId = null;
+    updateNodeHash(state.project && state.project.rootNodeId);
     if (state.project) {
       loadFocus(state.project.rootNodeId).then(startEventStream);
     } else {
@@ -1550,6 +1997,21 @@
     if (!$("node-menu").contains(event.target)) closeNodeMenu();
   });
   document.addEventListener("keydown", function (event) {
+    if (!$('node-menu').hidden && event.key === "Tab") {
+      var items = nodeMenuFocusableElements();
+      if (items.length) {
+        var first = items[0];
+        var last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+      return;
+    }
     if (event.key === "Escape") {
       closeNodeMenu();
       closeDialog();
@@ -1561,9 +2023,32 @@
     if (event.target === $("goal-dialog")) closeDialog();
   });
   $("dialog-confirm-button").addEventListener("click", function () {
-    var action = state.dialogAction;
-    state.dialogAction = null;
-    if (action) action();
+    runDialogAction();
+  });
+  $("goal-dialog").addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key === "Tab") {
+      var focusable = dialogFocusableElements();
+      if (!focusable.length) return;
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+      return;
+    }
+    if (event.key === "Enter" && !event.isComposing && event.target.tagName !== "TEXTAREA") {
+      event.preventDefault();
+      runDialogAction();
+    }
   });
   $("edit-detail-button").addEventListener("click", function () {
     if (!state.selected) return;
@@ -1577,6 +2062,7 @@
   $("close-detail-button").addEventListener("click", function () {
     state.selected = null;
     state.editing = false;
+    updateNodeHash(state.focus && state.focus.focus && state.focus.focus.id);
     renderDetail(null);
   });
   $("new-project-button").addEventListener("click", function () { toggleProjectForm(true); });
@@ -1601,11 +2087,32 @@
     renderRadial();
   }, { passive: false });
   window.addEventListener("popstate", function () {
-    var nodeId = decodeURIComponent(window.location.hash.slice(1));
-    if (nodeId) focusNode(nodeId, false);
+    var nodeId = readNodeHash();
+    if (nodeId) {
+      if (!state.project) return;
+      focusNode(nodeId, false).then(function () {
+        if (state.focus && state.focus.focus && state.focus.focus.id === nodeId) {
+          selectNode(nodeId);
+        }
+      });
+    } else {
+      state.selected = null;
+      state.editing = false;
+      renderDetail(null);
+    }
   });
 
   window.addEventListener("beforeunload", stopEventStream);
+  window.addEventListener("beforeunload", revokeReviewSession);
 
-  loadProjects();
+  loadReviewToken();
+  loadProjects(null).then(function () {
+    if (!state.project) return null;
+    var nodeId = readNodeHash();
+    if (!nodeId) return null;
+    return focusNode(nodeId, false).then(function () {
+      if (state.focus && state.focus.focus && state.focus.focus.id === nodeId) selectNode(nodeId);
+      return null;
+    });
+  });
 }());

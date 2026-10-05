@@ -109,6 +109,20 @@ def test_gateway_registration_can_forward_memory_scope() -> None:
     assert payload["workspace_id"] == "VoidCube"
 
 
+def test_gateway_presence_rejects_invalid_url_without_probe_exception() -> None:
+    client = GatewayPresenceClient("file:///tmp/gateway")
+
+    assert client.is_running() is False
+
+
+def test_gateway_presence_rejects_invalid_url_for_registration() -> None:
+    client = GatewayPresenceClient("file:///tmp/gateway")
+
+    assert client.register_session(
+        "session-1", "model-1", "provider-1", source="cli"
+    ) is False
+
+
 def test_cli_gateway_registration_uses_mem_provider_scope(monkeypatch) -> None:
     cli_app = importlib.import_module("voidcube.interfaces.cli.application")
     captured = {}

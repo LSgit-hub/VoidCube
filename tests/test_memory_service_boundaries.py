@@ -264,6 +264,50 @@ def test_memory_http_adapter_binds_token_to_actor_and_preserves_health_probe():
         ).status_code == 200
 
 
+@pytest.mark.parametrize(
+    ("health_status", "expected_status_code"),
+    (("healthy", 200), ("degraded", 503)),
+)
+def test_memory_http_health_status_maps_to_http_status(
+    health_status: str, expected_status_code: int
+):
+    handlers = {
+        route.handler: (lambda: {"status": health_status})
+        for route in MEMORY_HTTP_ROUTES
+    }
+    app = build_memory_http_app(
+        handlers,
+        lifespan=lambda _app: _null_lifespan(),
+    )
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        for path in ("/", "/health"):
+            response = client.get(path)
+            assert response.status_code == expected_status_code
+            assert response.json() == {"status": health_status}
+
+
+def test_memory_http_health_adapter_awaits_async_handler():
+    async def health_check():
+        return {"status": "degraded", "database": {"readable": False}}
+
+    handlers = {
+        route.handler: (health_check if route.handler == "health_check" else (lambda: {}))
+        for route in MEMORY_HTTP_ROUTES
+    }
+    app = build_memory_http_app(
+        handlers,
+        lifespan=lambda _app: _null_lifespan(),
+    )
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert response.status_code == 503
+        assert response.json()["database"] == {"readable": False}
+
+
 def test_memory_http_adapter_single_token_is_bound_to_configured_actor():
     handlers = {
         route.handler: (lambda: {"status": "ok"})

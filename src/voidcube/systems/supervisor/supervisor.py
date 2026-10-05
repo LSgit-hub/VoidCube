@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 import subprocess
 import time
@@ -65,6 +66,10 @@ from .ui_routes import (
 )
 from .ui_projection import format_supervisor_ui_event
 from .ui_stream_adapters import SSE_HEADERS
+from ...infrastructure.security.review_sessions import (
+    SQLiteReviewSessionStore,
+    resolve_review_session_path,
+)
 from .perception_routes import mount_perception_routes
 from .perception_control import PerceptionControl
 from ..perception.query import PerceptionQueryService
@@ -300,6 +305,20 @@ class Supervisor(
             is_auto=lambda: self._service_runtime.stellar_mode.value == "auto_evolution",
             mode_lock=self._service_runtime.mode_transition_lock,
         )
+        plugin_review_config: dict[str, Any] = {}
+        try:
+            from ...extensions.plugins.registry import load_plugin_config
+
+            plugin_review_config = load_plugin_config("goal_manager")
+        except Exception:
+            logger.debug("Unable to load Goal Manager review configuration", exc_info=True)
+        review_session_db = resolve_review_session_path(
+            plugin_review_config.get("review_session_db_path")
+            or getattr(self.config, "review_session_db_path", None)
+        )
+        review_store = SQLiteReviewSessionStore(review_session_db)
+        self.app.state.review_sessions = review_store
+        self.app.state.review_session_store = review_store
         mount_supervisor_ui_routes(
             SupervisorUIRoutePorts(
                 app=self.app,
@@ -332,6 +351,13 @@ class Supervisor(
                 add_account=self._ui_runtime.add_account,
                 delete_account=self._ui_runtime.delete_account_endpoint,
                 verify_account=self._ui_runtime.verify_account_endpoint,
+                review_session_token=str(
+                    plugin_review_config.get("human_review_token")
+                    or getattr(self.config, "human_review_token", "")
+                    or os.getenv("VOIDCUBE_HUMAN_REVIEW_TOKEN")
+                    or ""
+                ).strip(),
+                review_session_store=review_store,
             )
         )
 
@@ -1268,7 +1294,12 @@ class Supervisor(
                 try:
                     await self._stop_periodic_tasks()
                 finally:
-                    self._scheduled_task_store.close()
+                    try:
+                        self._scheduled_task_store.close()
+                    finally:
+                        review_store = getattr(self.app.state, "review_session_store", None)
+                        if hasattr(review_store, "close"):
+                            review_store.close()
 
     async def start(self):
         import uvicorn

@@ -11,8 +11,6 @@ def _schema(description: str, properties: dict, required: list[str] | None = Non
 
 
 COMMON_CONTEXT = {
-    "actor_type": {"type": "string", "enum": ["user", "agent", "supervisor", "system"]},
-    "actor_id": {"type": "string"},
     "session_id": {"type": "string"},
 }
 
@@ -86,7 +84,7 @@ SCHEMAS = {
     "goal_rollback": _schema(
         "按 LIFO 回滚最近一个批次的目标修改。",
         {"batchId": {"type": "string"}, "reason": {"type": "string"},
-         "confirm": {"type": "boolean"}, **COMMON_CONTEXT},
+         "confirmToken": {"type": "string"}, **COMMON_CONTEXT},
         ["batchId"],
     ),
     "goal_redo": _schema(

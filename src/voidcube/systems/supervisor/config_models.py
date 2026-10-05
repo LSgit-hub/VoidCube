@@ -369,6 +369,8 @@ class SupervisorConfig(BaseModel):
     ui_event_interval_seconds: float = 3.0
     ui_activity_buffer_size: int = 100
     ui_path: str = "/ui"
+    human_review_token: str = ""
+    review_session_db_path: Optional[str] = None
     soul_store_path: str = Field(default_factory=_default_supervisor_runtime_root)
     autonomous_chain_store_path: Optional[str] = None
     scheduled_task_store_path: Optional[str] = None

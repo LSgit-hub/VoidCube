@@ -375,6 +375,24 @@ button:focus-visible,
   white-space: nowrap;
 }
 
+.plugin-heading .plugin-state-label {
+  margin-left: auto;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.plugin-state-label[data-state='healthy'] {
+  color: var(--green);
+}
+
+.plugin-state-label[data-state='unhealthy'] {
+  color: var(--coral);
+}
+
+.plugin-state-label[data-state='available'] {
+  color: var(--blue);
+}
+
 .plugins-empty,
 .plugins-error {
   margin: 8px 2px;

@@ -8,20 +8,87 @@ sites cannot silently switch actors or domains while building a request.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
+import math
 import os
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 
 PROTOCOL_VERSION = "1"
 DEFAULT_MEMORY_SERVICE_URL = "http://127.0.0.1:6001"
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_TRANSPORT_RETRY_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+_MAX_RETRY_AFTER_SECONDS = 60.0
+
+
+def _finite_non_negative(value: Any, *, field: str) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a finite non-negative number") from None
+    if not math.isfinite(normalized) or normalized < 0:
+        raise ValueError(f"{field} must be a finite non-negative number")
+    return normalized
+
+
+def _finite_positive(value: Any, *, field: str) -> float:
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a finite positive number") from None
+    if not math.isfinite(normalized):
+        raise ValueError(f"{field} must be a finite positive number")
+    if normalized <= 0:
+        raise ValueError(f"{field} must be a finite positive number")
+    return normalized
+
+
+def _retry_after_seconds(value: Any) -> float | None:
+    """Parse Retry-After as bounded seconds, accepting delta or HTTP date."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        delay = float(raw)
+    except (TypeError, ValueError):
+        try:
+            target = parsedate_to_datetime(raw)
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=timezone.utc)
+            delay = (target - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if not math.isfinite(delay):
+        return None
+    return max(0.0, min(_MAX_RETRY_AFTER_SECONDS, delay))
+
+
+def _transport_retry_allowed(
+    method: str,
+    payload: Mapping[str, Any],
+    idempotency_key: str | None,
+) -> bool:
+    """Avoid replaying ambiguous writes unless the caller supplied a key."""
+    if method.upper() in _TRANSPORT_RETRY_SAFE_METHODS:
+        return True
+    return bool(
+        str(
+            idempotency_key
+            or payload.get("idempotency_key")
+            or payload.get("write_id")
+            or ""
+        ).strip()
+    )
 
 
 class MemoryClientError(RuntimeError):
@@ -65,14 +132,27 @@ class MemoryClient:
         retry_base_seconds: float = 0.05,
     ) -> None:
         normalized = str(base_url or "").strip().rstrip("/")
-        if not normalized.startswith(("http://", "https://")):
+        parsed_url = urlsplit(normalized)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.netloc
+            or parsed_url.username
+            or parsed_url.password
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
             raise ValueError("Memory Service URL must use http or https")
         self.base_url = normalized
         self.identity = identity
-        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.timeout_seconds = max(
+            0.1,
+            _finite_positive(timeout_seconds, field="Memory client timeout"),
+        )
         self.service_token = str(service_token or os.getenv("MEMORY_SERVICE_TOKEN") or "").strip()
         self.max_retries = max(0, min(5, int(max_retries)))
-        self.retry_base_seconds = max(0.0, float(retry_base_seconds))
+        self.retry_base_seconds = _finite_non_negative(
+            retry_base_seconds, field="Memory client retry base"
+        )
 
     def request_json(
         self,
@@ -130,8 +210,12 @@ class MemoryClient:
             headers["Authorization"] = f"Bearer {self.service_token}"
 
         attempts = self.max_retries + 1
+        retry_transport = _transport_retry_allowed(
+            upper_method, request_payload, idempotency_key
+        )
         for attempt in range(attempts):
             request = Request(url, data=body, headers=headers, method=upper_method)
+            retry_delay = None
             try:
                 with urlopen(request, timeout=self.timeout_seconds) as response:
                     raw = response.read().decode("utf-8")
@@ -144,13 +228,21 @@ class MemoryClient:
                     raise MemoryProtocolError(
                         f"Memory Service HTTP error {exc.code}"
                     ) from exc
+                retry_delay = _retry_after_seconds(
+                    exc.headers.get("Retry-After") if exc.headers else None
+                )
             except (URLError, TimeoutError, OSError) as exc:
-                if attempt + 1 >= attempts:
+                if not retry_transport or attempt + 1 >= attempts:
                     raise MemoryServiceUnavailable("Memory Service is unavailable") from exc
-            except json.JSONDecodeError as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise MemoryProtocolError("Memory Service returned invalid JSON") from exc
-            if self.retry_base_seconds:
-                time.sleep(self.retry_base_seconds * (2**attempt))
+            delay = (
+                retry_delay
+                if retry_delay is not None
+                else self.retry_base_seconds * (2**attempt)
+            )
+            if delay:
+                time.sleep(delay)
         raise MemoryServiceUnavailable("Memory Service request exhausted retries")
 
     def get_compressed(
@@ -197,14 +289,27 @@ class AsyncMemoryClient:
         retry_base_seconds: float = 0.05,
     ) -> None:
         normalized = str(base_url or "").strip().rstrip("/")
-        if not normalized.startswith(("http://", "https://")):
+        parsed_url = urlsplit(normalized)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.netloc
+            or parsed_url.username
+            or parsed_url.password
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
             raise ValueError("Memory Service URL must use http or https")
         self.base_url = normalized
         self.identity = identity
-        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.timeout_seconds = max(
+            0.1,
+            _finite_positive(timeout_seconds, field="Memory client timeout"),
+        )
         self.service_token = str(service_token or os.getenv("MEMORY_SERVICE_TOKEN") or "").strip()
         self.max_retries = max(0, min(5, int(max_retries)))
-        self.retry_base_seconds = max(0.0, float(retry_base_seconds))
+        self.retry_base_seconds = _finite_non_negative(
+            retry_base_seconds, field="Memory client retry base"
+        )
 
     async def request_json(
         self,
@@ -250,6 +355,9 @@ class AsyncMemoryClient:
         url = f"{self.base_url}/{str(path or '').lstrip('/')}"
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
         attempts = self.max_retries + 1
+        retry_transport = _transport_retry_allowed(
+            method, request_payload, idempotency_key
+        )
         parsed: Any = None
         for attempt in range(attempts):
             try:
@@ -275,20 +383,40 @@ class AsyncMemoryClient:
                                 response.status in _RETRYABLE_HTTP_STATUSES
                                 and attempt + 1 < attempts
                             ):
-                                if self.retry_base_seconds:
-                                    await asyncio.sleep(
-                                        self.retry_base_seconds * (2**attempt)
-                                    )
+                                retry_delay = _retry_after_seconds(
+                                    response.headers.get("Retry-After")
+                                )
+                                delay = (
+                                    retry_delay
+                                    if retry_delay is not None
+                                    else self.retry_base_seconds * (2**attempt)
+                                )
+                                if delay:
+                                    await asyncio.sleep(delay)
                                 continue
                             raise MemoryProtocolError(
                                 f"Memory Service HTTP error {response.status}: {detail}"
                             )
-                        parsed = await response.json()
+                        try:
+                            parsed = await response.json()
+                        except Exception as exc:
+                            if (
+                                isinstance(exc, (ValueError, UnicodeDecodeError))
+                                or exc.__class__.__name__ == "ContentTypeError"
+                            ):
+                                raise MemoryProtocolError(
+                                    "Memory Service returned invalid JSON"
+                                ) from exc
+                            raise
                         break
             except MemoryClientError:
                 raise
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise MemoryProtocolError(
+                    "Memory Service returned invalid JSON"
+                ) from exc
             except Exception as exc:
-                if attempt + 1 >= attempts:
+                if not retry_transport or attempt + 1 >= attempts:
                     raise MemoryServiceUnavailable(
                         "Memory Service is unavailable"
                     ) from exc

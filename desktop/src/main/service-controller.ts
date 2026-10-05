@@ -16,13 +16,22 @@ const CONTROL_TIMEOUT_MS = 120_000
 const CONFIG_TIMEOUT_MS = 30_000
 const MAX_OUTPUT_LENGTH = 1_000_000
 
+function isProcessId(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || (
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
+  )
+}
+
 function isServiceInfo(value: unknown): value is ServiceInfo {
   if (!value || typeof value !== 'object') return false
   const service = value as Partial<ServiceInfo>
   return (
     typeof service.name === 'string' &&
-    typeof service.port === 'number' &&
-    (service.pid === undefined || service.pid === null || typeof service.pid === 'number') &&
+    typeof service.port === 'number' && Number.isInteger(service.port) && service.port >= 1 && service.port <= 65535 &&
+    isProcessId(service.pid) &&
+    (service.registered === undefined || typeof service.registered === 'boolean') &&
+    (service.controlPlaneHealthy === undefined || typeof service.controlPlaneHealthy === 'boolean') &&
+    (service.restartBlocked === undefined || typeof service.restartBlocked === 'string') &&
     (service.state === 'healthy' || service.state === 'unhealthy' || service.state === 'stopped')
   )
 }
@@ -48,8 +57,11 @@ function isPluginServiceInfo(value: unknown): value is PluginServiceInfo {
   if (!value || typeof value !== 'object') return false
   const service = value as Partial<PluginServiceInfo>
   return (
-    typeof service.port === 'number' &&
-    (service.pid === undefined || service.pid === null || typeof service.pid === 'number') &&
+    typeof service.port === 'number' && Number.isInteger(service.port) && service.port >= 1 && service.port <= 65535 &&
+    isProcessId(service.pid) &&
+    (service.registered === undefined || typeof service.registered === 'boolean') &&
+    (service.controlPlaneHealthy === undefined || typeof service.controlPlaneHealthy === 'boolean') &&
+    (service.restartBlocked === undefined || typeof service.restartBlocked === 'string') &&
     (service.state === 'healthy' || service.state === 'unhealthy' || service.state === 'stopped')
   )
 }
@@ -106,7 +118,7 @@ function errorResult(action: ServiceControlAction, error: unknown): ServiceContr
 }
 
 export class ServiceController {
-  private operation?: Promise<ServiceControlResult>
+  private operation?: Promise<unknown>
   private executionContext?: ExecutionContext
 
   constructor(private readonly runtime: RuntimePaths) {}
@@ -116,22 +128,59 @@ export class ServiceController {
   }
 
   control(action: ServiceLifecycleAction): Promise<ServiceControlResult> {
-    if (this.operation) return this.operation
-    this.operation = this.invoke(action).finally(() => {
-      this.operation = undefined
+    if (this.operation) return Promise.resolve(errorResult(action, '服务控制操作正在进行中'))
+    const operation = this.invoke(action)
+    this.operation = operation
+    return operation.finally(() => {
+      if (this.operation === operation) this.operation = undefined
     })
-    return this.operation
   }
 
   plugin(name: string, action: PluginControlAction): Promise<ServiceControlResult> {
-    if (this.operation) return this.operation
-    this.operation = this.invoke(action, ['plugin', name, action]).finally(() => {
-      this.operation = undefined
+    if (this.operation) return Promise.resolve(errorResult(action, '服务控制操作正在进行中'))
+    const operation = this.invoke(action, ['plugin', name, action])
+    this.operation = operation
+    return operation.finally(() => {
+      if (this.operation === operation) this.operation = undefined
     })
-    return this.operation
   }
 
   setTerminalBackend(backend: TerminalBackend): Promise<{ ok: boolean; error?: string }> {
+    if (this.operation) {
+      return Promise.resolve({ ok: false, error: '服务控制操作正在进行中' })
+    }
+    const operation = this.writeTerminalBackend(backend)
+    this.operation = operation
+    return operation.finally(() => {
+      if (this.operation === operation) this.operation = undefined
+    })
+  }
+
+  setTerminalBackendAndRestart(backend: TerminalBackend): Promise<{
+    ok: boolean
+    services?: ServiceControlResult
+    error?: string
+  }> {
+    if (this.operation) {
+      return Promise.resolve({ ok: false, error: '服务控制操作正在进行中' })
+    }
+    const operation = this.writeTerminalBackend(backend).then((configured) => {
+      if (!configured.ok) return configured
+      return this.invoke('restart').then((services) => ({
+        ok: services.ok,
+        services,
+        error: services.ok
+          ? undefined
+          : services.error || '托管服务重启失败，配置已写入但尚未完全生效'
+      }))
+    })
+    this.operation = operation
+    return operation.finally(() => {
+      if (this.operation === operation) this.operation = undefined
+    })
+  }
+
+  private writeTerminalBackend(backend: TerminalBackend): Promise<{ ok: boolean; error?: string }> {
     return new Promise((resolve) => {
       const executable = this.runtime.cliExecutable ?? this.runtime.pythonCommand
       const args = this.runtime.cliExecutable
@@ -163,8 +212,12 @@ export class ServiceController {
         resolve(result)
       }
       const timeout = setTimeout(() => {
-        child.kill()
         finish({ ok: false, error: `配置写入超时（${CONFIG_TIMEOUT_MS / 1000} 秒）` })
+        try {
+          child.kill()
+        } catch {
+          // The process may have exited while the timeout callback was queued.
+        }
       }, CONFIG_TIMEOUT_MS)
 
       child.stderr.setEncoding('utf8')
@@ -222,8 +275,12 @@ export class ServiceController {
         resolve(result)
       }
       const timeout = setTimeout(() => {
-        child.kill()
         finish(errorResult(action, `Service control timed out after ${CONTROL_TIMEOUT_MS / 1000}s`))
+        try {
+          child.kill()
+        } catch {
+          // The process may have exited while the timeout callback was queued.
+        }
       }, CONTROL_TIMEOUT_MS)
 
       child.stdout.setEncoding('utf8')

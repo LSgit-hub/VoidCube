@@ -122,6 +122,30 @@ def test_session_goal_objective_can_be_revised_without_resetting_status(tmp_path
     db.close()
 
 
+def test_session_goal_objective_revision_clears_previous_audit_turn(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    created = db.create_session_goal("session-a", "Initial objective")
+    db.audit_session_goal_blocker(
+        "session-a", "Old blocker", turn_id="turn-1",
+        expected_revision=created["revision"],
+    )
+    current = db.get_session_goal("session-a")
+
+    assert db.update_session_goal_objective(
+        "session-a", "Revised objective", reason="scope clarified",
+        expected_revision=current["revision"],
+    ) is True
+    result = db.audit_session_goal_blocker(
+        "session-a", "New blocker", turn_id="turn-1",
+        expected_revision=db.get_session_goal("session-a")["revision"],
+    )
+
+    assert result["reason"] == "New blocker"
+    assert result["blocked_streak"] == 1
+    db.close()
+
+
 def test_session_goal_revision_rejects_stale_status_or_objective_writes(tmp_path):
     db = SessionDB(tmp_path / "sessions.db")
     db.create_session("session-a", "cli")
@@ -140,6 +164,51 @@ def test_session_goal_revision_rejects_stale_status_or_objective_writes(tmp_path
     assert db.get_session_goal("session-a")["status"] == "paused"
 
     db.close()
+
+
+def test_session_goal_backend_binding_rejects_stale_revision(tmp_path):
+    db = SessionDB(tmp_path / "sessions.db")
+    db.create_session("session-a", "cli")
+    created = db.create_session_goal("session-a", "Initial objective")
+
+    assert db.update_session_goal(
+        "session-a", "paused", "waiting", expected_revision=created["revision"]
+    ) is True
+    assert db.bind_session_goal_backend(
+        "session-a",
+        backend="goal_manager",
+        project_id="project-1",
+        root_node_id="root-1",
+        backend_status="available",
+        expected_revision=created["revision"],
+    ) is False
+    goal = db.get_session_goal("session-a")
+    assert goal["status"] == "paused"
+    assert goal["project_id"] is None
+    db.close()
+
+
+def test_session_goal_read_does_not_fallback_to_stale_memory_when_repository_fails():
+    class FailingRepository:
+        def get_session_goal(self, _session_id):
+            raise OSError("database unavailable")
+
+    host = SimpleNamespace(
+        session_id="session-a",
+        _session_db=FailingRepository(),
+        _session_goals={
+            "session-a": {
+                "session_id": "session-a",
+                "objective": "stale objective",
+                "status": "active",
+            },
+        },
+    )
+
+    import pytest
+
+    with pytest.raises(OSError, match="database unavailable"):
+        get_goal(host)
 
 
 def test_session_goal_audit_cleanup_rejects_stale_revision(tmp_path):

@@ -9,6 +9,7 @@ context budgets.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -141,6 +142,29 @@ def resolve_goal_memory_refs(
     }
 
 
+def resolve_goal_memory_refs_with_metrics(
+    memory_refs: Sequence[Mapping[str, Any]],
+    fetcher: MemoryReferenceFetcher,
+    *,
+    budget: GoalMemoryContextBudget | None = None,
+    session_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve references and return privacy-safe runtime metrics."""
+    started = time.perf_counter()
+    resolution = resolve_goal_memory_refs(
+        memory_refs, fetcher, budget=budget, session_id=session_id,
+    )
+    elapsed_ms = max(0, round((time.perf_counter() - started) * 1000, 3))
+    metrics = {
+        "reference_count": min(len(memory_refs), budget.max_refs if budget else GoalMemoryContextBudget().max_refs),
+        "resolved_count": int(resolution.get("resolved_count") or 0),
+        "skipped_count": int(resolution.get("skipped_count") or 0),
+        "budget_truncated": bool(resolution.get("truncated")),
+        "elapsed_ms": elapsed_ms,
+    }
+    return resolution, metrics
+
+
 def build_goal_memory_context_block(
     resolution: Mapping[str, Any],
     *,
@@ -188,4 +212,5 @@ __all__ = [
     "MemoryReferenceFetcher",
     "build_goal_memory_context_block",
     "resolve_goal_memory_refs",
+    "resolve_goal_memory_refs_with_metrics",
 ]

@@ -219,11 +219,15 @@ def _parse_manifest(root: Path, raw: Dict[str, Any]) -> Optional[PluginDescripto
         if not str(service.get("module") or "").strip() or ":" not in str(service.get("module") or ""):
             logger.warning("插件 %s 的 service.module 应为 module:factory 格式", root.name)
             return None
-        try:
-            service_port = int(service.get("port") or 0)
-        except (TypeError, ValueError):
+        configured_port = service.get("port", 0)
+        if isinstance(configured_port, bool) or isinstance(configured_port, float):
             service_port = 0
-        if service_port <= 0:
+        else:
+            try:
+                service_port = int(configured_port)
+            except (TypeError, ValueError):
+                service_port = 0
+        if not 1 <= service_port <= 65535:
             logger.warning("插件 %s 的 service.port 非法", root.name)
             return None
     if "web" in capabilities and not isinstance(raw.get("web"), dict):
@@ -418,11 +422,19 @@ def find_plugin_services() -> List[Dict[str, Any]]:
             logger.warning("插件 %s 的 service.module 应为 module:factory 格式", descriptor.name)
             continue
         config = _load_plugin_config(descriptor)
-        try:
-            port = int(config.get("port") or service.get("port") or 0)
-        except (TypeError, ValueError):
+        configured_port = (
+            config["port"]
+            if "port" in config and config["port"] is not None
+            else service.get("port", 0)
+        )
+        if isinstance(configured_port, bool) or isinstance(configured_port, float):
             port = 0
-        if port <= 0:
+        else:
+            try:
+                port = int(configured_port)
+            except (TypeError, ValueError):
+                port = 0
+        if not 1 <= port <= 65535:
             logger.warning("插件 %s 的 service.port 非法", descriptor.name)
             continue
         if port in used_ports:

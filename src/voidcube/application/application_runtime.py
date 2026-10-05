@@ -53,8 +53,7 @@ from .sessions import (
     start_new_session as _start_new_session,
 )
 from .ports import CallbackEventPort
-from ..infrastructure.persistence.turn_event_journal import TurnEventJournal
-from ..infrastructure.persistence.approval_journal import ApprovalJournal
+from .ports.runtime import ApprovalJournalPort, TurnEventJournalPort
 from ..domain.contracts.tool_events import ToolEvent
 from ..domain.contracts.turn_queue import TurnInputRoute
 from ..domain.contracts.turn import (
@@ -93,8 +92,8 @@ class ApplicationRuntime:
         *,
         event_sink: EventSink | None = None,
         uuid_factory=uuid.uuid4,
-        event_journal: TurnEventJournal | None = None,
-        approval_journal: ApprovalJournal | None = None,
+        event_journal: TurnEventJournalPort | None = None,
+        approval_journal: ApprovalJournalPort | None = None,
     ) -> None:
         self.state = state
         self._event_sink = event_sink
@@ -126,8 +125,8 @@ class ApplicationRuntime:
         resumed: bool = False,
         event_sink: EventSink | None = None,
         uuid_factory=uuid.uuid4,
-        event_journal: TurnEventJournal | None = None,
-        approval_journal: ApprovalJournal | None = None,
+        event_journal: TurnEventJournalPort | None = None,
+        approval_journal: ApprovalJournalPort | None = None,
     ) -> "ApplicationRuntime":
         identity = str(session_id or "").strip() or generate_session_id(
             session_start,

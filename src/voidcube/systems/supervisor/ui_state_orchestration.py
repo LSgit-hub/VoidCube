@@ -395,7 +395,15 @@ async def build_supervisor_ui_state(
         )
     except Exception:
         pass
-    body_status = dict(await body_status_task or {})
+    body_status_raw, cognition_snapshot_raw, employee_context, published_phase = (
+        await asyncio.gather(
+            body_status_task,
+            cognition_snapshot_task,
+            employee_context_task,
+            current_ui_phase_task,
+        )
+    )
+    body_status = dict(body_status_raw or {})
     metrics = project_ui_metrics(
         chain_projection,
         autonomous_observation=autonomous_observation,
@@ -437,11 +445,6 @@ async def build_supervisor_ui_state(
                 "mode": "daily_companion",
             }
         )
-    cognition_snapshot_raw, employee_context, published_phase = await asyncio.gather(
-        cognition_snapshot_task,
-        employee_context_task,
-        current_ui_phase_task,
-    )
     cognition_snapshot = _normalize_loaded_cognition_state(cognition_snapshot_raw)
     published_phase = dict(published_phase or {})
     published_phase_is_current = (

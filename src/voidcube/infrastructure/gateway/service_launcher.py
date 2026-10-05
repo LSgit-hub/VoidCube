@@ -350,12 +350,19 @@ def _health_endpoint_is_service(
 ) -> bool:
     """Verify an occupied port from the service's own health identity."""
     try:
+        from urllib.error import HTTPError
         from urllib.request import urlopen
 
         svc = SERVICES.get(name)
         path = health_path or (svc.health_path if svc is not None else "/")
-        with urlopen(f"http://127.0.0.1:{port}{path}", timeout=2.0) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(f"http://127.0.0.1:{port}{path}", timeout=2.0) as response:
+                raw = response.read()
+        except HTTPError as exc:
+            if exc.code < 500:
+                return False
+            raw = exc.read()
+        payload = json.loads(raw.decode("utf-8"))
     except Exception:
         return False
     if not isinstance(payload, dict):
@@ -387,11 +394,13 @@ def _health_check(
     import socket
 
     sock = None
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + max(0.0, timeout)
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
+        sock.settimeout(max(0.001, deadline - time.monotonic()))
         sock.connect(("127.0.0.1", port))
+        if time.monotonic() >= deadline:
+            return False
 
         # Send a minimal HTTP request
         request = (
@@ -400,23 +409,34 @@ def _health_check(
             f"Connection: close\r\n"
             f"\r\n"
         )
+        sock.settimeout(max(0.001, deadline - time.monotonic()))
         sock.sendall(request.encode())
 
         # Read just enough to see the status line
-        sock.settimeout(max(0.5, timeout - (time.time() - deadline + 0.5)))
+        # Keep the read bounded by the same deadline as the connect phase.
+        # A fixed minimum here would make a short probe exceed its contract.
         response = b""
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(max(0.001, remaining))
                 chunk = sock.recv(4096)
                 if not chunk:
                     break
                 response += chunk
                 if b"\r\n" in response:
                     break
-            except socket.timeout:
+            except (socket.timeout, BlockingIOError):
                 break
 
-        return response.startswith(b"HTTP/1.") and b"200" in response.split(b"\r\n")[0]
+        status_line = response.split(b"\r\n", 1)[0].split()
+        return (
+            len(status_line) >= 2
+            and status_line[0].startswith(b"HTTP/1.")
+            and status_line[1] == b"200"
+        )
     except Exception:
         return False
     finally:
@@ -513,6 +533,15 @@ def _build_plugin_service_config(svc: ServiceInfo, port: int, system_config: Any
     config.setdefault("name", svc.name)
     config.setdefault("port", port)
     config["service_port"] = port
+    gateway = getattr(system_config, "gateway", None)
+    if gateway is not None:
+        host = str(getattr(gateway, "host", "127.0.0.1") or "127.0.0.1").strip()
+        gateway_port = int(getattr(gateway, "port", GATEWAY_PORT) or GATEWAY_PORT)
+        config.setdefault("gateway_address", f"http://{host}:{gateway_port}")
+        config.setdefault(
+            "gateway_auth_token",
+            str(getattr(gateway, "auth_token", "") or "").strip(),
+        )
     return config
 
 
@@ -847,10 +876,31 @@ def stop_service(name: str, silent: bool = False) -> bool:
     except Exception:
         pass
 
+    if _port_listening(svc.port) and not _wait_for_port_release(svc.port):
+        if not silent:
+            _safe_print(f"  ⚠ {svc.name:12s} port {svc.port} did not release after stop")
+        _delete_pid(svc.pid_file)
+        return False
+
     _delete_pid(svc.pid_file)
     if not silent:
         _safe_print(f"  {svc.name:12s} stopped (was pid {pid})")
     return True
+
+
+def _wait_for_port_release(port: int, timeout: float = 10.0) -> bool:
+    """Wait until a local service port is no longer accepting connections."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _port_listening(port):
+            return True
+        time.sleep(0.1)
+    return not _port_listening(port)
+
+
+def _cleanup_service_runtime_artifacts(service: ServiceInfo) -> None:
+    """Remove only the launcher PID record; SQLite ownership is service-owned."""
+    _delete_pid(service.pid_file)
 
 
 def status_all() -> Dict[str, Any]:
@@ -869,6 +919,24 @@ def status_all() -> Dict[str, Any]:
             "pid_file": svc.pid_file,
             "log_file": svc.log_file,
         }
+    gateway_types = (
+        _gateway_service_types_snapshot()
+        if result.get("gateway", {}).get("healthy")
+        else {}
+    )
+    if isinstance(gateway_types, set):
+        gateway_types = {service_type: True for service_type in gateway_types}
+    for name, info in result.items():
+        required = _required_gateway_service_types(name)
+        if required:
+            info["registered"] = bool(
+                all(service_type in gateway_types for service_type in required)
+            )
+            info["control_plane_healthy"] = bool(
+                info["healthy"]
+                and info["registered"]
+                and all(gateway_types[service_type] for service_type in required)
+            )
     return result
 
 
@@ -877,17 +945,29 @@ def print_status() -> None:
     # Always show daemon status
     status = status_all()
     _safe_print("\n  VoidCube Services")
-    _safe_print("  " + "─" * 52)
-    _safe_print(f"  {'Service':12s} {'Port':>6s} {'PID':>8s} {'Status':>10s}")
-    _safe_print("  " + "─" * 52)
+    _safe_print("  " + "─" * 58)
+    _safe_print(f"  {'Service':12s} {'Port':>6s} {'PID':>8s} {'Status':>16s}")
+    _safe_print("  " + "─" * 58)
     for name, info in status.items():
-        running = "✓ running" if info["healthy"] else ("✗ dead" if info["running"] else "— stopped")
+        if info["healthy"]:
+            if info.get("registered") is False:
+                running = "⚠ unregistered"
+            elif info.get("control_plane_healthy") is False:
+                running = "⚠ control down"
+            else:
+                running = "✓ running"
+        else:
+            blocked = info.get("restart_blocked")
+            if blocked == "port_release_timeout":
+                running = "⚠ port busy"
+            else:
+                running = "✗ dead" if info["running"] else "— stopped"
         pid_str = str(info["pid"]) if info["pid"] else "—"
-        _safe_print(f"  {name:12s} {info['port']:>6d} {pid_str:>8s} {running:>10s}")
-    _safe_print("  " + "─" * 52)
+        _safe_print(f"  {name:12s} {info['port']:>6d} {pid_str:>8s} {running:>16s}")
+    _safe_print("  " + "─" * 58)
     _safe_print()
 
-def start_all(foreground: bool = False) -> None:
+def start_all(foreground: bool = False) -> bool:
     """Start default stable services.
 
     1. Gateway (nerve centre) — routes all traffic, accepts registrations
@@ -901,7 +981,7 @@ def start_all(foreground: bool = False) -> None:
     register_plugin_services(force=True)
     if foreground and not _running_with_service_python():
         _restart_foreground_with_service_python()
-        return
+        return True
 
     PID_DIR.mkdir(parents=True, exist_ok=True)
     _safe_print("\n  Starting VoidCube services...\n")
@@ -910,39 +990,64 @@ def start_all(foreground: bool = False) -> None:
     # 1. Gateway (nerve centre — routes all internal traffic)
     start_service("gateway", foreground=foreground)
     if not foreground:
-        _wait_for_health("gateway", GATEWAY_PORT)
+        if not _wait_for_health("gateway", GATEWAY_PORT):
+            stop_service("gateway", silent=True)
+            _safe_print("  ⚠ gateway startup failed; dependent services were not started")
+            return False
 
     # 2. Memory registers with Gateway during app startup.
     start_service("memory", foreground=foreground)
     if not foreground:
-        _wait_for_health("memory", SERVICES["memory"].port)
+        if not _wait_for_health("memory", SERVICES["memory"].port):
+            stop_service("memory", silent=True)
+            _safe_print("  ⚠ memory startup failed; supervisor and plugins were not started")
+            return False
         if not _wait_for_gateway_service_type("memory"):
             stop_service("memory", silent=True)
             start_service("memory", foreground=foreground)
-            _wait_for_health("memory", SERVICES["memory"].port)
-            _wait_for_gateway_service_type("memory")
+            if not _wait_for_health("memory", SERVICES["memory"].port):
+                stop_service("memory", silent=True)
+                _safe_print("  ⚠ memory restart failed; supervisor and plugins were not started")
+                return False
+            if not _wait_for_gateway_service_type("memory"):
+                stop_service("memory", silent=True)
+                _safe_print("  ⚠ memory did not register with gateway; supervisor and plugins were not started")
+                return False
 
     # 3. Supervisor (Mem's governance identity)
     start_service("supervisor", foreground=foreground)
     if not foreground:
-        _wait_for_health("supervisor", SUPERVISOR_PORT)
+        if not _wait_for_health("supervisor", SUPERVISOR_PORT):
+            stop_service("supervisor", silent=True)
+            _safe_print("  ⚠ supervisor startup failed; plugins were not started")
+            return False
         supervisor_registered = _wait_for_gateway_service_type("supervisor")
         executor_registered = _wait_for_gateway_service_type("executor")
         if not (supervisor_registered and executor_registered):
             stop_service("supervisor", silent=True)
             start_service("supervisor", foreground=foreground)
-            _wait_for_health("supervisor", SUPERVISOR_PORT)
-            _wait_for_gateway_service_type("supervisor")
-            _wait_for_gateway_service_type("executor")
+            if not _wait_for_health("supervisor", SUPERVISOR_PORT):
+                stop_service("supervisor", silent=True)
+                _safe_print("  ⚠ supervisor restart failed; plugins were not started")
+                return False
+            if not _wait_for_gateway_service_type("supervisor") or not _wait_for_gateway_service_type("executor"):
+                stop_service("supervisor", silent=True)
+                _safe_print("  ⚠ supervisor did not fully register with gateway; plugins were not started")
+                return False
 
     # 4. Plugin services (declared in plugins/*/plugin.json)
     for plugin_name in _plugin_service_names():
         start_service(plugin_name, foreground=foreground)
         if not foreground:
-            _wait_for_health(plugin_name, SERVICES[plugin_name].port)
+            if not _wait_for_health(plugin_name, SERVICES[plugin_name].port):
+                stop_service(plugin_name, silent=True)
+                _safe_print(f"  ⚠ {plugin_name} startup failed")
+                continue
             plugin_svc = SERVICES[plugin_name]
             if plugin_svc.gateway_service_type:
-                _wait_for_gateway_service_type(plugin_svc.gateway_service_type)
+                if not _wait_for_gateway_service_type(plugin_svc.gateway_service_type):
+                    stop_service(plugin_name, silent=True)
+                    _safe_print(f"  ⚠ {plugin_name} did not register with gateway")
 
     if foreground:
         # Foreground: default stable services are running in daemon threads.
@@ -954,7 +1059,7 @@ def start_all(foreground: bool = False) -> None:
         import threading
         for thread in _foreground_threads:
             thread.join()
-        return
+        return True
 
     _safe_print()
     print_status()
@@ -962,6 +1067,7 @@ def start_all(foreground: bool = False) -> None:
     _safe_print(f"  Supervisor: http://127.0.0.1:{SUPERVISOR_PORT}/ui")
     _safe_print(f"  PID files:  {PID_DIR}")
     _safe_print()
+    return True
 
 
 def stop_all(force: bool = False) -> None:
@@ -1018,6 +1124,38 @@ def _gateway_has_service_type(service_type: str) -> bool:
         if isinstance(service, dict) and service.get("service_type") == service_type:
             return True
     return False
+
+
+def _gateway_service_types_snapshot(timeout: float = 1.0) -> dict[str, bool]:
+    """Read registered service types and Gateway health once for status projection."""
+    try:
+        import urllib.request
+
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{GATEWAY_PORT}/admin/services",
+            headers=gateway_auth_headers(),
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return {}
+    services = payload.get("services", []) if isinstance(payload, dict) else []
+    if isinstance(services, dict):
+        iterable = services.values()
+    elif isinstance(services, list):
+        iterable = services
+    else:
+        return {}
+    snapshot: dict[str, bool] = {}
+    for service in iterable:
+        if not isinstance(service, dict):
+            continue
+        service_type = str(service.get("service_type") or "").strip()
+        if service_type:
+            snapshot[service_type] = snapshot.get(service_type, False) or bool(
+                service.get("healthy", True)
+            )
+    return snapshot
 
 
 def _required_gateway_service_types(service_name: str) -> tuple[str, ...]:
@@ -1103,7 +1241,19 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
                             f"  ⚠ {svc.name:12s} healthy but gateway lacks "
                             f"{missing} registration — restarting..."
                         )
-                    stop_service(name, silent=True)
+                    if not stop_service(name, silent=True):
+                        result[name] = {
+                            "running": True,
+                            "healthy": True,
+                            "started": False,
+                            "restart_blocked": "port_release_timeout",
+                        }
+                        continue
+                    # Continue through the normal start path below. A healthy
+                    # process without its Gateway registration is not usable
+                    # for control-plane traffic and must be re-established in
+                    # this same ensure_running call.
+                    existing_pid = None
                 else:
                     result[name] = {
                         "running": True,
@@ -1129,7 +1279,14 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
             elif not silent:
                 _safe_print(f"  ⚠ {svc.name:12s} unhealthy (pid {existing_pid}, port {svc.port}) — restarting...")
             if not healthy:
-                stop_service(name, silent=True)
+                if not stop_service(name, silent=True):
+                    result[name] = {
+                        "running": True,
+                        "healthy": False,
+                        "started": False,
+                        "restart_blocked": "port_release_timeout",
+                    }
+                    continue
 
         if not silent:
             _safe_print(f"  ▶ {svc.name:12s} starting on port {svc.port}...")
@@ -1143,7 +1300,71 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
                 and _process_belongs_to_runtime(pid)
             )
             healthy = running and _service_health_check(svc)
-            result[name] = {"running": running, "healthy": healthy, "pid": pid, "started": False}
+            started = False
+            required_gateway_types = _required_gateway_service_types(name)
+            registered = not required_gateway_types
+            if healthy and required_gateway_types:
+                registered = all(
+                    _gateway_has_service_type(service_type)
+                    for service_type in required_gateway_types
+                )
+                if not registered:
+                    # A reused process can have lost its in-memory Gateway
+                    # registration after a Gateway restart. Recycle it once so
+                    # its startup hook can establish a fresh registration.
+                    if not stop_service(name, silent=True):
+                        result[name] = {
+                            "running": True,
+                            "healthy": healthy,
+                            "started": False,
+                            "restart_blocked": "port_release_timeout",
+                        }
+                        continue
+                    restarted = start_service(name, foreground=False)
+                    if restarted is not None:
+                        started = True
+                        healthy = _wait_for_health(name, svc.port, timeout=30.0)
+                        pid = _read_pid(svc.pid_file)
+                        running = bool(pid is not None and _pid_alive(pid))
+                        if not healthy:
+                            stopped = stop_service(name, silent=True) if pid is not None else True
+                            if stopped:
+                                if pid is not None:
+                                    _cleanup_service_runtime_artifacts(svc)
+                                pid = None
+                                running = False
+                            else:
+                                running = True
+                    if healthy and running:
+                        registered = all(
+                            _wait_for_gateway_service_type(service_type, timeout=20.0)
+                            for service_type in required_gateway_types
+                        )
+                        if not registered:
+                            stopped = stop_service(name, silent=True)
+                            if stopped:
+                                healthy = False
+                                running = False
+                                pid = None
+                            else:
+                                running = True
+                                result[name] = {
+                                    "running": True,
+                                    "healthy": healthy,
+                                    "pid": pid,
+                                    "started": started,
+                                    "registered": False,
+                                    "restart_blocked": "port_release_timeout",
+                                }
+                                continue
+            result[name] = {
+                "running": running,
+                "healthy": healthy,
+                "pid": pid,
+                "started": started,
+            }
+            if required_gateway_types:
+                result[name]["registered"] = registered
             if not silent:
                 tag = "✓" if healthy else "⚠"
                 _safe_print(f"     {tag} port {svc.port} reachable (reusing existing service)" if healthy
@@ -1152,7 +1373,20 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
 
         healthy = _wait_for_health(name, svc.port, timeout=30.0)
         new_pid = _read_pid(svc.pid_file)
-        result[name] = {"running": new_pid is not None, "healthy": healthy, "pid": new_pid, "started": True}
+        running = bool(new_pid is not None and _pid_alive(new_pid))
+        if not healthy:
+            # A child that exits during readiness must not leave a stale PID
+            # record which makes later status calls report it as running. If
+            # it is still alive, stop it before removing the record.
+            stopped = stop_service(name, silent=True) if new_pid is not None else True
+            if stopped:
+                if new_pid is not None:
+                    _cleanup_service_runtime_artifacts(svc)
+                new_pid = None
+                running = False
+        result[name] = {"running": running, "healthy": healthy, "pid": new_pid, "started": True}
+        if not healthy and not stopped:
+            result[name]["restart_blocked"] = "port_release_timeout"
         if not silent:
             tag = "✓" if healthy else "⚠"
             _safe_print(f"     {tag} ready" if healthy else f"     {tag} not responding (may still be starting)")
@@ -1164,6 +1398,19 @@ def ensure_running(silent: bool = True) -> Dict[str, Any]:
             ]
             registered = all(registration_results)
             result[name]["registered"] = registered
+            if not registered:
+                # Health alone is insufficient for a control-plane service.
+                # Recycle the process so the next ensure attempt starts from
+                # a clean registration state.
+                stopped = stop_service(name, silent=True)
+                if stopped:
+                    result[name]["running"] = False
+                    result[name]["healthy"] = False
+                    result[name]["pid"] = None
+                else:
+                    result[name]["running"] = True
+                    result[name]["healthy"] = True
+                    result[name]["restart_blocked"] = "port_release_timeout"
             if not silent:
                 tag = "✓" if registered else "⚠"
                 _safe_print(

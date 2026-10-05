@@ -107,6 +107,7 @@ class ServiceRuntimeState:
     started: bool = False
     stellar_mode: StellarMode = StellarMode.DAILY_COMPANION
     autonomous_chain_gate_active: bool = False
+    gateway_service_token: Optional[str] = None
     mode_transition_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_companion_observation_at: Optional[datetime] = None
     next_companion_observation_at: Optional[datetime] = None
@@ -281,12 +282,44 @@ class ServiceRuntimeMixin:
             )
 
         body_integrity = self._body_registry.inspect_layout()
+        healthy = body_integrity["healthy"] and all(result["healthy"] for result in results)
+        await self._report_gateway_health(healthy)
         return {
-            "healthy": body_integrity["healthy"]
-            and all(result["healthy"] for result in results),
+            "healthy": healthy,
             "results": results,
             "body_runtime": body_integrity,
         }
+
+    async def _report_gateway_health(self, healthy: bool) -> bool:
+        """Publish supervisor health using its per-registration Gateway token."""
+        if os.getenv("VOIDCUBE_DISABLE_GATEWAY_HEALTH_REPORT", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }:
+            return False
+        service_id = str(self._gateway_service_id or "").strip()
+        token = str(self._gateway_service_tokens.get("supervisor") or "").strip()
+        if not service_id or not token:
+            return False
+        try:
+            import aiohttp
+
+            gateway = self.config.execution.gateway_address.rstrip("/")
+            async with aiohttp.ClientSession() as session:
+                headers = self._gateway_registration_headers()
+                headers["x-voidcube-service-token"] = token
+                async with session.post(
+                    f"{gateway}/health/{service_id}",
+                    json={"healthy": bool(healthy)},
+                    headers=headers,
+                    timeout=5,
+                ) as response:
+                    if response.status in {401, 404}:
+                        self._gateway_service_id = None
+                        self._gateway_service_tokens.pop("supervisor", None)
+                        self._service_runtime.gateway_service_token = None
+                    return response.status == 200
+        except Exception:
+            return False
 
     async def _wait_for_health(self, instance_id: str, timeout: int = 30) -> None:
         start = datetime.now()
@@ -401,6 +434,26 @@ class ServiceRuntimeMixin:
                         ) as response:
                             if response.status != 200:
                                 missing_service_types.add(service_type)
+                                continue
+                            reader = getattr(response, "json", None)
+                            if not callable(reader):
+                                continue
+                            payload = await reader()
+                            expected_address = (
+                                f"http://{self.config.host}:{self.config.port}"
+                            ).rstrip("/")
+                            actual_address = str(
+                                payload.get("address") or ""
+                            ).rstrip("/") if isinstance(payload, dict) else ""
+                            if not (
+                                isinstance(payload, dict)
+                                and str(payload.get("service_id") or "").strip()
+                                == service_id
+                                and str(payload.get("service_type") or "").strip()
+                                == service_type
+                                and actual_address == expected_address
+                            ):
+                                missing_service_types.add(service_type)
                     except Exception as exc:
                         logger.debug(
                             "Failed to verify %s gateway registration: %s",
@@ -423,6 +476,9 @@ class ServiceRuntimeMixin:
         max_retries = 5
         base_delay = 1.0  # seconds
         service_type = str(payload.get("service_type") or "service")
+        self._gateway_service_tokens.pop(service_type, None)
+        if service_type == "supervisor":
+            self._service_runtime.gateway_service_token = None
 
         for attempt in range(1, max_retries + 1):
             try:
@@ -439,21 +495,28 @@ class ServiceRuntimeMixin:
                     async with session.post(url, **request_kwargs) as response:
                         if response.status == 201:
                             result = await response.json()
+                            service_id = str(result.get("service_id") or "").strip()
                             service_token = str(
                                 result.get("service_token") or ""
                             ).strip()
-                            if service_token:
-                                self._gateway_service_tokens[service_type] = service_token
+                            if not service_id or not service_token:
+                                raise RuntimeError(
+                                    f"Gateway registration response for {service_type} "
+                                    "did not include service credentials"
+                                )
+                            self._gateway_service_tokens[service_type] = service_token
+                            if service_type == "supervisor":
+                                self._service_runtime.gateway_service_token = service_token
                             logger.info(
                                 "Registered %s with gateway (attempt %d): %s",
                                 service_type,
                                 attempt,
                                 {
-                                    "service_id": result.get("service_id"),
+                                    "service_id": service_id,
                                     "status": result.get("status"),
                                 },
                             )
-                            return result["service_id"]
+                            return service_id
                         else:
                             logger.debug(
                                 "Gateway registration attempt %d returned status %d",

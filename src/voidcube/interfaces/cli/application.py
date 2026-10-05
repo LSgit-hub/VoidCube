@@ -1037,6 +1037,7 @@ class VoidcubeCLI:
             event_journal=TurnEventJournal(),
             approval_journal=ApprovalJournal(),
         )
+        self._initialize_goal_ports()
         self.__dict__.pop("_session_id", None)
         self.__dict__.pop("_session_start", None)
 
@@ -1055,6 +1056,7 @@ class VoidcubeCLI:
             event_journal=TurnEventJournal(),
             approval_journal=ApprovalJournal(),
         )
+        self._initialize_goal_ports()
         pending_title = self.__dict__.pop("_pending_title_fallback", None)
         hydration = self.__dict__.pop("_session_hydration_fallback", None)
         agent_running = self.__dict__.pop("_agent_running_fallback", False)
@@ -2015,11 +2017,30 @@ class VoidcubeCLI:
         self._pending_input_runtime_instance = runtime
         return runtime
 
+    def _initialize_goal_ports(self) -> None:
+        from ...application.ports import DefaultSessionGoalPort
+        from ...runtime.goal_ports import create_goal_manager_port
+
+        self._session_goal_port = DefaultSessionGoalPort()
+        from ...application.ports import UnavailableGoalManagerPort
+
+        self._goal_manager_port = UnavailableGoalManagerPort()
+        self._goal_manager_factory = create_goal_manager_port
+
+    def _configure_goal_manager_port(self, port: Any) -> None:
+        self._goal_manager_port = port
+        self._goal_manager_factory = lambda: self._goal_manager_port
+
+    def _attach_goal_ports(self, host: Any) -> None:
+        host._session_goal_port = self._session_goal_port
+        host._goal_manager_port = self._goal_manager_port
+        host._goal_manager_factory = self._goal_manager_factory
+
     def _continue_session_goal(self) -> None:
         """Queue one more goal turn after user input and process notices."""
         from contextlib import nullcontext
 
-        from .session_goal_runtime import ACTIVE, get_goal
+        from ...application.session_goal import ACTIVE, get_goal
 
         checker = getattr(self, "_session_goal_tools_available", None)
         if callable(checker):
@@ -2051,12 +2072,15 @@ class VoidcubeCLI:
         """Block an active goal after a terminal turn execution failure."""
         from contextlib import nullcontext
 
-        from .session_goal_runtime import stop_goal_after_turn
+        goal_port = getattr(self, "_session_goal_port", None)
+        if goal_port is None:
+            from ...application.ports import DefaultSessionGoalPort
+            goal_port = DefaultSessionGoalPort()
 
         try:
             lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
             with lifecycle_lock if lifecycle_lock is not None else nullcontext():
-                if stop_goal_after_turn(self, reason):
+                if goal_port.stop_goal_after_turn(self, reason):
                     self._discard_pending_goal_continuations()
                     self.agent = None
         except Exception:
@@ -2186,7 +2210,7 @@ class VoidcubeCLI:
         return runtime.build()
 
     def _goal_status_snapshot(self) -> dict[str, Any]:
-        from .session_goal_runtime import get_goal
+        from ...application.session_goal import get_goal
 
         return get_goal(self) or {}
     
@@ -2354,10 +2378,16 @@ class VoidcubeCLI:
 
     def _effective_system_prompt(self) -> str | None:
         """Combine the configured prompt with the current session goal."""
-        from .session_goal_runtime import get_goal, goal_prompt, resolve_goal_memory_context
+        goal_port = getattr(self, "_session_goal_port", None)
+        if goal_port is None:
+            from ...application.ports import DefaultSessionGoalPort
+            goal_port = DefaultSessionGoalPort()
+        get_goal = goal_port.get_goal
+        prompt_builder = goal_port.goal_prompt
+        resolve_goal_memory_context = goal_port.resolve_goal_memory_context
 
         goal = get_goal(self)
-        parts = [self.system_prompt or "", goal_prompt(goal)]
+        parts = [self.system_prompt or "", prompt_builder(goal)]
         linked_memory = resolve_goal_memory_context(self, goal)
         if linked_memory:
             parts.append(linked_memory)
@@ -2468,6 +2498,7 @@ class VoidcubeCLI:
                     tool_gen_callback=self._on_tool_gen_start if self.streaming_enabled else None,
                 )
             ).create()
+            self._attach_goal_ports(self.agent)
             # Store reference for atexit memory provider shutdown
             global _active_agent_ref
             _active_agent_ref = self.agent
