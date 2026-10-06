@@ -99,8 +99,8 @@ import difflib,itertools
 1. **名称口径三方一致性（最容易漏、危害最直接）**：同一批技能名在三个面口径不同——
    系统提示词清单用**目录名**，`skills_list()` 用 frontmatter **name**，`skill_view()` **只认目录名**。
    目录名 != frontmatter name 时，agent 从 `skills_list` 拿到名字去 `skill_view` → `not found`
-   （技能"看得见但打不开"）。**实测：79 个技能里 20 个违例（25%）**——11 个 dsh-* 前缀类
-   （目录 `doc` / name `dsh-doc`）+ 9 个 mlops/* 类（目录 `peft` / name `peft-fine-tuning`、
+   （技能"看得见但打不开"）。**实测：79 个技能里 20 个违例（25%）**——11 个 * 前缀类
+   （目录 `doc` / name `doc`）+ 9 个 mlops/* 类（目录 `peft` / name `peft-fine-tuning`、
    目录 `vllm` / name `serving-llms-vllm`）。修法属产品决策（先报告再动）：把 frontmatter name
    改成与目录名一致（**必须重算 manifest 键，避免留孤儿键**），或改目录名（影响路径与外部引用）。
 2. **重复 vs 互补**：见步骤 4 的 0.30 阈值 + 子集占比判定。

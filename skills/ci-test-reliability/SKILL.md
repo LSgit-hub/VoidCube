@@ -1,6 +1,6 @@
 ---
-name: dsh-ci-test-reliability
-description: Design, review, and diagnose DeepSeek Harness tests and fixtures that can fail nondeterministically under CI concurrency, shared host resources, clocks, process-global state, subprocesses, network listeners, or asynchronous teardown. Use when adding or changing tests with those risks, investigating flaky CI, or reviewing test isolation; use dsh-pre-push-checks separately to select outgoing commands.
+name: ci-test-reliability
+description: Design, review, and diagnose DeepSeek Harness tests and fixtures that can fail nondeterministically under CI concurrency, shared host resources, clocks, process-global state, subprocesses, network listeners, or asynchronous teardown. Use when adding or changing tests with those risks, investigating flaky CI, or reviewing test isolation; use pre-push-checks separately to select outgoing commands.
 ---
 
 # Reliable DSH CI tests
@@ -13,7 +13,7 @@ Build tests that remain correct under the repository's real CI topology, not onl
 - Use [the defensive patterns](../../../docs/defensive-patterns.md) for lifecycle, subprocess, cancellation, and teardown behavior.
 - Read the active Vitest config and GitHub workflow when their worker or job topology affects the test.
 - For recorded-session scenarios, also follow [the snapshot instructions](../../../snapshots/AGENTS.md).
-- Use [dsh-pre-push-checks](../dsh-pre-push-checks/SKILL.md) after the test design is sound to select outgoing validation.
+- Use [pre-push-checks](../pre-push-checks/SKILL.md) after the test design is sound to select outgoing validation.
 
 ## Model the execution topology
 
@@ -128,4 +128,4 @@ Run the smallest focused regression for the affected behavior. Add topology-spec
 - ports, sockets, or shared paths need concurrent independent-process evidence;
 - a new guard needs a negative control.
 
-Before a push, use [dsh-pre-push-checks](../dsh-pre-push-checks/SKILL.md). Report exact commands and observed results; do not describe retries, skipped tests, or pending CI as passing.
+Before a push, use [pre-push-checks](../pre-push-checks/SKILL.md). Report exact commands and observed results; do not describe retries, skipped tests, or pending CI as passing.

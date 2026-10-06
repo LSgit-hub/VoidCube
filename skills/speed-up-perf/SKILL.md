@@ -1,5 +1,5 @@
 ---
-name: dsh-speed-up-perf
+name: speed-up-perf
 description: 'Use when investigating or optimizing DeepSeek Harness performance, designing realistic synthetic benchmarks or CI performance gates, profiling long Sessions or Web responsiveness, or turning performance PR evidence into measured behavior-preserving fixes.'
 ---
 
@@ -9,7 +9,7 @@ Turn a broad “make it faster” request into reproducible user-path measuremen
 
 ## Establish scope and current authority
 
-Read [AGENTS.md](../../../AGENTS.md), [architecture](../../../docs/architecture.md), [testing policy](../../../docs/testing.md), [defensive patterns](../../../docs/defensive-patterns.md), and the affected packages’ instructions and Agent Notes. Use [CI test reliability](../dsh-ci-test-reliability/SKILL.md) for processes, clocks, browser tests, and asynchronous cleanup.
+Read [AGENTS.md](../../../AGENTS.md), [architecture](../../../docs/architecture.md), [testing policy](../../../docs/testing.md), [defensive patterns](../../../docs/defensive-patterns.md), and the affected packages’ instructions and Agent Notes. Use [CI test reliability](../ci-test-reliability/SKILL.md) for processes, clocks, browser tests, and asynchronous cleanup.
 
 Agree on the user-visible endpoint, workload range, resource constraints, acceptable minor behavior differences, and stopping rule. Keep backend and browser end-to-end measurements separate: a fast history iterator or Client fold does not prove fast transport, paint, scrolling, or input response. Exclude model/network latency when measuring local overhead, and state that exclusion rather than calling the result complete product latency.
 
@@ -87,6 +87,6 @@ Use [Agent Note rules](../../notes/README.md) for durable rationale, alternative
 
 When the task requests stacked PRs, choose layers before editing and use official GitHub stacks and separate worktrees. Keep each layer mergeable: benchmark infrastructure can protect the measured baseline; the optimization layer carries its fix, functional coverage, and tighter budget. Independent bottlenecks may use separate stacks. Fix a finding in its owning layer before propagating upward.
 
-Apply [pre-push checks](../dsh-pre-push-checks/SKILL.md), report only executed evidence, and inspect CI rather than assuming local timing proves runner stability. After marking ready, evaluate review findings against code and executable evidence; reply with the reason or fix and resolve addressed threads. Do not dismiss a report merely because it came from a bot.
+Apply [pre-push checks](../pre-push-checks/SKILL.md), report only executed evidence, and inspect CI rather than assuming local timing proves runner stability. After marking ready, evaluate review findings against code and executable evidence; reply with the reason or fix and resolve addressed threads. Do not dismiss a report merely because it came from a bot.
 
 Summarize each result as: workload → before/after absolute values and ratio → endpoint and memory semantics → behavior evidence → negative control → exact checks → exclusions. Separate author-reported historical numbers, fresh local measurements, and CI evidence. Stop at the agreed scenario/fix scope; retain a short ranked follow-up list instead of chasing unrelated opportunities.

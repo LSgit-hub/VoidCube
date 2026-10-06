@@ -1,5 +1,5 @@
 ---
-name: dsh-translate-docs
+name: translate-docs
 description: Manually run the extended DeepSeek Harness bilingual-document workflow, including generated briefings, delegated prose translation, whole-document translation, and scoped pairing verification.
 disable-model-invocation: true
 user-invocable: true
@@ -9,7 +9,7 @@ user-invocable: true
 
 ## Invocation boundary
 
-Run this extended workflow only when the user explicitly invokes `dsh-translate-docs` by name. Never select or load it for ordinary documentation work, from another skill, or from an inferred translation need; routine translation follows the one-shot, one-pass rule in [docs/AGENTS.md](../../../docs/AGENTS.md).
+Run this extended workflow only when the user explicitly invokes `translate-docs` by name. Never select or load it for ordinary documentation work, from another skill, or from an inferred translation need; routine translation follows the one-shot, one-pass rule in [docs/AGENTS.md](../../../docs/AGENTS.md).
 
 ## What this skill is
 
@@ -43,7 +43,7 @@ When translations need to be written from scratch, the orchestrating agent does 
 - **[docs/i18n/translation-rules.md](../../../docs/i18n/translation-rules.md)** — how to translate: faithfulness, structure preservation, terminology discipline, typography (MUST/SHOULD levels).
 - **[docs/i18n/terminology.md](../../../docs/i18n/terminology.md)** — the terminology table, binding in both directions. Load it BEFORE translating, not when a term feels uncertain; the terms you don't notice are the ones that drift.
 - **[docs/i18n/translation-prompt.md](../../../docs/i18n/translation-prompt.md)** — the automated pipeline's calibrated machine-consumed template. Agents using this skill do not render it; the terminology table is the only repository file the automated renderer injects, while this skill and `translation-rules.md` remain binding for agent-authored translations.
-- **[dsh-prose-standard](../dsh-prose-standard/SKILL.md)** — required prose coverage and editorial judgment. Apply it to both sides without adding or dropping source propositions.
+- **[prose-standard](../prose-standard/SKILL.md)** — required prose coverage and editorial judgment. Apply it to both sides without adding or dropping source propositions.
 
 ### Translate
 
@@ -66,9 +66,9 @@ When translations need to be written from scratch, the orchestrating agent does 
 1. Switcher: `[English](foo.md) | 中文` immediately after the Chinese file's H1, `English | [中文](foo.zh.md)` after the English file's H1 — add both if this is a new pair, except that a generator-owned English source stays byte-identical to generator output and omits its switcher while the Chinese counterpart still links back.
 2. Record consistency: `pnpm run verify-translation-pairing --write <pair>` recomputes and records both sides' full blob hashes in `foo.i18n.yaml`. The yaml diff in your PR is the reviewable statement "I confirmed these two say the same thing" — only run it after you actually have.
 3. No manifest entry is needed for an ordinary document: every in-scope source requires a pair. Change [scripts/translation-pairing.manifest.json](../../../scripts/translation-pairing.manifest.json) only when the owning policy documents a genuine generated, instructional, or bilingual-by-construction exclusion.
-4. Before the PR: the touched pairs are green under the scoped check; `pnpm run doc-sync` (which includes the corpus-wide pairing check plus `verify-md-wrap`/`verify-md-links`) runs once at PR level per [dsh-pre-push-checks](../dsh-pre-push-checks/SKILL.md), not inside each translation task.
+4. Before the PR: the touched pairs are green under the scoped check; `pnpm run doc-sync` (which includes the corpus-wide pairing check plus `verify-md-wrap`/`verify-md-links`) runs once at PR level per [pre-push-checks](../pre-push-checks/SKILL.md), not inside each translation task.
 5. Keep the PR reviewable: state which pairs are new versus minimally updated and list 「待定术语」 prominently.
 
 ## How to respond to translation review
 
-Follow the [code-review reporting guidance](../dsh-code-review/SKILL.md#reporting-findings): evaluate each comment on its merits, and for terminology comments, remember the terminology table is the contract — apply a reviewer's rendering decision to [terminology.md](../../../docs/i18n/terminology.md), not only to one file.
+Follow the [code-review reporting guidance](../code-review/SKILL.md#reporting-findings): evaluate each comment on its merits, and for terminology comments, remember the terminology table is the contract — apply a reviewer's rendering decision to [terminology.md](../../../docs/i18n/terminology.md), not only to one file.

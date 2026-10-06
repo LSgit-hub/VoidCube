@@ -303,7 +303,7 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
 
 1. **权威口径只有两个**：`sync_skills(quiet=True)` 的返回字典 + 仓库/运行时两侧技能目录的 `_hash` 逐一比对。
    自己手搓 `manifest.get(name)` 查询会产出**假告警**：manifest 的键是 frontmatter `name`，而目录名常与
-   之不同（如目录 `archive-agent-notes` vs frontmatter `dsh-archive-agent-notes`），用目录名去查必得 None
+   之不同（如目录 `archive-agent-notes` vs frontmatter `archive-agent-notes`），用目录名去查必得 None
    → 会被误报成"manifest 未对齐"。先跑 sync 看分类，再比逐目录 hash。
 2. **`_hash` 必须传技能目录**：传 `SKILL.md` 文件会让内部 `rglob("*")` 空转，返回
    `md5("")` = `d41d8cd98f00b204e9800998ecf8427e`；写进 manifest 后三方对账会**静默失真**

@@ -84,7 +84,7 @@ pnpm run lint
 git diff --check
 ```
 
-Use [dsh-pre-push-checks](../../dsh-pre-push-checks/SKILL.md) before pushing. Report the canonical files changed, manifest entries added or removed, public routes affected, and the exact checks run.
+Use [pre-push-checks](../../pre-push-checks/SKILL.md) before pushing. Report the canonical files changed, manifest entries added or removed, public routes affected, and the exact checks run.
 
 ## Keep deployment separate
 

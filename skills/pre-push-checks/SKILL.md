@@ -1,5 +1,5 @@
 ---
-name: dsh-pre-push-checks
+name: pre-push-checks
 description: Use before pushing, force-pushing, marking ready for review, or claiming checks pass on a deepseek-harness branch, and immediately after gh stack sync publishes rewritten branches, to select the smallest tests and checks that cover the outgoing or just-published diff without reflexively running the full repository suite.
 ---
 
@@ -28,7 +28,7 @@ The command never guesses or fetches a base. Supply the ref verified from curren
 
 There is no universal local baseline beyond the hooks. Every behavior change needs the narrowest available test or purpose-built check that would fail for its regression; add broader checks only for surfaces the diff actually reaches.
 
-When the outgoing change adds or changes a resource-owning or asynchronous test, fixture, helper, or CI execution path, use [dsh-ci-test-reliability](../dsh-ci-test-reliability/SKILL.md) first to decide whether restoration, negative-control, quiescent-teardown, or concurrent-process evidence applies. This skill still selects the commands and avoids repeating evidence that already passed.
+When the outgoing change adds or changes a resource-owning or asynchronous test, fixture, helper, or CI execution path, use [ci-test-reliability](../ci-test-reliability/SKILL.md) first to decide whether restoration, negative-control, quiescent-teardown, or concurrent-process evidence applies. This skill still selects the commands and avoids repeating evidence that already passed.
 
 - **Package or script behavior:** run the owning Vitest file or focused test name. Add adjacent package tests when a shared contract changes; leave repository-wide coverage to CI unless the change is genuinely cross-cutting or the user requests it.
 - **Remote mock typing:** unbuilt `any` is an explicit local fallback, not strict evidence. Run `pnpm run typecheck` before handing off Remote/mock changes; rebuild missing, stale, or partial generated declarations before diagnosing remaining errors. Keep the exception in the [test proxy](../../../packages/test-support/remote-mock/README.md#remote-proxy), never in production Remote types, ambient flags, or copied signatures.

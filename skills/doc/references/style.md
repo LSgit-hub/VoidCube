@@ -28,7 +28,7 @@ Use an [ASD-STE100](https://www.asd-ste100.org/)-inspired review pass for Englis
 - Split semicolons and long clause chains. Keep each paragraph on one topic.
 - Remove unsupported quality adjectives and stacked hedges. Preserve every fact and degree of uncertainty from the source.
 
-Treat 20 words for an instruction and 25 words for a description as review prompts, not mechanical gates. Keep a longer sentence when a split would hide a condition or relationship. Never remove or strengthen `must`, `may`, `never`, timing, exceptions, numbers, or other contract terms to meet a length target. The [prose standard](../../dsh-prose-standard/SKILL.md) owns the complete-proposition rule.
+Treat 20 words for an instruction and 25 words for a description as review prompts, not mechanical gates. Keep a longer sentence when a split would hide a condition or relationship. Never remove or strengthen `must`, `may`, `never`, timing, exceptions, numbers, or other contract terms to meet a length target. The [prose standard](../../prose-standard/SKILL.md) owns the complete-proposition rule.
 
 ## Section separators
 

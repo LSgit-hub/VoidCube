@@ -1,6 +1,6 @@
 # Template: package-bundle
 
-Use this template for a package whose manifest declares `dsh.bundle.patch` — an installable profile layer: `packages/bundle/*`, `dsh-subagent-internal-agent`, `dsh-subagent-external-agent-runtime`. The `bundle/base` README pair is the worked example.
+Use this template for a package whose manifest declares `dsh.bundle.patch` — an installable profile layer: `packages/bundle/*`, `subagent-internal-agent`, `subagent-external-agent-runtime`. The `bundle/base` README pair is the worked example.
 
 A bundle README leads with the profile-install path and the layer semantics; the implementation fold explains the patch document. It never presents the package as a library to import or as a single plugin to mount.
 
@@ -16,7 +16,7 @@ kind: "package-bundle"
 ## Skeleton
 
 ```markdown
-# @deepseek-ai/dsh-<name>
+# @deepseek-ai/<name>
 
 English | [中文](README.zh.md)
 
@@ -43,8 +43,8 @@ Three to five sentences and at most 100 `wc -w`-style words: what a profile gain
 The verified install path — run it against the current checkout before writing:
 
 ```text
-dsh plugin --profile <name> add @deepseek-ai/dsh-<name>
-dsh plugin --profile <name> remove @deepseek-ai/dsh-<name>
+dsh plugin --profile <name> add @deepseek-ai/<name>
+dsh plugin --profile <name> remove @deepseek-ai/<name>
 ```
 
 State where in-box bundles resolve from, what the reconcile step activates, and what fails when the patch declaration is missing.

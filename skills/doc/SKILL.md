@@ -1,5 +1,5 @@
 ---
-name: dsh-doc
+name: doc
 description: Create, restructure, review, audit, or migrate DeepSeek Harness Markdown documentation, package READMEs, and the documentation website using audience-first hierarchy, kind-mapped YAML metadata, bilingual line alignment, summary/contents navigation, progressive user-to-developer detail, executed-operation fact-checking, and repository validation. Use for new or revised DSH docs, docs-tree organization, documentation-quality audits and budgets, website page publishing, and bilingual documentation structure changes.
 ---
 
@@ -86,7 +86,7 @@ Read, do not re-summarize, the owning contracts: [docs/AGENTS.md](../../../docs/
 
 Apply the standard's authoring order to every human-facing document in scope (not to Agent Notes): locate the document and state its own subject; set the permitted detail level and move deeper explanations to owning descendants with links; classify tutorial or reference from intended use, not path; for a tutorial, order concepts by prerequisite and difficulty; split substantial mixed forms. Then check placement constraints: paired docs cost a counterpart update and a `--write` re-record on every edit; generated catalogs are never hand-edited; a move is atomic with every inbound link repaired in the same change.
 
-After the structural pass, hunt the slop checklist with the cheapest probes first. Use [dsh-trim-cot-leakage](../dsh-trim-cot-leakage/SKILL.md) for reasoning-transcript leakage, grep distinctive phrases to find duplicated rules, replace hand-written catalogs and status inventories with their authoritative owners, and remove migration plans and future-tense spec language from implemented Agent Notes. Measure outliers with `pnpm run verify-doc-budgets --list` and a word-count scan; if removing prose changes a promised behavior rather than its explanation, propose the behavior change first (follow [dsh-find-simplifications](../dsh-find-simplifications/SKILL.md)). Keep every load-bearing rule, preferably as one to three lines plus a link to its rationale; do not create a new explanation merely to relocate disposable reasoning.
+After the structural pass, hunt the slop checklist with the cheapest probes first. Use [trim-cot-leakage](../trim-cot-leakage/SKILL.md) for reasoning-transcript leakage, grep distinctive phrases to find duplicated rules, replace hand-written catalogs and status inventories with their authoritative owners, and remove migration plans and future-tense spec language from implemented Agent Notes. Measure outliers with `pnpm run verify-doc-budgets --list` and a word-count scan; if removing prose changes a promised behavior rather than its explanation, propose the behavior change first (follow [find-simplifications](../find-simplifications/SKILL.md)). Keep every load-bearing rule, preferably as one to three lines plus a link to its rationale; do not create a new explanation merely to relocate disposable reasoning.
 
 ## Wordcount budgets
 
@@ -108,7 +108,7 @@ Load only the reference needed for the task. Each reference links directly from 
 
 The four README templates in [`templates/`](templates/) are the working skeletons for the four `kind` labels; open the one your document's kind names before writing.
 
-Use [dsh-prose-standard](../dsh-prose-standard/SKILL.md) for sentence-level contract coverage and editorial judgment. The `session-persistence-jsonl` README pair ([English](../../../packages/session/session-persistence-jsonl/README.md), [Chinese](../../../packages/session/session-persistence-jsonl/README.zh.md)) is the reference example: searchable YAML, Summary and Table of Contents, user-to-developer progression with a folded developer section, Further Exploration, canonical Model Experience and Known Limitations sections, and a final Dev Note.
+Use [prose-standard](../prose-standard/SKILL.md) for sentence-level contract coverage and editorial judgment. The `session-persistence-jsonl` README pair ([English](../../../packages/session/session-persistence-jsonl/README.md), [Chinese](../../../packages/session/session-persistence-jsonl/README.zh.md)) is the reference example: searchable YAML, Summary and Table of Contents, user-to-developer progression with a folded developer section, Further Exploration, canonical Model Experience and Known Limitations sections, and a final Dev Note.
 
 ## Validation
 
