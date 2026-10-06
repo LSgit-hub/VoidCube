@@ -789,7 +789,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 21,
+    "_config_version": 22,
 }
 
 # =============================================================================
@@ -1615,6 +1615,44 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
             results["config_added"].append(f"cache layout ({migration})")
             if not quiet:
                 print(f"  ✓ Migrated cache directory: {migration}")
+
+    # ── Version 21 → 22: update only untouched employee toolset defaults ──
+    if current_ver < 22:
+        raw_config = read_raw_config()
+        workers = raw_config.get("companion_workers")
+        roles = workers.get("roles") if isinstance(workers, dict) else None
+        if isinstance(roles, dict):
+            old_defaults = {
+                "general": ["web", "file", "mail", "skills", "todo"],
+                "research": ["learn"],
+                "coding": ["file", "terminal", "code_execution", "skills", "todo"],
+                "media": ["media", "web"],
+            }
+            new_defaults = {
+                role: values["toolsets"]
+                for role, values in DEFAULT_CONFIG["companion_workers"]["roles"].items()
+            }
+            changed_roles = []
+            for role, old_toolsets in old_defaults.items():
+                role_config = roles.get(role)
+                if (
+                    isinstance(role_config, dict)
+                    and role_config.get("toolsets") == old_toolsets
+                ):
+                    role_config["toolsets"] = list(new_defaults[role])
+                    changed_roles.append(role)
+            if changed_roles:
+                raw_config["companion_workers"] = workers
+                save_config(raw_config)
+                results["config_added"].append(
+                    "companion_workers default toolsets updated for "
+                    + ", ".join(changed_roles)
+                )
+                if not quiet:
+                    print(
+                        "  ✓ Updated default employee toolsets for "
+                        + ", ".join(changed_roles)
+                    )
 
     # ── Always: remove retired model and auxiliary-route env vars from .env ──
     # These env vars were written by the old setup wizard but nothing reads

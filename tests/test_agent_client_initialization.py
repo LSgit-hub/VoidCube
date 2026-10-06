@@ -1,3 +1,5 @@
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +8,7 @@ from voidcube.runtime.agent.client_initialization import (
     AgentClientInitializationPorts,
     AgentClientInitializationRuntime,
 )
+from voidcube.runtime.agent.runner import AIAgent
 
 
 class _Lifecycle:
@@ -132,3 +135,93 @@ def test_primary_client_failure_keeps_initialization_error_boundary():
         ).initialize()
 
     assert isinstance(exc.value.__cause__, ValueError)
+
+
+def test_agent_initialization_accepts_sessionless_employee_runtime(monkeypatch):
+    import voidcube.runtime.agent.runner as runner
+
+    class _Lifecycle:
+        def snapshot_kwargs(self):
+            return {}
+
+    class _ClientInitialization:
+        def __init__(self, _ports):
+            pass
+
+        def initialize(self):
+            return SimpleNamespace(
+                client_kwargs={},
+                api_key="key",
+                base_url="https://api.example/v1",
+                lifecycle=_Lifecycle(),
+            )
+
+    class _Persistence:
+        def persist(self, *_args, **_kwargs):
+            pass
+
+        def save_log(self, *_args, **_kwargs):
+            pass
+
+    class _SessionInitialization:
+        def __init__(self, _ports):
+            pass
+
+        def initialize(self):
+            return SimpleNamespace(
+                session_start=datetime(2026, 1, 1),
+                session_id="employee-session",
+                logs_dir=Path("."),
+                checkpoint_manager=None,
+                session_persistence=_Persistence(),
+            )
+
+    class _ContextPolicy:
+        source = "test"
+        context_length = 128_000
+        threshold_tokens = 64_000
+        tail_token_budget = 20_000
+        detection_known = True
+
+    class _ContextCompressor:
+        def __init__(self, **_kwargs):
+            self.context_length = 128_000
+            self.threshold_tokens = 64_000
+            self.policy = _ContextPolicy()
+            self.model = "model"
+            self.base_url = "https://api.example/v1"
+            self.api_key = "key"
+            self.provider = "custom"
+
+        def get_tool_schemas(self):
+            return []
+
+        def on_session_start(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr(runner, "AgentClientInitializationRuntime", _ClientInitialization)
+    monkeypatch.setattr(runner, "AgentSessionInitializationRuntime", _SessionInitialization)
+    monkeypatch.setattr(runner, "get_tool_definitions", lambda **_kwargs: [])
+    monkeypatch.setattr(runner, "ContextCompressor", _ContextCompressor)
+    monkeypatch.setattr(
+        runner.ContextCompressionPolicy,
+        "for_model",
+        classmethod(lambda _cls, *_args, **_kwargs: _ContextPolicy()),
+    )
+    monkeypatch.setattr(AIAgent, "_check_compression_model_feasibility", lambda _self: None)
+
+    agent = AIAgent(
+        model="model",
+        api_key="key",
+        base_url="https://api.example/v1",
+        provider="custom",
+        session_id="employee-session",
+        session_db=None,
+        skip_memory=True,
+        skip_context_files=True,
+        persist_session=False,
+        quiet_mode=True,
+    )
+
+    assert agent._session_db is None
+    assert agent.session_id == "employee-session"

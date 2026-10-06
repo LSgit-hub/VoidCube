@@ -339,6 +339,12 @@ def _background_completion_outcome(result: Optional[Dict[str, Any]]) -> tuple[bo
     error = str((result or {}).get("error") or "").strip()
     if result is None and not error:
         error = "API-A returned no result"
+    if not error and (result or {}).get("interrupted"):
+        error = str((result or {}).get("interrupt_message") or "Employee execution interrupted")
+    if not error and (result or {}).get("completed") is False:
+        error = "Employee execution did not complete"
+    if not error and not response.strip():
+        error = "Employee execution returned no response"
     if not response and error:
         response = f"Error: {error}"
     return not bool(error), response, error
@@ -1547,7 +1553,7 @@ class VoidcubeCLI:
                 set_companion_active=lambda active: setattr(
                     self, "_scheduled_companion_active", bool(active)
                 ),
-                cancel_background_task=lambda task_id, reason: self._background_task_runtime().ports.state.cancel(
+                cancel_background_task=lambda task_id, reason: self._ensure_scheduled_execution_host().cancel(
                     task_id, reason
                 ),
                 start_background_task=self._start_scheduled_execution_task,

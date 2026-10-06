@@ -41,6 +41,35 @@ def test_repository_append_is_idempotent_by_event_id(tmp_path) -> None:
     assert len(repository.list_events()) == 1
 
 
+def test_warm_append_does_not_read_or_deserialize_history(tmp_path, monkeypatch):
+    repository = GovernanceEventRepository(tmp_path / "events.jsonl")
+    first = _boundary_defer_event("task-1", "slot-B")
+    repository.append(first)
+    original_open = type(repository.path).open
+
+    def guarded_open(path, mode="r", *args, **kwargs):
+        if path in {repository.path, repository.retry_path} and mode == "r":
+            pytest.fail("warm append re-read governance history")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(type(repository.path), "open", guarded_open)
+    repository.append(_boundary_defer_event("task-2", "slot-B"))
+    repository.append(first)
+
+
+def test_append_id_cache_detects_external_and_retry_history_changes(tmp_path):
+    repository = GovernanceEventRepository(tmp_path / "events.jsonl")
+    first = _boundary_defer_event("task-1", "slot-B")
+    second = _boundary_defer_event("task-2", "slot-B")
+    third = _boundary_defer_event("task-3", "slot-B")
+    repository.append(first)
+    GovernanceEventRepository(repository.path).append(second)
+    repository.append(second)
+    repository.retry_path.write_text(json.dumps(third.to_dict()) + "\n", encoding="utf-8")
+    repository.append(third)
+    assert [event.id for event in repository.list_events()] == [first.id, second.id, third.id]
+
+
 def test_repository_raises_when_primary_and_retry_writes_both_fail(tmp_path, monkeypatch) -> None:
     repository = GovernanceEventRepository(tmp_path / "governance-events.jsonl")
     event = _boundary_defer_event("task-1", "slot-B")

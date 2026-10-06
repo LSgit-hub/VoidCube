@@ -65,6 +65,33 @@ class GovernanceEventRepository:
         self.path = Path(path)
         self.retry_path = self.path.with_suffix(".retry.jsonl")
         self._lock = threading.RLock()
+        self._event_ids: set[str] = set()
+        self._id_signature: tuple | None = None
+
+    def _history_signature(self) -> tuple:
+        signatures = []
+        for path in (self.path, self.retry_path):
+            try:
+                stat = path.stat()
+                signatures.append((stat.st_ino, stat.st_size, stat.st_mtime_ns))
+            except FileNotFoundError:
+                signatures.append(None)
+        return tuple(signatures)
+
+    def _refresh_event_ids(self) -> None:
+        signature = self._history_signature()
+        if signature == self._id_signature:
+            return
+        event_ids: set[str] = set()
+        for path in (self.path, self.retry_path):
+            if not path.exists():
+                continue
+            with path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    if line.strip():
+                        event_ids.add(str(json.loads(line)["id"]))
+        self._event_ids = event_ids
+        self._id_signature = signature
 
     def append(self, event: GovernanceEvent) -> GovernanceEvent:
         """Append with idempotency, write protection, and retry-log fallback.
@@ -74,7 +101,11 @@ class GovernanceEventRepository:
         """
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            if event.id in {item.id for item in self.list_events()}:
+            # Claims and lease renewals append on the scheduler's hot path.
+            # Only rebuild IDs when another writer changes either history;
+            # never deserialize the full governance history per heartbeat.
+            self._refresh_event_ids()
+            if event.id in self._event_ids:
                 return event
             try:
                 with self.path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -93,6 +124,8 @@ class GovernanceEventRepository:
                     raise RuntimeError(
                         f"Governance event {event.id} could not be persisted"
                     ) from retry_exc
+            self._event_ids.add(event.id)
+            self._id_signature = self._history_signature()
         return event
 
     def list_events(self, limit: int = 0) -> list[GovernanceEvent]:

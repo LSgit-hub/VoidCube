@@ -5,11 +5,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import threading
+import logging
 import time
 from datetime import datetime
 from threading import RLock, Thread
 from typing import Any
 import uuid
+
+
+logger = logging.getLogger(__name__)
 
 
 CompletionOutcome = Callable[[dict[str, Any] | None], tuple[bool, str, str]]
@@ -219,7 +223,7 @@ class BackgroundTaskRuntime:
                     success = False
                     response = ""
                     error = timeout_error
-                self.ports.render_completion(
+                self._render_completion(
                     success,
                     response,
                     error,
@@ -228,12 +232,11 @@ class BackgroundTaskRuntime:
                     response_title,
                     prompt,
                 )
-                self.ports.bell_on_complete()
                 self._notify_completion(on_complete, success, response, error)
             except Exception as error:
                 finished.set()
                 completion_error = timeout_error if timed_out.is_set() else str(error)
-                self.ports.render_completion(
+                self._render_completion(
                     False,
                     "",
                     completion_error,
@@ -261,6 +264,15 @@ class BackgroundTaskRuntime:
         self.ports.invalidate()
         return True
 
+    def _render_completion(self, *args: Any) -> None:
+        # Presentation failure cannot change a worker's execution result or
+        # prevent the scheduler from persisting its completion receipt.
+        try:
+            self.ports.render_completion(*args)
+            self.ports.bell_on_complete()
+        except Exception:
+            logger.warning("Background completion display failed", exc_info=True)
+
     @staticmethod
     def _notify_completion(
         callback: Callable[[bool, str, str], None] | None,
@@ -273,5 +285,4 @@ class BackgroundTaskRuntime:
         try:
             callback(success, response, error)
         except Exception:
-            # Completion callbacks are writeback/UI hooks and cannot fail the worker.
-            return
+            logger.exception("Background completion writeback callback failed")

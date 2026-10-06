@@ -646,6 +646,7 @@ class ScheduledTaskStore:
         self,
         *,
         owner_session_id: str,
+        requested_run_id: str = "",
         now: Optional[datetime] = None,
         lease_seconds: int = 300,
         max_concurrent: int = 1,
@@ -658,6 +659,12 @@ class ScheduledTaskStore:
         owner = str(owner_session_id or "").strip()
         if not owner:
             raise ValueError("owner_session_id is required")
+        request_id = str(requested_run_id or "").strip()
+        if request_id:
+            try:
+                request_id = str(uuid.UUID(request_id))
+            except ValueError as exc:
+                raise ValueError("requested_run_id must be a UUID") from exc
         current = (now or _utc_now()).astimezone(timezone.utc)
         bounded_lease = max(60, min(int(lease_seconds), 3600))
         bounded_total = max(1, min(int(max_concurrent), 16))
@@ -666,6 +673,19 @@ class ScheduledTaskStore:
         upstream_limits = dict(provider_limits or {})
         with self._transaction() as connection:
             self._recover_expired_claims(connection, now=current)
+            if request_id:
+                existing = connection.execute(
+                    "SELECT * FROM scheduled_task_runs WHERE run_id = ?",
+                    (request_id,),
+                ).fetchone()
+                if existing is not None:
+                    run = self._run_from_row(existing)
+                    if run["owner_session_id"] != owner or run["status"] != "running":
+                        raise ValueError("requested run is no longer owned and running")
+                    task = self._task(connection, run["schedule_id"])
+                    if task.get("active_run_id") != request_id:
+                        raise ValueError("schedule/run ownership is inconsistent")
+                    return {"task": task, "run": run}
             self._prune_runs(connection)
             running_rows = connection.execute(
                 "SELECT t.worker_role, r.execution_provider FROM scheduled_task_runs r "
@@ -751,7 +771,7 @@ class ScheduledTaskStore:
                 return None
             task = self._task_from_row(row)
             worker_role = str(task.get("worker_role") or "").strip().lower()
-            run_id = str(uuid.uuid4())
+            run_id = request_id or str(uuid.uuid4())
             run = {
                 "run_id": run_id,
                 "schedule_id": task["schedule_id"],
@@ -1290,6 +1310,7 @@ class ScheduledTaskRuntimeMixin:
         claimed = self._scheduled_store_call(
             "claim_due",
             owner_session_id=owner_session_id,
+            requested_run_id=str(request.get("requested_run_id") or ""),
             lease_seconds=lease_seconds,
             exclude_companion_work=auto_gate_active
             or bool(request.get("exclude_companion_work", False)),

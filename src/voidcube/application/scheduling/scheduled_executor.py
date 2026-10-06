@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
@@ -88,6 +89,8 @@ class ScheduledTaskExecutorRuntime:
         self._active_run_ids: set[str] = set()
         self._companion_run_ids: set[str] = set()
         self._run_task_ids: dict[str, str] = {}
+        self._pending_claim_id = ""
+        self._pending_claim_scope: tuple[str, bool] | None = None
         self._execution_gate_acquired = False
         self._outbox = ports.writeback_outbox
 
@@ -393,8 +396,13 @@ class ScheduledTaskExecutorRuntime:
                 self._release_execution_slot()
                 return
             autonomous_mode = self._autonomous_mode_is_active()
+            claim_scope = (owner_session_id, autonomous_mode)
+            if self._pending_claim_scope != claim_scope or not self._pending_claim_id:
+                self._pending_claim_id = str(uuid.uuid4())
+                self._pending_claim_scope = claim_scope
             claim_payload = {
                 "owner_session_id": owner_session_id,
+                "requested_run_id": self._pending_claim_id,
                 "lease_seconds": self.lease_seconds,
                 "exclude_companion_work": autonomous_mode,
                 "exclude_autonomous_work": not autonomous_mode,
@@ -403,7 +411,17 @@ class ScheduledTaskExecutorRuntime:
                 response = self.ports.post_supervisor(
                     "/scheduled-tasks/claim", claim_payload
                 )
-            except ScheduledRequestRejected:
+            except ScheduledRequestRejected as exc:
+                if exc.status_code < 500:
+                    self._pending_claim_id = ""
+                else:
+                    recover = self.ports.recover_executor
+                    if recover is not None:
+                        try:
+                            recover()
+                        except Exception:
+                            logger.warning("Employee executor recovery failed", exc_info=True)
+                logger.warning("Employee claim failed; retained request for retry: %s", exc)
                 self._release_execution_slot()
                 return
             except (OSError, ValueError):
@@ -422,6 +440,7 @@ class ScheduledTaskExecutorRuntime:
                     self._release_execution_slot()
                     return
             claim = response.get("claim")
+            self._pending_claim_id = ""
             if not isinstance(claim, dict):
                 self._release_execution_slot()
                 return

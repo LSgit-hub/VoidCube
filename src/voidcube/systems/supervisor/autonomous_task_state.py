@@ -109,13 +109,20 @@ class AutonomousTaskStateService:
         )
 
     def claim_execution(self, task_id: str, **kwargs: Any) -> AutonomousChainTask:
+        committed = False
+
+        def record_claim(updated: AutonomousChainTask) -> None:
+            nonlocal committed
+            self._record_transition(updated, transition_kind="execution_claim")
+            committed = True
+
         task = self._store.claim_execution(
             task_id,
             **kwargs,
-            before_commit=lambda updated: self._record_transition(
-                updated, transition_kind="execution_claim"
-            ),
+            before_commit=record_claim,
         )
+        if not committed:
+            return task
         self._notify_status(task, "execution_claim")
         self._emit_event(AutonomousTaskStarted(
             task_id=task.task_id,

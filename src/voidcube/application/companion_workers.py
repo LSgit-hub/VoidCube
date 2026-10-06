@@ -15,7 +15,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": ["web", "file", "mail", "skills", "todo"],
+        "toolsets": ["web", "browser", "file", "mail", "skills_readonly", "todo"],
         "concurrency_limit": 1,
     },
     "research": {
@@ -24,7 +24,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": ["learn"],
+        "toolsets": ["learn", "browser_readonly", "skills_readonly"],
         "concurrency_limit": 1,
     },
     "coding": {
@@ -33,7 +33,10 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": ["file", "terminal", "code_execution", "skills", "todo"],
+        "toolsets": [
+            "learn", "browser_readonly", "file", "terminal",
+            "code_execution", "skills_readonly", "todo",
+        ],
         "concurrency_limit": 1,
     },
     "media": {
@@ -42,7 +45,7 @@ DEFAULT_COMPANION_WORKER_ROLES: dict[str, dict[str, Any]] = {
         "enabled": True,
         "provider": "",
         "model": "",
-        "toolsets": ["media", "web"],
+        "toolsets": ["media", "web", "browser_readonly", "skills_readonly"],
         "concurrency_limit": 1,
     },
 }

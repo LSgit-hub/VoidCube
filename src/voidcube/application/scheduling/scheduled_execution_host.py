@@ -81,5 +81,8 @@ class ScheduledExecutionHost:
             active_tasks=self._state.active_snapshots(),
         )
 
+    def cancel(self, task_id: str, reason: str) -> bool:
+        return self._state.cancel(task_id, reason)
+
 
 __all__ = ["ScheduledExecutionHost", "ScheduledExecutionSnapshot"]

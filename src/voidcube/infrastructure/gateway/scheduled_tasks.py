@@ -14,7 +14,7 @@ from .presence import default_gateway_url
 
 
 class SupervisorScheduledTaskClient:
-    def __init__(self, *, base_url: str | None = None, timeout_seconds: float = 10.0) -> None:
+    def __init__(self, *, base_url: str | None = None, timeout_seconds: float = 35.0) -> None:
         normalized_url = (base_url or default_gateway_url()).strip().rstrip("/")
         parsed_url = urlsplit(normalized_url)
         if (

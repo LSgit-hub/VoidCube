@@ -21,6 +21,13 @@ from voidcube.extensions.tools import model_tools
 from voidcube.extensions.tools.registry import registry
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_gateway_registration(monkeypatch):
+    # These TestClient apps own temporary databases and must never replace
+    # the user's live singleton Goal Manager registration at port 6000.
+    monkeypatch.setenv("GATEWAY_ADDRESS", "http://127.0.0.1:1")
+
+
 def test_goal_service_config_normalizes_gateway_health_interval(tmp_path):
     assert service_config({"db_path": str(tmp_path / "goals.db"), "gateway_health_interval_seconds": 1})[
         "gateway_health_interval_seconds"
@@ -155,9 +162,9 @@ def test_goal_service_refresh_reregisters_after_gateway_rejects_health(
     assert app.state.gateway_service_id == "fresh-goal-service"
     assert app.state.gateway_service_token == "fresh-token"
     assert calls == [
-        "http://127.0.0.1:6000/health/stale-goal-service",
-        "http://127.0.0.1:6000/register",
-        "http://127.0.0.1:6000/health/fresh-goal-service",
+        "http://127.0.0.1:1/health/stale-goal-service",
+        "http://127.0.0.1:1/register",
+        "http://127.0.0.1:1/health/fresh-goal-service",
     ]
 
 
@@ -213,8 +220,8 @@ def test_goal_service_refresh_re_registers_after_gateway_credentials_expire(
     assert app.state.gateway_service_id == "goal-recovered"
     assert app.state.gateway_service_token == "token-recovered"
     assert [url for url, _kwargs in calls] == [
-        "http://127.0.0.1:6000/register",
-        "http://127.0.0.1:6000/health/goal-recovered",
+        "http://127.0.0.1:1/register",
+        "http://127.0.0.1:1/health/goal-recovered",
     ]
 
 

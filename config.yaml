@@ -19,9 +19,10 @@ companion_workers:
       model: ''
       toolsets:
       - web
+      - browser
       - file
       - mail
-      - skills
+      - skills_readonly
       - todo
       concurrency_limit: 1
     research:
@@ -32,6 +33,8 @@ companion_workers:
       model: ''
       toolsets:
       - learn
+      - browser_readonly
+      - skills_readonly
       concurrency_limit: 1
     coding:
       label: 工程员工
@@ -40,10 +43,12 @@ companion_workers:
       provider: ''
       model: ''
       toolsets:
+      - learn
+      - browser_readonly
       - file
       - terminal
       - code_execution
-      - skills
+      - skills_readonly
       - todo
       concurrency_limit: 1
     media:
@@ -55,6 +60,8 @@ companion_workers:
       toolsets:
       - media
       - web
+      - browser_readonly
+      - skills_readonly
       concurrency_limit: 1
 image_generation:
   provider: agnes-ai
@@ -307,4 +314,4 @@ logging:
   backup_count: 3
 network:
   force_ipv4: false
-_config_version: 21
+_config_version: 22

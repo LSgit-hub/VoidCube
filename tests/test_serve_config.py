@@ -776,6 +776,8 @@ def test_stop_service_on_windows_terminates_venv_process_tree(monkeypatch, tmp_p
     monkeypatch.setattr(serve.sys, "platform", "win32")
     monkeypatch.setattr(serve, "_pid_alive", lambda pid: pid == 4321)
     monkeypatch.setattr(serve, "_process_belongs_to_runtime", lambda pid: True)
+    # The process and taskkill are simulated; its port must be simulated too.
+    monkeypatch.setattr(serve, "_port_listening", lambda _port: False)
     monkeypatch.setattr(
         serve.subprocess,
         "run",

@@ -36,6 +36,12 @@ TOOLSETS = {
         "tools": ["skills_list", "skill_view", "skill_manage"],
         "includes": []
     },
+
+    "skills_readonly": {
+        "description": "Discover and read skill instructions without changing the skill library",
+        "tools": ["skills_list", "skill_view"],
+        "includes": [],
+    },
     
     "file": {
         "description": "File manipulation tools: read, write, patch, search",
@@ -127,6 +133,16 @@ TOOLSETS = {
             "browser_console",
         ],
         "includes": []
+    },
+
+    "browser_readonly": {
+        "description": "Read-only browser research, including page navigation and DOM inspection",
+        "tools": [
+            "browser_navigate", "browser_snapshot", "browser_scroll",
+            "browser_back", "browser_get_images", "browser_vision",
+            "browser_console",
+        ],
+        "includes": [],
     },
 
 

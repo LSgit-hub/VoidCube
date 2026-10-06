@@ -413,6 +413,9 @@ class AIAgent:
 
         self.tool_event_sink = tool_event_sink
         self._event_port = CallbackEventPort(event_sink)
+        # Tool schemas depend on whether session-scoped goal tools are
+        # available, so bind the optional repository before building them.
+        self._session_db = session_db
         self.suppress_status_output = False
         self.thinking_callback = thinking_callback
         self.reasoning_callback = reasoning_callback
@@ -640,7 +643,6 @@ class AIAgent:
         # Session identity, DB registration, checkpointing and persistence are
         # initialized by one explicit runtime; the Agent keeps the resulting
         # owners and supplies only live state readers.
-        self._session_db = session_db
         self._parent_session_id = parent_session_id
         session_initialization = AgentSessionInitializationRuntime(
             AgentSessionInitializationPorts(

@@ -660,6 +660,25 @@ class AutonomousChainStore:
             for index, task in enumerate(snapshot.tasks):
                 if task.task_id != task_id:
                     continue
+                # A scheduler may lose the HTTP response after both claims
+                # commit. Replaying that run must return its original fence.
+                requested_run = str((context or {}).get("employee_run_id") or "")
+                if task.status == "running" and requested_run:
+                    claim_decision = next(
+                        (
+                            decision for decision in reversed(task.decision_history)
+                            if decision.context.get("attempt_id") == task.execution_lease.attempt_id
+                            and decision.context.get("employee_run_id") == requested_run
+                        ),
+                        None,
+                    )
+                    if claim_decision is not None and task.execution_lease.owner_session_id == owner:
+                        self._require_lease(
+                            task,
+                            generation=task.execution_lease.generation,
+                            attempt_id=str(task.execution_lease.attempt_id or ""),
+                        )
+                        return task
                 if task.status not in {"approved", "retry"}:
                     raise StaleExecutionLeaseError(
                         f"stale_execution_lease: task {task_id} is {task.status}, not claimable"

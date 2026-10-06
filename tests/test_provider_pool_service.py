@@ -198,7 +198,9 @@ def test_provider_pool_assigns_roles_and_protects_referenced_provider(
     assert research["provider"] == "research-endpoint"
     assert research["model"] == "research-override"
     assert research["toolsets"] == ["web", "search"]
-    assert research["recommended_toolsets"] == ["learn"]
+    assert research["recommended_toolsets"] == [
+        "learn", "browser_readonly", "skills_readonly",
+    ]
     assert research["concurrency_limit"] == 1
     assert snapshot["max_concurrent"] == 4
     assert service.dispatch_policy()["role_providers"]["research"] == "research-endpoint"
