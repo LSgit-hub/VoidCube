@@ -25,6 +25,13 @@
     dialogPreviousFocus: null,
     history: null,
     reviewQueue: []
+    ,overviewPositions: {}
+    ,overviewPan: { x: 0, y: 0 }
+    ,overviewScale: 1
+    ,focusPan: { x: 0, y: 0 }
+    ,overviewDrag: null
+    ,focusDrag: null
+    ,suppressOverviewClick: false
   };
   var projectRequestId = 0;
   var detailRequestId = 0;
@@ -456,6 +463,56 @@
     return (hash >>> 0) / 4294967296;
   }
 
+  function layoutStorageKey(projectId) {
+    return "voidcube_goal_layout:" + String(projectId || "");
+  }
+
+  function restoreLayoutState(projectId) {
+    state.overviewPositions = {};
+    state.overviewPan = { x: 0, y: 0 };
+    state.overviewScale = 1;
+    state.focusPan = { x: 0, y: 0 };
+    try {
+      var saved = JSON.parse(window.localStorage.getItem(layoutStorageKey(projectId)) || "null");
+      if (saved && saved.positions && typeof saved.positions === "object") state.overviewPositions = saved.positions;
+      if (saved && saved.pan) state.overviewPan = { x: Number(saved.pan.x) || 0, y: Number(saved.pan.y) || 0 };
+      if (saved && Number.isFinite(Number(saved.scale))) state.overviewScale = clamp(Number(saved.scale), .65, 1.8);
+    } catch (_error) {}
+  }
+
+  function persistLayoutState() {
+    if (!state.project) return;
+    try {
+      window.localStorage.setItem(layoutStorageKey(state.project.id), JSON.stringify({
+        positions: state.overviewPositions,
+        pan: state.overviewPan,
+        scale: state.overviewScale
+      }));
+    } catch (_error) {}
+  }
+
+  function svgPoint(svgElement, event) {
+    var rect = svgElement.getBoundingClientRect();
+    var viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
+    if (!viewBox || !rect.width || !rect.height) return { x: event.clientX, y: event.clientY };
+    return {
+      x: viewBox.x + (event.clientX - rect.left) * viewBox.width / rect.width,
+      y: viewBox.y + (event.clientY - rect.top) * viewBox.height / rect.height
+    };
+  }
+
+  function applyOverviewTransform() {
+    var root = $("overview-content");
+    if (!root) return;
+    root.setAttribute("transform", "translate(" + state.overviewPan.x + " " + state.overviewPan.y + ") scale(" + state.overviewScale + ")");
+    $("overview-zoom-label").textContent = Math.round(state.overviewScale * 100) + "%";
+  }
+
+  function applyFocusPan() {
+    var root = $("radial-content");
+    if (root) root.setAttribute("transform", "translate(" + state.focusPan.x + " " + state.focusPan.y + ")");
+  }
+
   function shortTitle(title, max) {
     var chars = Array.from(String(title || ""));
     return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : chars.join("");
@@ -541,6 +598,7 @@
   function renderRadial() {
     var root = $("radial-content");
     while (root.firstChild) root.removeChild(root.firstChild);
+    applyFocusPan();
     $("radial-svg").style.transform = "scale(" + state.zoom + ")";
     $("zoom-label").textContent = Math.round(state.zoom * 100) + "%";
     var focus = state.focus && normalizeNode(state.focus.focus);
@@ -558,6 +616,17 @@
     var cy = 305;
     var radius = children.length > 30 ? 48 : 56;
     var orbit = children.length <= 12 ? 185 : 172;
+    for (var starIndex = 0; starIndex < 34; starIndex += 1) {
+      var starX = 34 + stableHash(String(starIndex) + focus.id) * 832;
+      var starY = 24 + stableHash(focus.id + String(starIndex)) * 560;
+      root.appendChild(svg("circle", {
+        "class": "constellation-star",
+        cx: starX,
+        cy: starY,
+        r: starIndex % 7 === 0 ? 1.8 : 1,
+        opacity: .25 + stableHash(String(starIndex * 3) + focus.id) * .5
+      }));
+    }
     root.appendChild(svg("circle", { "class": "radial-background", cx: cx, cy: cy, r: orbit }));
     root.appendChild(svg("circle", { "class": "radial-background", cx: cx, cy: cy, r: orbit + 58 }));
     children.forEach(function (node, index) {
@@ -1570,6 +1639,7 @@
   function renderDetail(node) {
     $("detail-title").textContent = node ? node.title : "选择一个目标";
     $("edit-detail-button").hidden = !node || state.editing;
+    $("delete-detail-button").hidden = !node || state.editing;
     if (!node) {
       $("detail-content").innerHTML = reviewQueueHtml() +
         '<div class="detail-placeholder">点击中心节点查看详情。点击子节点可进入下一层目标。</div>';
@@ -1771,6 +1841,23 @@
     });
   }
 
+  function updateOverviewEdgePreview(nodeId, position) {
+    var root = $("overview-content");
+    if (!root) return;
+    root.querySelectorAll(".overview-edge").forEach(function (line) {
+      var sourceId = line.getAttribute("data-source-id");
+      var targetId = line.getAttribute("data-target-id");
+      if (sourceId === nodeId) {
+        line.setAttribute("x1", position.x);
+        line.setAttribute("y1", position.y);
+      }
+      if (targetId === nodeId) {
+        line.setAttribute("x2", position.x);
+        line.setAttribute("y2", position.y);
+      }
+    });
+  }
+
   function renderOverview(expectedProjectId, expectedRequestId) {
     var root = $("overview-content");
     var payload = state.overview;
@@ -1794,6 +1881,12 @@
       if (requestId !== state.overviewRequestId) return;
       if (expectedProjectId && !currentProjectRequestValid(expectedProjectId, expectedRequestId)) return;
       var positions = layout.positions;
+      nodes.forEach(function (node) {
+        var saved = state.overviewPositions[node.id];
+        if (saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))) {
+          positions[node.id] = { x: Number(saved.x), y: Number(saved.y) };
+        }
+      });
       var overviewSvg = $("overview-svg");
       overviewSvg.setAttribute("viewBox", "0 0 " + layout.width + " " + layout.height);
       overviewSvg.setAttribute("width", layout.width);
@@ -1807,7 +1900,10 @@
         if (edge.edge_type === "depends_on") edgeClass += " overview-edge-dependency";
         if (edge.edge_type === "blocks") edgeClass += " overview-edge-block";
         fragment.appendChild(svg("line", {
-          "class": edgeClass, x1: source.x, y1: source.y, x2: target.x, y2: target.y
+          "class": edgeClass,
+          "data-source-id": edge.source_id || edge.sourceId,
+          "data-target-id": edge.target_id || edge.targetId,
+          x1: source.x, y1: source.y, x2: target.x, y2: target.y
         }));
       });
       var focusId = state.focus && state.focus.focus && state.focus.focus.id;
@@ -1825,6 +1921,8 @@
           "aria-label": node.title + "，" + statusLabel(node.status) + "，完成度 " + percent(node.progress),
           "aria-keyshortcuts": "Enter Space Shift+F10"
         });
+        group.setAttribute("data-base-x", position.x);
+        group.setAttribute("data-base-y", position.y);
         group.appendChild(svg("circle", {
           cx: position.x, cy: position.y, r: node.id === focusId ? 13 : compact ? 7 : 9,
           fill: progressColor(node.progress)
@@ -1839,7 +1937,54 @@
           label.textContent = shortTitle(node.title, 18);
           group.appendChild(label);
         }
-        group.addEventListener("click", function () { focusNode(node.id, node.id !== focusId); });
+        group.addEventListener("click", function () {
+          if (state.suppressOverviewClick) {
+            state.suppressOverviewClick = false;
+            return;
+          }
+          focusNode(node.id, node.id !== focusId);
+        });
+        group.addEventListener("pointerdown", function (event) {
+          if (event.button !== 0) return;
+          event.stopPropagation();
+          var point = svgPoint(overviewSvg, event);
+          state.overviewDrag = {
+            nodeId: node.id,
+            group: group,
+            pointerId: event.pointerId,
+            start: point,
+            base: { x: position.x, y: position.y },
+            current: { x: position.x, y: position.y },
+            moved: false
+          };
+          group.classList.add("is-dragging");
+          group.setPointerCapture(event.pointerId);
+        });
+        group.addEventListener("pointermove", function (event) {
+          var drag = state.overviewDrag;
+          if (!drag || drag.group !== group) return;
+          var point = svgPoint(overviewSvg, event);
+          var next = {
+            x: drag.base.x + (point.x - drag.start.x) / state.overviewScale,
+            y: drag.base.y + (point.y - drag.start.y) / state.overviewScale
+          };
+          if (Math.abs(next.x - drag.base.x) + Math.abs(next.y - drag.base.y) > 3) drag.moved = true;
+          drag.current = next;
+          group.setAttribute("transform", "translate(" + (next.x - position.x) + " " + (next.y - position.y) + ")");
+          updateOverviewEdgePreview(node.id, next);
+        });
+        group.addEventListener("pointerup", function (event) {
+          var drag = state.overviewDrag;
+          if (!drag || drag.group !== group) return;
+          if (group.hasPointerCapture(event.pointerId)) group.releasePointerCapture(event.pointerId);
+          group.classList.remove("is-dragging");
+          state.overviewDrag = null;
+          if (!drag.moved) return;
+          state.overviewPositions[node.id] = drag.current;
+          state.suppressOverviewClick = true;
+          persistLayoutState();
+          renderOverview(expectedProjectId, expectedRequestId);
+        });
         group.addEventListener("contextmenu", function (event) {
           event.preventDefault();
           openNodeMenu(node, event.clientX, event.clientY);
@@ -1858,12 +2003,19 @@
         fragment.appendChild(group);
       });
       root.appendChild(fragment);
+      applyOverviewTransform();
     });
   }
 
   function detailField(label, value) {
     return '<div class="detail-field"><span>' + escapeHtml(label) +
       "</span><strong>" + escapeHtml(value) + "</strong></div>";
+  }
+
+  function setOverviewScale(value) {
+    state.overviewScale = clamp(Number(value) || 1, .65, 1.8);
+    persistLayoutState();
+    applyOverviewTransform();
   }
 
   function populateProjects() {
@@ -1906,6 +2058,7 @@
       state.project = state.projects.find(function (project) {
         return project.id === selectId;
       }) || state.projects[0] || null;
+      if (state.project) restoreLayoutState(state.project.id);
       state.lastEventId = null;
       populateProjects();
       if (!state.project) {
@@ -1974,6 +2127,7 @@
     state.forwardStack = [];
     state.selected = null;
     state.lastEventId = null;
+    if (state.project) restoreLayoutState(state.project.id);
     updateNodeHash(state.project && state.project.rootNodeId);
     if (state.project) {
       loadFocus(state.project.rootNodeId).then(startEventStream);
@@ -2056,6 +2210,16 @@
     renderDetail(state.selected);
     $("detail-edit-title").focus();
   });
+  $("delete-detail-button").addEventListener("click", function () {
+    if (!state.selected) return;
+    var node = state.selected;
+    openConfirm(
+      "删除目标节点",
+      "目标会从当前项目视图中移除，并保留在审计记录中。包含子目标的节点可能需要服务端再次确认。",
+      function () { requestDelete(node); },
+      "确认删除"
+    );
+  });
   $("add-child-button").addEventListener("click", function () {
     openCreateChildDialog(currentCreateParent());
   });
@@ -2081,11 +2245,70 @@
     $("parents-mode-button").classList.remove("active");
     loadOverview();
   });
+  $("focus-reset-button").addEventListener("click", function () {
+    state.zoom = 1;
+    state.focusPan = { x: 0, y: 0 };
+    renderRadial();
+  });
+  $("overview-zoom-in").addEventListener("click", function () { setOverviewScale(state.overviewScale + .1); });
+  $("overview-zoom-out").addEventListener("click", function () { setOverviewScale(state.overviewScale - .1); });
+  $("overview-fit-button").addEventListener("click", function () {
+    state.overviewPan = { x: 0, y: 0 };
+    state.overviewScale = 1;
+    persistLayoutState();
+    applyOverviewTransform();
+  });
   $("radial-wrap").addEventListener("wheel", function (event) {
     event.preventDefault();
     state.zoom = clamp(state.zoom + (event.deltaY < 0 ? .05 : -.05), .82, 1.18);
     renderRadial();
   }, { passive: false });
+  $("overview-svg").addEventListener("pointerdown", function (event) {
+    var target = event.target;
+    if (target && target.closest && target.closest(".overview-node")) return;
+    var point = svgPoint($("overview-svg"), event);
+    state.overviewPanDrag = { pointerId: event.pointerId, start: point, base: { x: state.overviewPan.x, y: state.overviewPan.y } };
+    $("overview-svg").classList.add("is-panning");
+    $("overview-svg").setPointerCapture(event.pointerId);
+  });
+  $("overview-svg").addEventListener("pointermove", function (event) {
+    var drag = state.overviewPanDrag;
+    if (!drag) return;
+    var point = svgPoint($("overview-svg"), event);
+    state.overviewPan = {
+      x: drag.base.x + (point.x - drag.start.x) / state.overviewScale,
+      y: drag.base.y + (point.y - drag.start.y) / state.overviewScale
+    };
+    applyOverviewTransform();
+  });
+  $("overview-svg").addEventListener("pointerup", function (event) {
+    if (!state.overviewPanDrag) return;
+    if ($("overview-svg").hasPointerCapture(event.pointerId)) $("overview-svg").releasePointerCapture(event.pointerId);
+    state.overviewPanDrag = null;
+    $("overview-svg").classList.remove("is-panning");
+    persistLayoutState();
+  });
+  $("radial-svg").addEventListener("pointerdown", function (event) {
+    var target = event.target;
+    if (target && target.closest && target.closest(".node-group")) return;
+    var point = svgPoint($("radial-svg"), event);
+    state.focusDrag = { pointerId: event.pointerId, start: point, base: { x: state.focusPan.x, y: state.focusPan.y } };
+    $("radial-svg").classList.add("is-panning");
+    $("radial-svg").setPointerCapture(event.pointerId);
+  });
+  $("radial-svg").addEventListener("pointermove", function (event) {
+    var drag = state.focusDrag;
+    if (!drag) return;
+    var point = svgPoint($("radial-svg"), event);
+    state.focusPan = { x: drag.base.x + point.x - drag.start.x, y: drag.base.y + point.y - drag.start.y };
+    applyFocusPan();
+  });
+  $("radial-svg").addEventListener("pointerup", function (event) {
+    if (!state.focusDrag) return;
+    if ($("radial-svg").hasPointerCapture(event.pointerId)) $("radial-svg").releasePointerCapture(event.pointerId);
+    state.focusDrag = null;
+    $("radial-svg").classList.remove("is-panning");
+  });
   window.addEventListener("popstate", function () {
     var nodeId = readNodeHash();
     if (nodeId) {

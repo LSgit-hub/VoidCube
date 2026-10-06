@@ -11,7 +11,7 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">G</span>
+        <span class="brand-mark" aria-hidden="true">✦</span>
         <div>
           <p class="eyebrow">VOIDCUBE / GOAL SERVICE</p>
           <h1>目标管理</h1>
@@ -63,6 +63,7 @@
             <button id="add-child-button" class="button button-primary" type="button" title="为当前目标创建子目标">+ 子目标</button>
             <button id="back-button" class="icon-button" type="button" title="后退" aria-label="后退">‹</button>
             <button id="forward-button" class="icon-button" type="button" title="前进" aria-label="前进">›</button>
+            <button id="focus-reset-button" class="icon-button" type="button" title="重置焦点视图" aria-label="重置焦点视图">⌖</button>
             <span id="zoom-label" class="zoom-label">100%</span>
           </div>
         </div>
@@ -104,6 +105,12 @@
               <button id="parents-mode-button" class="segment-button active" type="button">父子关系</button>
               <button id="dependencies-mode-button" class="segment-button" type="button">依赖关系</button>
             </div>
+            <div class="view-actions overview-actions" aria-label="总览视图工具">
+              <button id="overview-zoom-out" class="icon-button" type="button" title="缩小总览" aria-label="缩小总览">−</button>
+              <span id="overview-zoom-label" class="zoom-label">100%</span>
+              <button id="overview-zoom-in" class="icon-button" type="button" title="放大总览" aria-label="放大总览">+</button>
+              <button id="overview-fit-button" class="button button-quiet" type="button" title="适配总览" aria-label="适配总览">适配</button>
+            </div>
           </div>
           <div class="overview-wrap">
             <svg id="overview-svg" class="overview-svg" viewBox="0 0 900 260" role="img" aria-label="全局目标总览">
@@ -122,6 +129,7 @@
           </div>
           <div class="detail-actions">
             <button id="edit-detail-button" class="button button-quiet" type="button" title="编辑目标" hidden>编辑</button>
+            <button id="delete-detail-button" class="button button-danger" type="button" title="删除目标" hidden>删除</button>
             <button id="close-detail-button" class="icon-button" type="button" title="关闭详情" aria-label="关闭详情">×</button>
           </div>
         </div>
