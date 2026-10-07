@@ -25,13 +25,15 @@
     dialogPreviousFocus: null,
     history: null,
     reviewQueue: []
-    ,overviewPositions: {}
     ,overviewPan: { x: 0, y: 0 }
     ,overviewScale: 1
     ,focusPan: { x: 0, y: 0 }
-    ,overviewDrag: null
-    ,focusDrag: null
+    ,overviewPanDrag: null
+    ,focusPanDrag: null
     ,suppressOverviewClick: false
+    ,suppressRadialClick: false
+    ,touchPointers: { overview: {}, focus: {} }
+    ,touchGestures: { overview: null, focus: null }
   };
   var projectRequestId = 0;
   var detailRequestId = 0;
@@ -468,13 +470,11 @@
   }
 
   function restoreLayoutState(projectId) {
-    state.overviewPositions = {};
     state.overviewPan = { x: 0, y: 0 };
     state.overviewScale = 1;
     state.focusPan = { x: 0, y: 0 };
     try {
       var saved = JSON.parse(window.localStorage.getItem(layoutStorageKey(projectId)) || "null");
-      if (saved && saved.positions && typeof saved.positions === "object") state.overviewPositions = saved.positions;
       if (saved && saved.pan) state.overviewPan = { x: Number(saved.pan.x) || 0, y: Number(saved.pan.y) || 0 };
       if (saved && Number.isFinite(Number(saved.scale))) state.overviewScale = clamp(Number(saved.scale), .65, 1.8);
     } catch (_error) {}
@@ -484,21 +484,151 @@
     if (!state.project) return;
     try {
       window.localStorage.setItem(layoutStorageKey(state.project.id), JSON.stringify({
-        positions: state.overviewPositions,
         pan: state.overviewPan,
         scale: state.overviewScale
       }));
     } catch (_error) {}
   }
 
-  function svgPoint(svgElement, event) {
+  function svgClientDelta(svgElement, startClient, event, divisor) {
     var rect = svgElement.getBoundingClientRect();
     var viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
-    if (!viewBox || !rect.width || !rect.height) return { x: event.clientX, y: event.clientY };
+    var scale = Number(divisor) || 1;
+    if (!viewBox || !rect.width || !rect.height) {
+      return { x: (event.clientX - startClient.x) / scale, y: (event.clientY - startClient.y) / scale };
+    }
     return {
-      x: viewBox.x + (event.clientX - rect.left) * viewBox.width / rect.width,
-      y: viewBox.y + (event.clientY - rect.top) * viewBox.height / rect.height
+      x: (event.clientX - startClient.x) * viewBox.width / rect.width / scale,
+      y: (event.clientY - startClient.y) * viewBox.height / rect.height / scale
     };
+  }
+
+  function svgPixelDelta(svgElement, deltaX, deltaY, divisor) {
+    var rect = svgElement.getBoundingClientRect();
+    var viewBox = svgElement.viewBox && svgElement.viewBox.baseVal;
+    var scale = Number(divisor) || 1;
+    if (!viewBox || !rect.width || !rect.height) {
+      return { x: deltaX / scale, y: deltaY / scale };
+    }
+    return {
+      x: deltaX * viewBox.width / rect.width / scale,
+      y: deltaY * viewBox.height / rect.height / scale
+    };
+  }
+
+  function surfaceSvg(surface) {
+    return $(surface === "overview" ? "overview-svg" : "radial-svg");
+  }
+
+  function surfaceScale(surface) {
+    return surface === "overview" ? state.overviewScale : state.zoom;
+  }
+
+  function capturePointer(svgElement, pointerId) {
+    try { svgElement.setPointerCapture(pointerId); } catch (_error) {}
+  }
+
+  function releasePointer(svgElement, pointerId) {
+    try {
+      if (svgElement.hasPointerCapture(pointerId)) svgElement.releasePointerCapture(pointerId);
+    } catch (_error) {}
+  }
+
+  function setSurfaceScale(surface, value) {
+    if (surface === "overview") {
+      setOverviewScale(value);
+      return;
+    }
+    state.zoom = clamp(Number(value) || 1, .65, 1.8);
+    applyFocusScale();
+  }
+
+  function applyFocusScale() {
+    $("radial-svg").style.transform = "scale(" + state.zoom + ")";
+    $("zoom-label").textContent = Math.round(state.zoom * 100) + "%";
+  }
+
+  function touchPointerCount(surface) {
+    return Object.keys(state.touchPointers[surface]).length;
+  }
+
+  function touchPointerList(surface) {
+    return Object.keys(state.touchPointers[surface]).map(function (id) {
+      return state.touchPointers[surface][id];
+    });
+  }
+
+  function touchMidpoint(first, second) {
+    return { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+  }
+
+  function touchDistance(first, second) {
+    return Math.max(1, Math.hypot(first.x - second.x, first.y - second.y));
+  }
+
+  function beginTouchPointer(surface, event) {
+    var svgElement = surfaceSvg(surface);
+    var pointers = state.touchPointers[surface];
+    pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+    capturePointer(svgElement, event.pointerId);
+    if (touchPointerCount(surface) !== 2) return;
+    var points = touchPointerList(surface);
+    var midpoint = touchMidpoint(points[0], points[1]);
+    state.touchGestures[surface] = {
+      startMidpoint: midpoint,
+      startDistance: touchDistance(points[0], points[1]),
+      basePan: surface === "overview" ? { x: state.overviewPan.x, y: state.overviewPan.y } : { x: state.focusPan.x, y: state.focusPan.y },
+      baseScale: surfaceScale(surface),
+      moved: false
+    };
+  }
+
+  function moveTouchPointer(surface, event) {
+    var pointers = state.touchPointers[surface];
+    if (!pointers[event.pointerId]) return;
+    pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
+    var gesture = state.touchGestures[surface];
+    if (!gesture || touchPointerCount(surface) < 2) return;
+    var points = touchPointerList(surface);
+    var midpoint = touchMidpoint(points[0], points[1]);
+    var distance = touchDistance(points[0], points[1]);
+    var svgElement = surfaceSvg(surface);
+    var panDelta = svgPixelDelta(
+      svgElement,
+      midpoint.x - gesture.startMidpoint.x,
+      midpoint.y - gesture.startMidpoint.y,
+      gesture.baseScale
+    );
+    var scale = clamp(gesture.baseScale * distance / gesture.startDistance, .65, 1.8);
+    if (Math.abs(panDelta.x) + Math.abs(panDelta.y) > 3 || Math.abs(scale - gesture.baseScale) > .01) {
+      gesture.moved = true;
+    }
+    if (surface === "overview") {
+      state.overviewPan = { x: gesture.basePan.x + panDelta.x, y: gesture.basePan.y + panDelta.y };
+      state.overviewScale = scale;
+      applyOverviewTransform();
+    } else {
+      state.focusPan = { x: gesture.basePan.x + panDelta.x, y: gesture.basePan.y + panDelta.y };
+      state.zoom = scale;
+      applyFocusPan();
+      applyFocusScale();
+    }
+  }
+
+  function endTouchPointer(surface, event) {
+    var svgElement = surfaceSvg(surface);
+    var gesture = state.touchGestures[surface];
+    releasePointer(svgElement, event.pointerId);
+    delete state.touchPointers[surface][event.pointerId];
+    if (gesture && gesture.moved) {
+      if (surface === "overview") {
+        state.suppressOverviewClick = true;
+        persistLayoutState();
+      } else {
+        state.suppressRadialClick = true;
+      }
+    }
+    if (!touchPointerCount(surface)) state.touchGestures[surface] = null;
   }
 
   function applyOverviewTransform() {
@@ -574,6 +704,10 @@
     group.appendChild(label);
     group.appendChild(progressLabel);
     group.addEventListener("click", function () {
+      if (state.suppressRadialClick) {
+        state.suppressRadialClick = false;
+        return;
+      }
       if (focused) selectNode(node.id);
       else focusNode(node.id, true);
     });
@@ -599,8 +733,7 @@
     var root = $("radial-content");
     while (root.firstChild) root.removeChild(root.firstChild);
     applyFocusPan();
-    $("radial-svg").style.transform = "scale(" + state.zoom + ")";
-    $("zoom-label").textContent = Math.round(state.zoom * 100) + "%";
+    applyFocusScale();
     var focus = state.focus && normalizeNode(state.focus.focus);
     if (!focus) {
       $("empty-state").hidden = false;
@@ -1841,23 +1974,6 @@
     });
   }
 
-  function updateOverviewEdgePreview(nodeId, position) {
-    var root = $("overview-content");
-    if (!root) return;
-    root.querySelectorAll(".overview-edge").forEach(function (line) {
-      var sourceId = line.getAttribute("data-source-id");
-      var targetId = line.getAttribute("data-target-id");
-      if (sourceId === nodeId) {
-        line.setAttribute("x1", position.x);
-        line.setAttribute("y1", position.y);
-      }
-      if (targetId === nodeId) {
-        line.setAttribute("x2", position.x);
-        line.setAttribute("y2", position.y);
-      }
-    });
-  }
-
   function renderOverview(expectedProjectId, expectedRequestId) {
     var root = $("overview-content");
     var payload = state.overview;
@@ -1881,12 +1997,6 @@
       if (requestId !== state.overviewRequestId) return;
       if (expectedProjectId && !currentProjectRequestValid(expectedProjectId, expectedRequestId)) return;
       var positions = layout.positions;
-      nodes.forEach(function (node) {
-        var saved = state.overviewPositions[node.id];
-        if (saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))) {
-          positions[node.id] = { x: Number(saved.x), y: Number(saved.y) };
-        }
-      });
       var overviewSvg = $("overview-svg");
       overviewSvg.setAttribute("viewBox", "0 0 " + layout.width + " " + layout.height);
       overviewSvg.setAttribute("width", layout.width);
@@ -1943,47 +2053,6 @@
             return;
           }
           focusNode(node.id, node.id !== focusId);
-        });
-        group.addEventListener("pointerdown", function (event) {
-          if (event.button !== 0) return;
-          event.stopPropagation();
-          var point = svgPoint(overviewSvg, event);
-          state.overviewDrag = {
-            nodeId: node.id,
-            group: group,
-            pointerId: event.pointerId,
-            start: point,
-            base: { x: position.x, y: position.y },
-            current: { x: position.x, y: position.y },
-            moved: false
-          };
-          group.classList.add("is-dragging");
-          group.setPointerCapture(event.pointerId);
-        });
-        group.addEventListener("pointermove", function (event) {
-          var drag = state.overviewDrag;
-          if (!drag || drag.group !== group) return;
-          var point = svgPoint(overviewSvg, event);
-          var next = {
-            x: drag.base.x + (point.x - drag.start.x) / state.overviewScale,
-            y: drag.base.y + (point.y - drag.start.y) / state.overviewScale
-          };
-          if (Math.abs(next.x - drag.base.x) + Math.abs(next.y - drag.base.y) > 3) drag.moved = true;
-          drag.current = next;
-          group.setAttribute("transform", "translate(" + (next.x - position.x) + " " + (next.y - position.y) + ")");
-          updateOverviewEdgePreview(node.id, next);
-        });
-        group.addEventListener("pointerup", function (event) {
-          var drag = state.overviewDrag;
-          if (!drag || drag.group !== group) return;
-          if (group.hasPointerCapture(event.pointerId)) group.releasePointerCapture(event.pointerId);
-          group.classList.remove("is-dragging");
-          state.overviewDrag = null;
-          if (!drag.moved) return;
-          state.overviewPositions[node.id] = drag.current;
-          state.suppressOverviewClick = true;
-          persistLayoutState();
-          renderOverview(expectedProjectId, expectedRequestId);
         });
         group.addEventListener("contextmenu", function (event) {
           event.preventDefault();
@@ -2260,54 +2329,125 @@
   });
   $("radial-wrap").addEventListener("wheel", function (event) {
     event.preventDefault();
-    state.zoom = clamp(state.zoom + (event.deltaY < 0 ? .05 : -.05), .82, 1.18);
-    renderRadial();
+    var continuous = Math.abs(event.deltaY) < 50;
+    if (event.ctrlKey || !continuous) {
+      setSurfaceScale("focus", state.zoom + (event.deltaY < 0 ? .05 : -.05));
+      return;
+    }
+    state.focusPan.x -= event.deltaX * .7;
+    state.focusPan.y -= event.deltaY * .7;
+    applyFocusPan();
+  }, { passive: false });
+  $("overview-wrap").addEventListener("wheel", function (event) {
+    event.preventDefault();
+    var continuous = Math.abs(event.deltaY) < 50;
+    if (event.ctrlKey || !continuous) {
+      setSurfaceScale("overview", state.overviewScale + (event.deltaY < 0 ? .08 : -.08));
+      return;
+    }
+    state.overviewPan.x -= event.deltaX * .7;
+    state.overviewPan.y -= event.deltaY * .7;
+    applyOverviewTransform();
+    persistLayoutState();
   }, { passive: false });
   $("overview-svg").addEventListener("pointerdown", function (event) {
-    var target = event.target;
-    if (target && target.closest && target.closest(".overview-node")) return;
-    var point = svgPoint($("overview-svg"), event);
-    state.overviewPanDrag = { pointerId: event.pointerId, start: point, base: { x: state.overviewPan.x, y: state.overviewPan.y } };
+    if (event.pointerType === "touch") {
+      beginTouchPointer("overview", event);
+      return;
+    }
+    if (event.button !== 0) return;
+    var overviewSvg = $("overview-svg");
+    state.overviewPanDrag = {
+      pointerId: event.pointerId,
+      startClient: { x: event.clientX, y: event.clientY },
+      base: { x: state.overviewPan.x, y: state.overviewPan.y },
+      moved: false
+    };
     $("overview-svg").classList.add("is-panning");
-    $("overview-svg").setPointerCapture(event.pointerId);
+    capturePointer(overviewSvg, event.pointerId);
   });
   $("overview-svg").addEventListener("pointermove", function (event) {
+    if (event.pointerType === "touch") {
+      moveTouchPointer("overview", event);
+      return;
+    }
     var drag = state.overviewPanDrag;
     if (!drag) return;
-    var point = svgPoint($("overview-svg"), event);
+    var delta = svgClientDelta($("overview-svg"), drag.startClient, event, state.overviewScale);
+    if (Math.abs(delta.x) + Math.abs(delta.y) > 3) drag.moved = true;
     state.overviewPan = {
-      x: drag.base.x + (point.x - drag.start.x) / state.overviewScale,
-      y: drag.base.y + (point.y - drag.start.y) / state.overviewScale
+      x: drag.base.x + delta.x,
+      y: drag.base.y + delta.y
     };
     applyOverviewTransform();
   });
   $("overview-svg").addEventListener("pointerup", function (event) {
-    if (!state.overviewPanDrag) return;
-    if ($("overview-svg").hasPointerCapture(event.pointerId)) $("overview-svg").releasePointerCapture(event.pointerId);
+    if (event.pointerType === "touch") {
+      endTouchPointer("overview", event);
+      return;
+    }
+    var drag = state.overviewPanDrag;
+    if (!drag) return;
+    releasePointer($("overview-svg"), event.pointerId);
     state.overviewPanDrag = null;
     $("overview-svg").classList.remove("is-panning");
-    persistLayoutState();
+    if (drag.moved) {
+      state.suppressOverviewClick = true;
+      persistLayoutState();
+    }
+  });
+  $("overview-svg").addEventListener("pointercancel", function () {
+    state.overviewPanDrag = null;
+    $("overview-svg").classList.remove("is-panning");
+  });
+  $("overview-svg").addEventListener("pointercancel", function (event) {
+    if (event.pointerType === "touch") endTouchPointer("overview", event);
   });
   $("radial-svg").addEventListener("pointerdown", function (event) {
-    var target = event.target;
-    if (target && target.closest && target.closest(".node-group")) return;
-    var point = svgPoint($("radial-svg"), event);
-    state.focusDrag = { pointerId: event.pointerId, start: point, base: { x: state.focusPan.x, y: state.focusPan.y } };
+    if (event.pointerType === "touch") {
+      beginTouchPointer("focus", event);
+      return;
+    }
+    if (event.button !== 0) return;
+    state.focusPanDrag = {
+      pointerId: event.pointerId,
+      startClient: { x: event.clientX, y: event.clientY },
+      base: { x: state.focusPan.x, y: state.focusPan.y },
+      moved: false
+    };
     $("radial-svg").classList.add("is-panning");
-    $("radial-svg").setPointerCapture(event.pointerId);
+    capturePointer($("radial-svg"), event.pointerId);
   });
   $("radial-svg").addEventListener("pointermove", function (event) {
-    var drag = state.focusDrag;
+    if (event.pointerType === "touch") {
+      moveTouchPointer("focus", event);
+      return;
+    }
+    var drag = state.focusPanDrag;
     if (!drag) return;
-    var point = svgPoint($("radial-svg"), event);
-    state.focusPan = { x: drag.base.x + point.x - drag.start.x, y: drag.base.y + point.y - drag.start.y };
+    var delta = svgClientDelta($("radial-svg"), drag.startClient, event, state.zoom);
+    if (Math.abs(delta.x) + Math.abs(delta.y) > 3) drag.moved = true;
+    state.focusPan = { x: drag.base.x + delta.x, y: drag.base.y + delta.y };
     applyFocusPan();
   });
   $("radial-svg").addEventListener("pointerup", function (event) {
-    if (!state.focusDrag) return;
-    if ($("radial-svg").hasPointerCapture(event.pointerId)) $("radial-svg").releasePointerCapture(event.pointerId);
-    state.focusDrag = null;
+    if (event.pointerType === "touch") {
+      endTouchPointer("focus", event);
+      return;
+    }
+    var drag = state.focusPanDrag;
+    if (!drag) return;
+    releasePointer($("radial-svg"), event.pointerId);
+    state.focusPanDrag = null;
     $("radial-svg").classList.remove("is-panning");
+    if (drag.moved) state.suppressRadialClick = true;
+  });
+  $("radial-svg").addEventListener("pointercancel", function () {
+    state.focusPanDrag = null;
+    $("radial-svg").classList.remove("is-panning");
+  });
+  $("radial-svg").addEventListener("pointercancel", function (event) {
+    if (event.pointerType === "touch") endTouchPointer("focus", event);
   });
   window.addEventListener("popstate", function () {
     var nodeId = readNodeHash();

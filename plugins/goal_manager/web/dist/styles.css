@@ -735,12 +735,11 @@ body {
     radial-gradient(circle at 89% 58%, rgba(241,199,122,.72) 0 1px, transparent 1.5px),
     radial-gradient(circle at 74% 84%, rgba(255,255,255,.56) 0 1px, transparent 1.5px);
 }
-.radial-svg { cursor: grab; }
+.radial-svg { cursor: grab; user-select: none; touch-action: none; }
 .radial-svg.is-panning, .overview-svg.is-panning { cursor: grabbing; }
 .overview-wrap { overflow: hidden; }
-.overview-svg { width: max(100%, 1080px); height: auto; min-height: 210px; cursor: grab; }
+.overview-svg { width: max(100%, 1080px); height: auto; min-height: 210px; cursor: grab; user-select: none; touch-action: none; }
 .overview-node { cursor: grab; }
-.overview-node.is-dragging { cursor: grabbing; opacity: 1; }
 .overview-node circle { stroke: rgba(232, 245, 255, .6); stroke-width: 1.2; }
 .overview-node.focused circle { fill: var(--cyan); filter: drop-shadow(0 0 8px rgba(100,230,226,.7)); }
 .overview-node.direct circle { stroke: var(--cyan); filter: drop-shadow(0 0 5px rgba(100,230,226,.38)); }
