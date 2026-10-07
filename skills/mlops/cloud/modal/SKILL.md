@@ -1,5 +1,5 @@
 ---
-name: modal-serverless-gpu
+name: modal
 description: 用于运行机器学习工作负载的无服务器GPU云平台。当您需要按需GPU访问而无需管理基础设施、将ML模型部署为API或运行具有自动扩展功能的批处理作业时使用。
 version: 1.0.0
 author: Orchestra Research

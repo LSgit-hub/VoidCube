@@ -1,5 +1,5 @@
 ---
-name: fine-tuning-with-trl
+name: trl-fine-tuning
 description: 使用TRL通过强化学习微调LLM - SFT用于指令微调、DPO用于偏好对齐、PPO/GRPO用于奖励优化（含GRPO专项深度指南）,以及奖励模型训练。当需要RLHF、将模型与偏好对齐或从人类反馈训练时使用。GRPO相关请直接使用本技能，已合并原grpo-rl-training内容。与HuggingFace Transformers配合使用。
 version: 1.0.0
 author: Orchestra Research
@@ -453,4 +453,3 @@ config = PPOConfig(
   - "Direct Preference Optimization: Your Language Model is Secretly a Reward Model" (DPO, 2023)
   - "Group Relative Policy Optimization" (GRPO, 2024)
 - 示例: https://github.com/huggingface/trl/tree/main/examples/scripts
-

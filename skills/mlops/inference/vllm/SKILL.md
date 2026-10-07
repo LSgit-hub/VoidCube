@@ -1,5 +1,5 @@
 ---
-name: serving-llms-vllm
+name: vllm
 description: 使用vLLM的PagedAttention和连续批处理高吞吐量服务LLM。部署生产LLM API、优化推理延迟/吞吐量或在有限GPU内存下服务模型时使用。支持OpenAI兼容端点、量化（GPTQ/AWQ/FP8）和张量并行。
 version: 1.0.0
 author: Orchestra Research

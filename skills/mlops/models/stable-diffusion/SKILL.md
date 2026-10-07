@@ -1,5 +1,5 @@
 ---
-name: stable-diffusion-image-generation
+name: stable-diffusion
 description: 通过HuggingFace Diffusers使用Stable Diffusion模型进行最先进的文本到图像生成。当需要从文本提示生成图像、执行图像到图像转换、修复或构建自定义扩散流水线时使用。
 version: 1.0.0
 author: Orchestra Research

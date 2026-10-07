@@ -1,68 +1,24 @@
 ---
 name: archive-agent-notes
-description: Use when adding, auditing, pruning, archiving, restoring, or reviewing Agent Notes in deepseek-harness; checks every new note for superseded active records, classifies implemented notes by future decision value, deletes rejected notes that no longer prevent a tempting fallacy, and applies the frozen archived/{kind} triplet and manifest rules.
+description: 审计和整理 VoidCube 项目的长期记录、决策说明与维护文档。需要判断记录是否仍有未来价值、是否已被当前代码或文档取代、以及是否应归档或删除时使用。
 ---
 
-# Archive DeepSeek Harness Agent Notes
+# 归档项目记录
 
-Reduce the active decision corpus without erasing history that can still guide work. Judge every note semantically; word count and age are discovery aids, never archive criteria.
+以当前仓库和运行时代码为事实来源，整理 `docs/`、`Mem/docs/`、技能文档和其他明确的项目记录。先确认记录描述的决策、约束或风险仍由谁负责，再判断它是当前规则、历史证据、待办事项还是已经失效的重复内容。
 
-## Read the contracts
+## 判断规则
 
-Read [the Agent Note rules](../../notes/README.md), [the archive instructions](../../notes/archived/AGENTS.md), and the applicable active lifecycle instructions before classifying. Use current code, configuration, package docs, generated catalogs, newer Agent Notes, and inbound links to establish whether a rationale still owns or constrains anything.
+- 保留仍能约束实现、解释安全边界、记录数据所有权或防止错误回归的记录。
+- 当当前代码、测试或正式文档已经完整取代记录时，保留必要的历史背景，删除重复的操作清单。
+- 记录如果提出未实现方案，不要把它写成已交付事实；需要继续推进时转为明确的 issue 或 TODO。
+- 没有仓库约定的归档目录时只输出审计报告，不自行创建历史目录或移动文件。
 
-## Check supersession when adding a note
+## 工作流程
 
-Every new Agent Note triggers a scoped audit of active notes covering the same decision, mechanism, or rejected alternative. Classify each full or partial supersession while writing the new note: archive qualifying implemented triplets in the same PR, retain and cross-link partial supersessions or independently useful rationale, reject obsolete proposals, and delete rejected notes that no longer prevent a plausible mistake. Apply the Agent Note consolidation rule when the new owner absorbs every unique proposition; do not defer a known match to a later corpus audit.
+1. 确认范围，读取根目录 `AGENTS.md`、受影响模块和现行测试。
+2. 搜索记录被代码、文档、技能和测试引用的位置，检查引用的路径与事实是否仍有效。
+3. 为每条记录标记保留、归档、删除或需要人工决定，并写出证据和影响。
+4. 只有用户明确要求修改时才移动或删除文件；修改后运行相关测试和 `git diff --check`。
 
-## Classify by future value
-
-Apply these lifecycle-specific outcomes:
-
-- **Implemented — keep active:** retain a note when its rationale, alternatives, negative guarantees, durable/wire semantics, ownership boundary, security rule, or reintroduction condition is likely to guide a future change. Length does not matter.
-- **Implemented — archive:** archive a note when the shipped decision is complete and its body is unlikely to guide future work, such as one-off UI chrome, a narrow adapter, a minor closed bug, superseded implementation detail, or process history whose current behavior is obvious elsewhere.
-- **Proposed — never archive:** keep a live proposal active; if it is no longer worth pursuing, reject it with an honest reason and satisfy the rejected lifecycle format.
-- **Rejected — keep only as a guardrail:** retain a rejection only when the losing proposal remains a tempting, meaningful mistake and the note explains why it loses.
-- **Rejected — delete:** delete the whole triplet when the rejected idea is obsolete, superseded, no longer plausible, or unlikely to prevent re-litigation. Repair or delete inbound links.
-
-Do not archive toward a quota. Inspect every note in scope, classify analogous groups under one principle, use best judgment for close cases, and record genuinely borderline decisions for the handoff.
-
-## Calibrated examples
-
-These examples set the bar; the word counts demonstrate that size is not the test.
-
-Archive implemented notes such as:
-
-- collapsed sidebar control rail — 533 words: closed, minor UI behavior;
-- Commander argument adapter — 1,498 words: substantial implementation detail with little future design leverage;
-- documentation graph atlas — 920 words: completed documentation machinery whose current generators are authoritative.
-
-Keep implemented notes such as:
-
-- event-sourced sessions — 248 words: foundational authority and durability boundary;
-- single Harness-home resolver — 596 words: cross-product ownership rule;
-- project session directories — 628 words: durable storage and identity policy;
-- parallel pre-push gates — 400 words: borderline, but still guides gate scheduling and resource tuning;
-- dropped image content block — 334 words: keep until multimodal support lands, because it states the coordinated reintroduction condition.
-
-For rejected notes:
-
-- keep folding the compaction package split — 426 words: the temptation to merge the packages remains meaningful;
-- delete streaming workflow progress through tool calls — 972 words: its ACP/UI premise is obsolete;
-- delete dropping ACP terminal metadata — 362 words: the later automation-only ACP decision resolved the question.
-
-## Archive one implemented triplet
-
-1. Move the complete `foo.md`, `foo.zh.md`, and `foo.i18n.yaml` triplet from `implemented/<kind>/` to `archived/<kind>/`; `implemented` is deliberately absent from the archive path.
-2. Make no body edits. Insert only `Archived: YYYY-MM-DD` immediately below `Status: implemented` in both language files, using the archival date and the same value on both sides.
-3. Re-record the sidecar hashes mechanically for the two metadata-only edits. Do not translate, reformat, update facts, or repair links inside the note.
-4. Search for inbound links from active prose. Redirect them to current authority, retarget them to the archived path only when the historical snapshot is intentionally cited, or delete them. Never verify or repair links out of the archived note.
-5. Run `pnpm run verify-archived-agent-notes --write`. Its append-only mode first proves every existing seal still matches, then adds only the new triplet hashes. Run the normal verifier afterward.
-
-After the triplet is sealed, never edit, move, translate, reformat, or delete it. Archived notes remain valid inbound-link targets but are historical snapshots, not authority for current behavior.
-
-## Validate and report
-
-Run the archive verifier's focused test, `pnpm run verify-archived-agent-notes`, `pnpm run doc-sync`, `pnpm run lint`, and `git diff --check`; select any additional evidence through [pre-push-checks](../pre-push-checks/SKILL.md).
-
-Report active implemented notes kept, implemented notes archived, rejected notes kept/deleted, proposed notes rejected if any, and every genuinely borderline case with its word count and chosen outcome. Do not claim archived outbound links are valid: the archive verifier intentionally never checks them.
+报告应列出保留项、失效项、引用修复、未决风险和执行过的验证命令。

@@ -1,5 +1,5 @@
 ---
-name: gguf-quantization
+name: gguf
 description: GGUF格式和llama.cpp量化，用于高效的CPU/GPU推理。在消费级硬件、Apple Silicon上部署模型，或需要灵活的2-8位量化且无GPU要求时使用。
 version: 1.0.0
 author: Orchestra Research

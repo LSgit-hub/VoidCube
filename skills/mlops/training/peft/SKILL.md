@@ -1,5 +1,5 @@
 ---
-name: peft-fine-tuning
+name: peft
 description: 使用LoRA、QLoRA和25+方法进行LLM参数高效微调。当在有限GPU内存下微调大模型(7B-70B)、需要训练<1%参数且精度损失最小,或多适配器服务时使用。HuggingFace官方库,与transformers生态系统集成。
 version: 1.0.0
 author: Orchestra Research
