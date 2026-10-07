@@ -389,3 +389,57 @@ hash 必须复刻 `sync.py::_hash`（排序 rglob 全部文件 → 先相对路�
 5. 收尾照旧：repo == runtime == manifest 三侧对齐 + 跑 `test_skill_registry` / `test_skills_sync_contract`。
 
 判据：合并的收益是"**同一事实只出现一次**"。只压缩措辞而事实仍重复，不算合并完成。
+
+## 技能描述被截 → 触发条件不可见（2026-10-07 实测并修复）
+
+**真根因不在 prompt_builder，而在描述提取。** 生产系统提示词走 `mode="full"`
+（`runner.py` 调 `build_skills_system_prompt(available_tools, available_toolsets)`，未传 mode），
+full 分支**直接渲染注册表里存的 `description`，不调用** `_build_skills_index_line`。
+真正截断发生在写入注册表前：`catalog.extract_skill_description` 把描述硬截为 **60 字**
+（`desc[:57] + "..."`），与全系统 1024 的契约（`skills_list` / `manager` 校验 / `_body_description`）
+不一致。多数技能把"……时使用"触发条件写在末尾 → 实测 79 技能里 **65 个触发条件不可见、
+26 个"作者写了却被截掉"**。
+
+`prompt_builder._build_skills_index_line` 只在 `mode="index"`（非生产）生效，它是**另一个**
+同类缺陷：`desc.split(".")[0]` 会在 `llama.cpp` / `subprocess.run` / `plugin.json` 的英文点号处
+拦腰切断，可见行只剩碎片（`使用 llama`、`GGUF格式和llama`、`诊断和修复 Windows 上 subprocess`、
+`VoidCube 插件开发与集成规范 — 标准插件布局契约、plugin`、`bootstrap → ">"`）。
+**别把两者混为一谈——修错函数等于没修。**
+
+修复（提交 b26b181）：
+1. `extract_skill_description`：60 上限 → `MAX_DESCRIPTION_LENGTH`(1024)。
+2. `_build_skills_index_line`：改为句点感知切句（`_first_sentence`，仅在文本结尾 / 后跟空白或
+   大写字母时断句），不切技术词内点号。
+3. **注册表派生版本失效**（关键，见下）。
+
+### 关键教训：改"派生逻辑"必须让注册表缓存失效
+注册表增量刷新按文件 `mtime_ns+size`（回退 `content_hash`）判断复用行。**代码改了描述提取逻辑、
+但技能文件没变时，缓存会继续复用旧的派生值**——修复对存量记录永不生效。本轮第一次验证正是踩到：
+刷新后 142/158 条仍是旧的 60 字值。做法：在 `registry.py` 存 `DERIVED_METADATA_VERSION`
+（`registry_meta` 键 `derived_metadata_version`）；`refresh_registry` 读到的版本与当前不符时
+**跳过两条快速路径**（mtime/size 预检、hash 比对），强制逐文件重解析；`upsert_skill` 的
+`ON CONFLICT` 只更新派生列，lifecycle（deprecated / supersedes）保留不丢。改派生逻辑时 bump 该版本。
+通用规律：**任何"文件不变则复用"的增量派生缓存，都需要一个"派生逻辑版本"来自失效。**
+
+### 审计方法（探针，别猜）
+读每个 SKILL.md frontmatter 原文 description，与生产可见行对比，判据 = 全文含触发词而可见行不含。
+**先确认生产走哪个 mode**：`grep -n build_skills_system_prompt src/**/runner.py` 看调用点是否传
+`mode`；不传即 full，可见面 = 注册表存储的 `description`（用 `_find_all_skills()` 复刻），
+**不是** `_build_skills_index_line` 的输出。把探针输出与当前会话 `<available_skills>` 里同一技能行
+逐字比对，一致才可信。
+
+### 试错教训（本轮踩过）
+- 第一版用"动作词表"判低命中，词表太窄（漏了 创建/管理/翻译/搜索/使用…），R 虚高到 20。
+  正确判据是"**可见行是否含『何时使用』触发条件**"，不是"是否含动词"。收敛到 R=4。
+- 第一版把真凶当成 `_build_skills_index_line`；实测生产是 full 模式才定位到
+  `extract_skill_description`。**先验证"我实际看到的是哪条渲染路径"再下结论。**
+- 改完必须做"真实效果验证"（不只跑测试）：刷新真实注册表 + 构建生产提示词抽查曾丢失的
+  触发子句是否回来（本轮 5/5 OK）。
+
+### 验证与副作用
+- `pytest tests/test_skill_registry.py tests/test_prompt_builder_skills_cache.py`（+3 回归测试）；
+  全量门禁 `scripts/run_ci_tests.py` → 3673 passed。
+- 提示词变长（实测 8688→16397 字符，≈+2k tokens）：描述不再被砍的直接代价。若在意预算，另做
+  "提示词侧句点感知压到首句 + 触发子句"的有界渲染，但**别再回到 60 这种硬截**。
+- 改本技能文本时仍须 repo == runtime == manifest 三方一致 + `test_integration_policy.py`
+  （描述文本也在扫描面内）。
