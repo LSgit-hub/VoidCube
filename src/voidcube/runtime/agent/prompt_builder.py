@@ -521,15 +521,36 @@ def _skill_should_show(
     return True
 
 
+_SENTENCE_TERMINATORS = "。！？!?；;"
+
+
+def _first_sentence(desc: str) -> str:
+    """Return the first sentence without splitting on dots inside tokens.
+
+    A bare ``desc.split(".")`` breaks on tokens such as ``llama.cpp``,
+    ``subprocess.run`` or ``plugin.json`` and yields meaningless fragments.
+    A period only ends a sentence when it closes the text or is followed by
+    whitespace or an uppercase letter.
+    """
+    for index, char in enumerate(desc):
+        if char in _SENTENCE_TERMINATORS:
+            return desc[: index + 1]
+        if char == ".":
+            following = desc[index + 1 : index + 2]
+            if following == "" or following.isspace() or following.isupper():
+                return desc[: index + 1]
+    return desc
+
+
 def _build_skills_index_line(name: str, desc: str) -> str:
     """Build one line of the compact skills index.
 
-    Keeps description to first sentence (~80 chars) to keep the index compact.
+    Keeps the description to its first sentence (~80 chars) so the index stays
+    compact, without cutting inside technical tokens (``*.cpp``, ``*.run`` ...).
     """
     if not desc:
         return f"    - {name}"
-    # Truncate to first sentence or ~80 chars
-    first_sentence = desc.split(".")[0] if "." in desc else desc
+    first_sentence = _first_sentence(desc)
     if len(first_sentence) > 80:
         first_sentence = first_sentence[:77] + "..."
     return f"    - {name}: {first_sentence}"

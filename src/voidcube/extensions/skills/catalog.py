@@ -443,14 +443,26 @@ def resolve_skill_config_values(
 # ── Description extraction ────────────────────────────────────────────────
 
 
+# Description budget shared by the registry, ``skills_list``, and the
+# system-prompt skill index.  The skill manager rejects descriptions longer
+# than this, so valid descriptions pass through verbatim.
+MAX_DESCRIPTION_LENGTH = 1024
+
+
 def extract_skill_description(frontmatter: Dict[str, Any]) -> str:
-    """Extract a truncated description from parsed frontmatter."""
+    """Extract the description from parsed frontmatter.
+
+    The description is kept in full (bounded by ``MAX_DESCRIPTION_LENGTH``)
+    instead of being cut at a fixed short width.  Most skills place their
+    "when to use" clause at the end of the description, and truncating it made
+    relevant skills undiscoverable from the compact system-prompt index.
+    """
     raw_desc = frontmatter.get("description", "")
     if not raw_desc:
         return ""
     desc = str(raw_desc).strip().strip("'\"")
-    if len(desc) > 60:
-        return desc[:57] + "..."
+    if len(desc) > MAX_DESCRIPTION_LENGTH:
+        return desc[: MAX_DESCRIPTION_LENGTH - 3] + "..."
     return desc
 
 

@@ -110,3 +110,38 @@ def test_root_skill_category_matches_registry_when_fallback_is_used(monkeypatch,
 
     assert "  general:\n    - root-skill: Root description" in indexed
     assert fallback == indexed
+
+
+def test_long_description_keeps_when_to_use_clause(monkeypatch, tmp_path):
+    """回归：>60 字符的描述必须保留结尾的"何时使用"触发条件。
+
+    旧实现把描述硬截为 60 字符，导致大多数技能的触发子句从索引里消失，
+    相关技能无法被自动发现。
+    """
+    root = tmp_path / "skills"
+    description = (
+        "审查 VoidCube 的代码、技能、插件和 Pull Request，重点检查行为回归、"
+        "所有权边界、安全性、测试证据、运行时兼容性和无效兼容分支。"
+        "需要做代码审查或变更复核时使用。"
+    )
+    assert len(description) > 60
+    _write_skill(root, "long-skill", description)
+    registry_path = tmp_path / ".skills_registry.sqlite3"
+    monkeypatch.setattr(prompt_builder, "get_all_skills_dirs", lambda: [root])
+    monkeypatch.setattr(prompt_builder, "get_disabled_skill_names", lambda: set())
+    monkeypatch.setattr(prompt_builder, "_skills_registry_path", lambda: registry_path)
+    prompt_builder.clear_skills_system_prompt_cache()
+
+    result = prompt_builder.build_skills_system_prompt()
+
+    assert "需要做代码审查或变更复核时使用。" in result
+
+
+def test_index_line_does_not_cut_inside_technical_token():
+    """回归：紧凑索引不得在 llama.cpp / *.run 之类技术词的英文点号处切断。"""
+    line = prompt_builder._build_skills_index_line(
+        "llama-cpp", "使用 llama.cpp 加载并运行 GGUF 模型。第二句应被省略。"
+    )
+
+    assert "llama.cpp" in line
+    assert "第二句" not in line

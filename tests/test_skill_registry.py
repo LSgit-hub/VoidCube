@@ -341,3 +341,64 @@ def test_hot_refresh_is_not_pathologically_slow(tmp_path):
     # 宽松阈值：30 文件本地实测 ~5ms。阈值只防秒级退化
     # （如误回退到全量重读/重解析），不追求精确值以免跨机器抖动误报。
     assert elapsed < 0.1, f"hot refresh took {elapsed * 1000:.1f} ms"
+
+
+def test_description_is_stored_without_short_truncation(tmp_path):
+    """回归：注册表必须存完整描述，而非硬截为 60 字符。
+
+    截断会让技能的"何时使用"触发条件丢失，进而无法被系统提示词索引发现。
+    """
+    root = tmp_path / "skills"
+    description = (
+        "诊断和解决 Windows 上多版本 Python 冲突问题。"
+        "当 check_dependencies 误报 Py 版本、或工具链指向了错误的解释器时使用。"
+    )
+    assert len(description) > 60
+    _write_skill(root, "long-desc", description)
+    db = tmp_path / "registry.sqlite3"
+    spec = registry.DiscoveryRoot(root, "home", 0)
+    registry.refresh_registry([spec], path=db)
+
+    connection = registry.open_registry(db)
+    try:
+        assert registry.query_skills(connection)[0]["description"] == description
+    finally:
+        connection.close()
+
+
+def test_derived_version_change_forces_reparse(tmp_path):
+    """回归：派生逻辑版本变化时必须整库重解析。
+
+    否则提取逻辑的代码改动永远到不了存量记录（增量缓存按文件 mtime 复用）。
+    """
+    root = tmp_path / "skills"
+    _write_skill(root, "demo", "Demo skill")
+    db = tmp_path / "registry.sqlite3"
+    spec = registry.DiscoveryRoot(root, "home", 0)
+    registry.refresh_registry([spec], path=db)
+
+    connection = registry.open_registry(db)
+    try:
+        connection.execute(
+            "UPDATE registry_meta SET value='stale' WHERE key=?",
+            (registry.DERIVED_METADATA_KEY,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = registry.refresh_registry([spec], path=db)
+
+    assert result["reparsed"] == 1
+    assert result["reused"] == 0
+
+    # 版本恢复后，热刷新回到复用路径，且版本标记已刷新为当前值
+    assert registry.refresh_registry([spec], path=db)["reused"] == 1
+    connection = registry.open_registry(db)
+    try:
+        assert (
+            registry._stored_derived_version(connection)
+            == registry.DERIVED_METADATA_VERSION
+        )
+    finally:
+        connection.close()

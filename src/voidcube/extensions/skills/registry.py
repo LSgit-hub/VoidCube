@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 REGISTRY_FILENAME = ".skills_registry.sqlite3"
 SCHEMA_VERSION = "1"
 
+# Derived columns (description / conditions / category / platforms) are produced
+# by code in ``catalog``.  Incremental refresh reuses rows when the skill *file*
+# is unchanged, so a code change to that extraction would otherwise never reach
+# existing rows.  Bumping this marker forces one full re-parse after an upgrade;
+# lifecycle overrides (deprecated/supersedes) are preserved by ``upsert_skill``.
+DERIVED_METADATA_KEY = "derived_metadata_version"
+DERIVED_METADATA_VERSION = "2"
+
 
 class _OwnedRegistryConnection(sqlite3.Connection):
     """SQLite connection that releases the Skill Registry owner lease on close."""
@@ -346,6 +354,17 @@ def set_lifecycle_metadata(
     connection.commit()
 
 
+def _stored_derived_version(connection: sqlite3.Connection) -> str | None:
+    """Return the derived-metadata version recorded in the registry, if any."""
+    try:
+        row = connection.execute(
+            "SELECT value FROM registry_meta WHERE key = ?", (DERIVED_METADATA_KEY,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row is not None else None
+
+
 def refresh_registry(
     roots: Iterable[DiscoveryRoot | tuple[str | Path, str, int]],
     *,
@@ -363,6 +382,9 @@ def refresh_registry(
     connection = connection or open_registry(path)
     try:
         with connection:
+            force_reparse = (
+                _stored_derived_version(connection) != DERIVED_METADATA_VERSION
+            )
             for root in normalised:
                 if not root.path.is_dir():
                     continue
@@ -388,7 +410,8 @@ def refresh_registry(
                         # 老记录 mtime_ns 为 NULL 时 int() 抛 TypeError，落入慢路径
                         # 读取内容比对 hash，一致则 UPDATE 补齐 mtime —— 优雅降级。
                         if (
-                            existing is not None
+                            not force_reparse
+                            and existing is not None
                             and int(existing[1]) == int(stat.st_mtime_ns)
                             and int(existing[2]) == int(stat.st_size)
                         ):
@@ -396,7 +419,11 @@ def refresh_registry(
                             continue
                         content = skill_file.read_bytes()
                         content_hash = hashlib.sha256(content).hexdigest()
-                        if existing is not None and existing[0] == content_hash:
+                        if (
+                            not force_reparse
+                            and existing is not None
+                            and existing[0] == content_hash
+                        ):
                             connection.execute(
                                 "UPDATE skills SET root_path=?, source=?, priority=?, mtime_ns=?, size=?, updated_at=datetime('now') WHERE file_path=?",
                                 (str(root.path), root.source, root.priority, int(stat.st_mtime_ns), int(stat.st_size), file_path),
@@ -417,6 +444,10 @@ def refresh_registry(
                     if row[0] not in seen:
                         connection.execute("DELETE FROM skills WHERE file_path = ?", (row[0],))
                         stats["removed"] += 1
+            connection.execute(
+                "INSERT OR REPLACE INTO registry_meta(key, value) VALUES(?, ?)",
+                (DERIVED_METADATA_KEY, DERIVED_METADATA_VERSION),
+            )
     finally:
         if own_connection:
             connection.close()
