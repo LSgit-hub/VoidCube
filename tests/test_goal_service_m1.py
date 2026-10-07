@@ -947,6 +947,194 @@ def test_confirm_token_for_root_delete(store):
     assert store.get_project(project["project"]["id"])["root"]["deleted_at"] is None
 
 
+def test_project_delete_archives_nodes_and_edges_with_server_confirmation(tmp_path):
+    app = create_app({
+        "db_path": str(tmp_path / "project-delete.db"),
+        "gateway_address": "http://127.0.0.1:1",
+    })
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/goals/projects",
+                json={"name": "Archive me", "reason": "project delete test"},
+            ).json()
+            project_id = created["project"]["id"]
+            root_id = created["root"]["id"]
+            child = client.post(
+                "/api/goals/nodes",
+                json={
+                    "project_id": project_id,
+                    "node_type": "task",
+                    "title": "Child",
+                    "reason": "seed child",
+                },
+            ).json()["node"]
+            edge = client.post(
+                "/api/goals/edges",
+                json={
+                    "source_id": root_id,
+                    "target_id": child["id"],
+                    "edge_type": "decomposes_to",
+                    "reason": "seed edge",
+                },
+            )
+            assert edge.status_code == 201
+
+            path = f"/api/goals/projects/{project_id}"
+            pending = client.delete(path, params={"reason": "remove project", "actor_type": "user"})
+            assert pending.status_code == 409
+            assert pending.json()["requires_confirm"] is True
+
+            deleted = client.delete(
+                path,
+                params={
+                    "reason": "remove project",
+                    "actor_type": "user",
+                    "confirm_token": pending.json()["confirm_token"],
+                },
+            )
+            assert deleted.status_code == 200
+            assert deleted.json()["deleted"] is True
+            assert client.get("/api/goals/projects").json()["projects"] == []
+            assert client.get(path).status_code == 404
+
+            with sqlite3.connect(app.state.goal_store.db_path) as conn:
+                active_nodes = conn.execute(
+                    "SELECT COUNT(*) FROM goal_nodes WHERE project_id=? AND deleted_at IS NULL",
+                    (project_id,),
+                ).fetchone()[0]
+                active_edges = conn.execute(
+                    "SELECT COUNT(*) FROM goal_edges WHERE project_id=? AND deleted_at IS NULL",
+                    (project_id,),
+                ).fetchone()[0]
+                delete_events = conn.execute(
+                    "SELECT COUNT(*) FROM goal_events WHERE batch_id=? AND event_type IN "
+                    "('delete_node','delete_edge','delete_project')",
+                    (deleted.json()["batch_id"],),
+                ).fetchone()[0]
+            assert active_nodes == 0
+            assert active_edges == 0
+            assert delete_events == 4
+
+            archived = client.get("/api/goals/projects/archived")
+            assert archived.status_code == 200
+            assert archived.json()["projects"][0]["id"] == project_id
+            assert archived.json()["projects"][0]["deleted_batch_id"] == deleted.json()["batch_id"]
+
+            restored = client.post(
+                f"/api/goals/projects/{project_id}/restore",
+                params={"reason": "restore project", "actor_type": "user"},
+            )
+            assert restored.status_code == 200
+            assert client.get("/api/goals/projects").json()["projects"][0]["id"] == project_id
+            assert client.get(path).json()["root"]["id"] == root_id
+            assert client.get("/api/goals/projects/archived").json()["projects"] == []
+    finally:
+        app.state.goal_store.close()
+
+
+def test_archived_project_purge_requires_name_and_token_then_removes_all_owned_rows(tmp_path):
+    app = create_app({
+        "db_path": str(tmp_path / "project-purge.db"),
+        "gateway_address": "http://127.0.0.1:1",
+    })
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/goals/projects",
+                json={"name": "Purge me", "reason": "project purge test"},
+            ).json()
+            project_id = created["project"]["id"]
+            root_id = created["root"]["id"]
+            child = client.post(
+                "/api/goals/nodes",
+                json={
+                    "project_id": project_id,
+                    "node_type": "task",
+                    "title": "Owned child",
+                    "reason": "seed child",
+                },
+            ).json()["node"]
+            assert client.post(
+                "/api/goals/edges",
+                json={
+                    "source_id": root_id,
+                    "target_id": child["id"],
+                    "edge_type": "decomposes_to",
+                    "reason": "seed edge",
+                },
+            ).status_code == 201
+            assert client.post(
+                f"/api/goals/nodes/{child['id']}/evidence",
+                json={"evidence_type": "note", "title": "Owned evidence", "reason": "seed evidence"},
+            ).status_code == 201
+            assert client.post(
+                f"/api/goals/nodes/{child['id']}/memory-refs",
+                json={"memory_id": "memory:owned", "reason": "seed reference"},
+            ).status_code == 201
+
+            delete_path = f"/api/goals/projects/{project_id}"
+            pending_delete = client.delete(
+                delete_path, params={"reason": "archive before purge", "actor_type": "user"},
+            )
+            assert pending_delete.status_code == 409
+            archived = client.delete(
+                delete_path,
+                params={
+                    "reason": "archive before purge",
+                    "actor_type": "user",
+                    "confirm_token": pending_delete.json()["confirm_token"],
+                },
+            )
+            assert archived.status_code == 200
+
+            purge_path = f"/api/goals/projects/{project_id}/purge"
+            wrong_name = client.delete(
+                purge_path,
+                params={"confirm_name": "Wrong name", "reason": "purge", "actor_type": "user"},
+            )
+            assert wrong_name.status_code == 409
+            assert "does not match" in wrong_name.json()["detail"]
+
+            pending_purge = client.delete(
+                purge_path,
+                params={"confirm_name": "Purge me", "reason": "purge", "actor_type": "user"},
+            )
+            assert pending_purge.status_code == 409
+            assert pending_purge.json()["requires_confirm"] is True
+            purged = client.delete(
+                purge_path,
+                params={
+                    "confirm_name": "Purge me",
+                    "reason": "purge permanently",
+                    "actor_type": "user",
+                    "confirm_token": pending_purge.json()["confirm_token"],
+                },
+            )
+            assert purged.status_code == 200
+            assert purged.json()["purged"] is True
+            assert client.get("/api/goals/projects/archived").json()["projects"] == []
+            assert client.get(delete_path).status_code == 404
+
+            with sqlite3.connect(app.state.goal_store.db_path) as conn:
+                for table, column in (
+                    ("goal_projects", "id"),
+                    ("goal_nodes", "project_id"),
+                    ("goal_edges", "project_id"),
+                    ("goal_events", "project_id"),
+                    ("goal_memory_refs", "project_id"),
+                ):
+                    assert conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {column}=?", (project_id,)
+                    ).fetchone()[0] == 0
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM goal_evidence WHERE node_id IN (?, ?)",
+                    (root_id, child["id"]),
+                ).fetchone()[0] == 0
+    finally:
+        app.state.goal_store.close()
+
+
 def test_batch_root_delete_archives_project_and_rolls_back(store):
     project = store.create_project("Batch root", reason="init")
     root_id = project["root"]["id"]

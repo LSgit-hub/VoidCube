@@ -484,6 +484,120 @@ class GoalStore:
                 result.append(project)
             return result
 
+    def list_archived_projects(self, query: str = "", sort: str = "archived_desc") -> list[dict[str, Any]]:
+        query = " ".join(str(query or "").split()).casefold()
+        sorters = {
+            "archived_desc": lambda item: (str(item.get("archived_at") or ""), str(item.get("name") or "").casefold()),
+            "archived_asc": lambda item: (str(item.get("archived_at") or ""), str(item.get("name") or "").casefold()),
+            "name_asc": lambda item: (str(item.get("name") or "").casefold(), str(item.get("archived_at") or "")),
+            "name_desc": lambda item: (str(item.get("name") or "").casefold(), str(item.get("archived_at") or "")),
+        }
+        if sort not in sorters:
+            raise ValueError("sort must be archived_desc, archived_asc, name_asc, or name_desc")
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM goal_projects WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                project = _row(row)
+                event = conn.execute(
+                    "SELECT batch_id, created_at, after_json FROM goal_events "
+                    "WHERE project_id=? AND entity_type='project' AND entity_id=? "
+                    "AND event_type='delete_project' AND batch_id IS NOT NULL "
+                    "ORDER BY rowid DESC LIMIT 1",
+                    (project["id"], project["id"]),
+                ).fetchone()
+                if event is None:
+                    continue
+                after = load_json(event["after_json"], {})
+                if not isinstance(after, dict) or not after.get("deleted_at"):
+                    continue
+                project["deleted_batch_id"] = event["batch_id"]
+                project["archived_at"] = project.get("deleted_at") or event["created_at"]
+                if query and query not in " ".join(
+                    str(project.get(field) or "") for field in ("id", "name", "description")
+                ).casefold():
+                    continue
+                result.append(project)
+            result.sort(key=sorters[sort], reverse=sort in {"archived_desc", "name_desc"})
+            return result
+
+    def restore_project(
+        self,
+        project_id: str,
+        *,
+        reason: str,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        reason = _text(reason, "reason", required=True)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM goal_projects WHERE id=? AND deleted_at IS NOT NULL",
+                (project_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"archived project not found: {project_id}")
+            event = conn.execute(
+                "SELECT batch_id FROM goal_events "
+                "WHERE project_id=? AND entity_type='project' AND entity_id=? "
+                "AND event_type='delete_project' AND batch_id IS NOT NULL "
+                "ORDER BY rowid DESC LIMIT 1",
+                (project_id, project_id),
+            ).fetchone()
+            if event is None or not event["batch_id"]:
+                raise RuntimeError(f"archived project restore batch is missing: {project_id}")
+            batch_id = str(event["batch_id"])
+        restored = self.rollback(
+            batch_id,
+            reason=reason,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            session_id=session_id,
+        )
+        return {"project_id": project_id, "restored": True, **restored}
+
+    def purge_project(
+        self,
+        project_id: str,
+        *,
+        confirm_name: str,
+        reason: str,
+        confirm_token: str | None = None,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        supplied_name = _text(confirm_name, "confirm_name", required=True)
+        with self._transaction() as conn:
+            project = _row(conn.execute(
+                "SELECT * FROM goal_projects WHERE id=? AND deleted_at IS NOT NULL",
+                (project_id,),
+            ).fetchone())
+            if project is None:
+                raise KeyError(f"archived project not found: {project_id}")
+            if supplied_name != str(project["name"]):
+                raise GoalConflict("project name confirmation does not match")
+            self.guard.require_or_consume(
+                "purge_project", {"project_id": project_id, "confirm_name": supplied_name}, confirm_token,
+            )
+            conn.execute(
+                "DELETE FROM goal_memory_refs WHERE project_id=?", (project_id,)
+            )
+            conn.execute(
+                "DELETE FROM goal_evidence WHERE node_id IN "
+                "(SELECT id FROM goal_nodes WHERE project_id=?)", (project_id,)
+            )
+            conn.execute("DELETE FROM goal_edges WHERE project_id=?", (project_id,))
+            conn.execute("DELETE FROM goal_nodes WHERE project_id=?", (project_id,))
+            conn.execute("DELETE FROM goal_events WHERE project_id=?", (project_id,))
+            conn.execute("DELETE FROM goal_projects WHERE id=?", (project_id,))
+            return {"project_id": project_id, "purged": True}
+
     def get_project(self, project_id: str) -> dict[str, Any]:
         with self._connect() as conn:
             project = self._ensure_project(conn, project_id)
@@ -757,6 +871,78 @@ class GoalStore:
         if children and not cascade:
             raise GoalConflict("node has children; use cascade=true or delete child edges first", child_count=children)
         return node
+
+    def delete_project(
+        self,
+        project_id: str,
+        *,
+        reason: str,
+        confirm_token: str | None = None,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        actor_type, actor_id, session_id = self._actor(actor_type, actor_id, session_id)
+        reason = _text(reason, "reason", required=True)
+        batch_id = new_id("batch_")
+        with self._transaction() as conn:
+            project = self._ensure_project(conn, project_id)
+            self.guard.require_or_consume(
+                "delete_project", {"project_id": project_id}, confirm_token,
+            )
+            now = utc_now()
+            nodes = conn.execute(
+                "SELECT * FROM goal_nodes WHERE project_id=? AND deleted_at IS NULL ORDER BY created_at",
+                (project_id,),
+            ).fetchall()
+            for row in nodes:
+                before = _node_payload(dict(row))
+                conn.execute(
+                    "UPDATE goal_nodes SET deleted_at=?, version=version+1, updated_at=? "
+                    "WHERE id=? AND deleted_at IS NULL",
+                    (now, now, before["id"]),
+                )
+                after = self._get_node(conn, before["id"], include_deleted=True)
+                self._event(
+                    conn, project_id=project_id, event_type="delete_node", entity_type="node",
+                    entity_id=before["id"], before=before, after=after, reason=reason,
+                    batch_id=batch_id, actor_type=actor_type, actor_id=actor_id,
+                    session_id=session_id,
+                )
+            edges = conn.execute(
+                "SELECT * FROM goal_edges WHERE project_id=? AND deleted_at IS NULL ORDER BY created_at",
+                (project_id,),
+            ).fetchall()
+            for row in edges:
+                before = _edge_payload(dict(row))
+                conn.execute(
+                    "UPDATE goal_edges SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                    (now, before["id"]),
+                )
+                after = self._get_edge(conn, before["id"], include_deleted=True)
+                self._event(
+                    conn, project_id=project_id, event_type="delete_edge", entity_type="edge",
+                    entity_id=before["id"], before=before, after=after, reason=reason,
+                    batch_id=batch_id, actor_type=actor_type, actor_id=actor_id,
+                    session_id=session_id,
+                )
+            project_before = dict(project)
+            conn.execute(
+                "UPDATE goal_projects SET deleted_at=?, updated_at=? "
+                "WHERE id=? AND deleted_at IS NULL",
+                (now, now, project_id),
+            )
+            project_after = _row(conn.execute(
+                "SELECT * FROM goal_projects WHERE id=?", (project_id,)
+            ).fetchone())
+            self._event(
+                conn, project_id=project_id, event_type="delete_project", entity_type="project",
+                entity_id=project_id, before=project_before, after=project_after,
+                reason=reason, batch_id=batch_id, actor_type=actor_type,
+                actor_id=actor_id, session_id=session_id,
+            )
+            self._recompute_project_progress(conn, project_id)
+            return {"project": project_after, "batch_id": batch_id}
 
     def delete_node(self, node_id: str, *, cascade: bool = False, reason: str,
                     confirm_token: str | None = None, actor_type: str = "agent",

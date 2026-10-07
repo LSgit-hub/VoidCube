@@ -62,6 +62,7 @@ async function installGoalServiceRoute(page: Page): Promise<() => void> {
   const fixture = buildFixture()
   let rolledBack = false
   let liveEventPending = false
+  let projectDeleted = false
   Object.assign(fixture.root, {
     acceptance_criteria: [{ text: '回归测试通过', met: false }],
     evidence: [],
@@ -74,7 +75,7 @@ async function installGoalServiceRoute(page: Page): Promise<() => void> {
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
-          projects: [{
+          projects: projectDeleted ? [] : [{
             id: projectId,
             name: fixture.root.title,
             description: '',
@@ -83,6 +84,67 @@ async function installGoalServiceRoute(page: Page): Promise<() => void> {
           }]
         })
       })
+      return
+    }
+    if (url.pathname === '/api/goals/projects/archived' && request.method() === 'GET') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          projects: projectDeleted ? [{
+            id: projectId,
+            name: fixture.root.title,
+            description: '',
+            root_node_id: rootId,
+            deleted_at: '2026-10-07T12:00:00Z',
+            deleted_batch_id: 'batch-delete-project-m4'
+          }] : []
+        })
+      })
+      return
+    }
+    if (url.pathname === `/api/goals/projects/${projectId}` && request.method() === 'DELETE') {
+      if (url.searchParams.get('confirm_token') !== 'delete-project-token-m4') {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: '确认后才能删除项目',
+            requires_confirm: true,
+            confirm_token: 'delete-project-token-m4'
+          })
+        })
+        return
+      }
+      projectDeleted = true
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ project_id: projectId, deleted: true, batch_id: 'batch-delete-project-m4' })
+      })
+      return
+    }
+    if (url.pathname === `/api/goals/projects/${projectId}/restore` && request.method() === 'POST') {
+      projectDeleted = false
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ project_id: projectId, restored: true, batch_id: 'batch-delete-project-m4' })
+      })
+      return
+    }
+    if (url.pathname === `/api/goals/projects/${projectId}/purge` && request.method() === 'DELETE') {
+      if (url.searchParams.get('confirm_name') !== fixture.root.title) {
+        await route.fulfill({ status: 409, contentType: 'application/json', body: '{"detail":"project name confirmation does not match"}' })
+        return
+      }
+      if (url.searchParams.get('confirm_token') !== 'purge-project-token-m4') {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: '不可逆操作需要确认', requires_confirm: true, confirm_token: 'purge-project-token-m4' })
+        })
+        return
+      }
+      projectDeleted = false
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ project_id: projectId, purged: true }) })
       return
     }
     if (url.pathname === `/api/goals/projects/${projectId}/focus`) {
@@ -382,6 +444,148 @@ test('completes server confirm-token flow for deleting a child node', async () =
     await expect(page.locator('#goal-dialog')).toBeHidden()
     expect(deleteRequests).toHaveLength(2)
     expect(deleteRequests[1]).toContain('confirm_token=delete-token-m4')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('deletes the current project through the server confirmation flow', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  await installGoalServiceRoute(page)
+  const deleteRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE') deleteRequests.push(request.url())
+  })
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('#delete-project-button')).toBeEnabled()
+    await page.locator('#delete-project-button').click()
+    await expect(page.locator('#dialog-title')).toHaveText('删除目标项目')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#dialog-title')).toHaveText('服务端确认删除项目')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#project-select')).toHaveValue('')
+    await expect(page.locator('#project-select option')).toHaveText('暂无项目')
+    await expect(page.locator('#delete-project-button')).toBeDisabled()
+    await expect(page.locator('#status-text')).toHaveText('项目已删除，目标和关系已归档')
+    expect(deleteRequests).toHaveLength(2)
+    expect(deleteRequests[1]).toContain('confirm_token=delete-project-token-m4')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('fits both views and restores the previous viewport', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  await installGoalServiceRoute(page)
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    await expect(page.locator('#overview-content .overview-node')).toHaveCount(501)
+    await expect(page.locator('#overview-restore-button')).toBeDisabled()
+    await expect(page.locator('#focus-restore-button')).toBeDisabled()
+
+    await page.locator('#overview-zoom-in').click()
+    await expect(page.locator('#overview-zoom-label')).toHaveText('110%')
+    await expect(page.locator('#overview-restore-button')).toBeEnabled()
+    await page.locator('#overview-restore-button').click()
+    await expect(page.locator('#overview-zoom-label')).toHaveText('100%')
+    await page.locator('#overview-restore-button').click()
+    await expect(page.locator('#overview-zoom-label')).toHaveText('110%')
+    const overviewBox = await page.locator('#overview-wrap').boundingBox()
+    if (!overviewBox) throw new Error('overview is not laid out')
+    const overviewBeforePan = await page.locator('#overview-content').getAttribute('transform')
+    await page.mouse.move(overviewBox.x + overviewBox.width - 30, overviewBox.y + overviewBox.height - 30)
+    await page.mouse.down()
+    await page.mouse.move(overviewBox.x + overviewBox.width - 95, overviewBox.y + overviewBox.height - 65, { steps: 3 })
+    await page.mouse.up()
+    const overviewAfterPan = await page.locator('#overview-content').getAttribute('transform')
+    expect(overviewAfterPan).not.toBe(overviewBeforePan)
+    await page.locator('#overview-restore-button').click()
+    await expect(page.locator('#overview-content')).toHaveAttribute('transform', overviewBeforePan ?? '')
+    await page.locator('#overview-restore-button').click()
+    await expect(page.locator('#overview-content')).not.toHaveAttribute('transform', overviewBeforePan ?? '')
+
+    await page.locator('#overview-fit-button').click()
+    const fitPercent = Number((await page.locator('#overview-zoom-label').textContent())?.replace('%', ''))
+    expect(fitPercent).toBeGreaterThan(0)
+    expect(fitPercent).toBeLessThan(100)
+
+    const radialBox = await page.locator('#radial-svg').boundingBox()
+    if (!radialBox) throw new Error('focus view is not laid out')
+    await page.mouse.move(radialBox.x + radialBox.width / 2, radialBox.y + radialBox.height / 2)
+    await page.mouse.wheel(0, -100)
+    await expect(page.locator('#zoom-label')).toHaveText('105%')
+    await expect(page.locator('#focus-restore-button')).toBeEnabled()
+    await page.locator('#focus-restore-button').click()
+    await expect(page.locator('#zoom-label')).toHaveText('100%')
+    await page.locator('#focus-restore-button').click()
+    await expect(page.locator('#zoom-label')).toHaveText('105%')
+    const focusBeforePan = await page.locator('#radial-content').getAttribute('transform')
+    await page.mouse.move(radialBox.x + 24, radialBox.y + 24)
+    await page.mouse.down()
+    await page.mouse.move(radialBox.x + 74, radialBox.y + 54, { steps: 3 })
+    await page.mouse.up()
+    const focusAfterPan = await page.locator('#radial-content').getAttribute('transform')
+    expect(focusAfterPan).not.toBe(focusBeforePan)
+    await page.locator('#focus-restore-button').click()
+    await expect(page.locator('#radial-content')).toHaveAttribute('transform', focusBeforePan ?? '')
+    await page.locator('#focus-restore-button').click()
+    await expect(page.locator('#radial-content')).not.toHaveAttribute('transform', focusBeforePan ?? '')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('restores a deleted project from the archived projects dialog', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  await installGoalServiceRoute(page)
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    await page.locator('#delete-project-button').click()
+    await page.locator('#dialog-confirm-button').click()
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#project-select option')).toHaveText('暂无项目')
+
+    await page.locator('#archived-projects-button').click()
+    await expect(page.locator('#dialog-title')).toHaveText('已归档项目')
+    await expect(page.locator('[data-restore-project-id]')).toHaveCount(1)
+    await page.locator('[data-restore-project-id]').click()
+    await expect(page.locator('#dialog-title')).toHaveText('恢复归档项目')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#project-select')).toHaveValue(projectId)
+    await expect(page.locator('#focus-heading')).toHaveText('M3 总览验证')
+    expect(pageErrors).toEqual([])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('filters archived projects and permanently deletes with name confirmation', async () => {
+  const { browser, page, pageErrors } = await launchSupervisorPage({ width: 1280, height: 900 })
+  await installGoalServiceRoute(page)
+  try {
+    await page.goto('http://127.0.0.1:6002/ui/goal-manager/', { waitUntil: 'domcontentloaded' })
+    await page.locator('#delete-project-button').click()
+    await page.locator('#dialog-confirm-button').click()
+    await page.locator('#dialog-confirm-button').click()
+    await page.locator('#archived-projects-button').click()
+    await page.locator('#archived-project-search').fill('M3')
+    await page.locator('#archived-project-filter button[type="submit"]').click()
+    await expect(page.locator('[data-purge-project-id]')).toHaveCount(1)
+    await page.locator('[data-purge-project-id]').click()
+    await expect(page.locator('#dialog-title')).toHaveText('永久删除归档项目')
+    await page.locator('#purge-project-name').fill('错误名称')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#status-text')).toHaveText('项目名称不匹配，未执行永久删除')
+    await page.locator('#purge-project-name').fill('M3 总览验证')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#dialog-title')).toHaveText('服务端确认永久删除')
+    await page.locator('#dialog-confirm-button').click()
+    await expect(page.locator('#dialog-title')).toHaveText('已归档项目')
+    await expect(page.locator('.archived-project-item')).toHaveCount(0)
     expect(pageErrors).toEqual([])
   } finally {
     await browser.close()

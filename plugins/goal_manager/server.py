@@ -565,9 +565,61 @@ def create_app(config: dict[str, Any] | None = None) -> FastAPI:
     def list_projects() -> dict[str, Any]:
         return {"projects": store.list_projects()}
 
+    @app.get("/api/goals/projects/archived")
+    def list_archived_projects(
+        query: str = Query(""),
+        sort: str = Query("archived_desc"),
+    ) -> dict[str, Any]:
+        return {"projects": store.list_archived_projects(query=query, sort=sort)}
+
     @app.post("/api/goals/projects", status_code=201)
     def create_project(payload: ProjectCreate) -> dict[str, Any]:
         return store.create_project(**payload.model_dump())
+
+    @app.delete("/api/goals/projects/{project_id}")
+    def delete_project(
+        project_id: str,
+        reason: str = Query(...),
+        confirm_token: str | None = None,
+        actor_type: str = "agent",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        result = store.delete_project(
+            project_id, reason=reason,
+            confirm_token=confirm_token, actor_type=actor_type,
+            actor_id=actor_id, session_id=session_id,
+        )
+        return {"project_id": project_id, "deleted": True, "batch_id": result["batch_id"]}
+
+    @app.post("/api/goals/projects/{project_id}/restore")
+    def restore_project(
+        project_id: str,
+        reason: str = Query(...),
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return store.restore_project(
+            project_id, reason=reason, actor_type=actor_type,
+            actor_id=actor_id, session_id=session_id,
+        )
+
+    @app.delete("/api/goals/projects/{project_id}/purge")
+    def purge_project(
+        project_id: str,
+        confirm_name: str = Query(...),
+        reason: str = Query(...),
+        confirm_token: str | None = None,
+        actor_type: str = "user",
+        actor_id: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return store.purge_project(
+            project_id, confirm_name=confirm_name, reason=reason,
+            confirm_token=confirm_token, actor_type=actor_type,
+            actor_id=actor_id, session_id=session_id,
+        )
 
     @app.get("/api/goals/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:

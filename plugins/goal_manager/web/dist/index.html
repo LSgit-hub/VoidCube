@@ -26,6 +26,8 @@
           <span>项目</span>
           <select id="project-select" aria-label="选择项目"></select>
         </label>
+        <button id="delete-project-button" class="button button-danger" type="button" title="删除当前项目" aria-label="删除当前项目" disabled>删除项目</button>
+        <button id="archived-projects-button" class="button button-quiet" type="button" title="查看已归档项目" aria-label="查看已归档项目">已归档</button>
         <button id="new-project-button" class="button button-primary" type="button">新建项目</button>
         <button id="undo-button" class="icon-button" type="button" title="撤销最近批次" aria-label="撤销最近批次">↶</button>
         <button id="redo-button" class="icon-button" type="button" title="重做最近批次" aria-label="重做最近批次">↷</button>
@@ -64,6 +66,7 @@
             <button id="back-button" class="icon-button" type="button" title="后退" aria-label="后退">‹</button>
             <button id="forward-button" class="icon-button" type="button" title="前进" aria-label="前进">›</button>
             <button id="focus-reset-button" class="icon-button" type="button" title="重置焦点视图" aria-label="重置焦点视图">⌖</button>
+            <button id="focus-restore-button" class="icon-button" type="button" title="恢复上次焦点视口" aria-label="恢复上次焦点视口" disabled>↶</button>
             <span id="zoom-label" class="zoom-label">100%</span>
           </div>
         </div>
@@ -110,6 +113,7 @@
               <span id="overview-zoom-label" class="zoom-label">100%</span>
               <button id="overview-zoom-in" class="icon-button" type="button" title="放大总览" aria-label="放大总览">+</button>
               <button id="overview-fit-button" class="button button-quiet" type="button" title="适配总览" aria-label="适配总览">适配</button>
+              <button id="overview-restore-button" class="icon-button" type="button" title="恢复上次总览视口" aria-label="恢复上次总览视口" disabled>↶</button>
             </div>
           </div>
           <div id="overview-wrap" class="overview-wrap">

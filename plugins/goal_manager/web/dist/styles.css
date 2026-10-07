@@ -721,7 +721,7 @@ body {
   background: rgba(13, 24, 41, .86);
   box-shadow: 0 16px 38px rgba(0, 0, 0, .18);
 }
-.radial-wrap, .overview-wrap { isolation: isolate; }
+.radial-wrap, .overview-wrap { isolation: isolate; overscroll-behavior: contain; }
 .radial-wrap::after, .overview-wrap::after {
   content: "";
   position: absolute;
@@ -747,7 +747,6 @@ body {
 .overview-edge-dependency { stroke: var(--amber); opacity: .72; }
 .overview-edge-block { stroke: var(--coral); opacity: .78; }
 .node-group { cursor: grab; }
-.node-group.is-dragging { cursor: grabbing; }
 .node-core { stroke: rgba(244, 250, 255, .74); stroke-width: 1.6; }
 .focus-core { fill: #182d4a !important; stroke: var(--cyan); filter: drop-shadow(0 0 16px rgba(100,230,226,.58)); }
 .focus-halo { stroke: var(--cyan); opacity: .85; }
@@ -761,6 +760,21 @@ body {
 .overview-actions .zoom-label { min-width: 39px; text-align: center; }
 .button-danger { color: var(--coral); border-color: rgba(255, 140, 130, .35); background: rgba(255, 140, 130, .06); }
 .button-danger:hover { color: #fff; border-color: var(--coral); background: rgba(255, 140, 130, .18); }
+.archived-project-list { display: grid; gap: 8px; }
+.archived-project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.archived-project-item:last-child { border-bottom: 0; }
+.archived-project-item strong, .archived-project-item small { display: block; }
+.archived-project-item strong { color: var(--ink); font-size: 13px; }
+.archived-project-item small { margin-top: 4px; color: var(--faint); font-size: 11px; }
+.archived-project-filter { grid-template-columns: minmax(0, 1fr) 150px auto; align-items: end; }
+.archived-project-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .detail-panel { padding: 16px; }
 .detail-heading { padding-bottom: 11px; }
 .detail-summary { padding: 14px 0 16px; }
@@ -774,4 +788,6 @@ body {
   .topbar { padding-left: 13px; padding-right: 13px; }
   .workspace { padding: 12px 13px 9px; }
   .overview-wrap { overflow: auto; }
+  .archived-project-filter { grid-template-columns: 1fr 1fr; }
+  .archived-project-filter button { grid-column: 1 / -1; }
 }

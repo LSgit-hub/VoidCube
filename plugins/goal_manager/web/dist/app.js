@@ -28,12 +28,16 @@
     ,overviewPan: { x: 0, y: 0 }
     ,overviewScale: 1
     ,focusPan: { x: 0, y: 0 }
+    ,overviewPreviousViewport: null
+    ,focusPreviousViewport: null
     ,overviewPanDrag: null
     ,focusPanDrag: null
     ,suppressOverviewClick: false
     ,suppressRadialClick: false
     ,touchPointers: { overview: {}, focus: {} }
     ,touchGestures: { overview: null, focus: null }
+    ,inertiaFrames: { overview: null, focus: null }
+    ,wheelCaptureTimers: { overview: null, focus: null }
   };
   var projectRequestId = 0;
   var detailRequestId = 0;
@@ -473,10 +477,30 @@
     state.overviewPan = { x: 0, y: 0 };
     state.overviewScale = 1;
     state.focusPan = { x: 0, y: 0 };
+    state.overviewPreviousViewport = null;
+    state.focusPreviousViewport = null;
+    $("overview-restore-button").disabled = true;
+    $("focus-restore-button").disabled = true;
     try {
       var saved = JSON.parse(window.localStorage.getItem(layoutStorageKey(projectId)) || "null");
       if (saved && saved.pan) state.overviewPan = { x: Number(saved.pan.x) || 0, y: Number(saved.pan.y) || 0 };
-      if (saved && Number.isFinite(Number(saved.scale))) state.overviewScale = clamp(Number(saved.scale), .65, 1.8);
+      if (saved && Number.isFinite(Number(saved.scale))) state.overviewScale = clamp(Number(saved.scale), .01, 1.8);
+      if (saved && saved.focusPan) state.focusPan = { x: Number(saved.focusPan.x) || 0, y: Number(saved.focusPan.y) || 0 };
+      if (saved && Number.isFinite(Number(saved.focusScale))) state.zoom = clamp(Number(saved.focusScale), .1, 1.8);
+      if (saved && saved.previousPan && saved.previousScale) {
+        state.overviewPreviousViewport = {
+          pan: { x: Number(saved.previousPan.x) || 0, y: Number(saved.previousPan.y) || 0 },
+          scale: clamp(Number(saved.previousScale) || 1, .01, 1.8)
+        };
+        $("overview-restore-button").disabled = false;
+      }
+      if (saved && saved.focusPreviousPan && saved.focusPreviousScale) {
+        state.focusPreviousViewport = {
+          pan: { x: Number(saved.focusPreviousPan.x) || 0, y: Number(saved.focusPreviousPan.y) || 0 },
+          scale: clamp(Number(saved.focusPreviousScale) || 1, .1, 1.8)
+        };
+        $("focus-restore-button").disabled = false;
+      }
     } catch (_error) {}
   }
 
@@ -485,7 +509,13 @@
     try {
       window.localStorage.setItem(layoutStorageKey(state.project.id), JSON.stringify({
         pan: state.overviewPan,
-        scale: state.overviewScale
+        scale: state.overviewScale,
+        previousPan: state.overviewPreviousViewport && state.overviewPreviousViewport.pan,
+        previousScale: state.overviewPreviousViewport && state.overviewPreviousViewport.scale,
+        focusPan: state.focusPan,
+        focusScale: state.zoom,
+        focusPreviousPan: state.focusPreviousViewport && state.focusPreviousViewport.pan,
+        focusPreviousScale: state.focusPreviousViewport && state.focusPreviousViewport.scale
       }));
     } catch (_error) {}
   }
@@ -534,18 +564,193 @@
     } catch (_error) {}
   }
 
-  function setSurfaceScale(surface, value) {
+  function setSurfaceScale(surface, value, keepPrevious) {
+    stopInertia(surface);
     if (surface === "overview") {
-      setOverviewScale(value);
+      if (!keepPrevious) capturePreviousViewport(surface);
+      state.overviewScale = clamp(Number(value) || 1, .01, 1.8);
+      setSurfacePan("overview", state.overviewPan);
+      persistLayoutState();
+      applyOverviewTransform();
       return;
     }
-    state.zoom = clamp(Number(value) || 1, .65, 1.8);
+    if (!keepPrevious) capturePreviousViewport(surface);
+    state.zoom = clamp(Number(value) || 1, .1, 1.8);
+    setSurfacePan("focus", state.focusPan);
     applyFocusScale();
+    persistLayoutState();
   }
 
   function applyFocusScale() {
     $("radial-svg").style.transform = "scale(" + state.zoom + ")";
     $("zoom-label").textContent = Math.round(state.zoom * 100) + "%";
+  }
+
+  function capturePreviousViewport(surface) {
+    if (surface === "overview") {
+      state.overviewPreviousViewport = {
+        pan: { x: state.overviewPan.x, y: state.overviewPan.y },
+        scale: state.overviewScale
+      };
+      $("overview-restore-button").disabled = false;
+    } else {
+      state.focusPreviousViewport = {
+        pan: { x: state.focusPan.x, y: state.focusPan.y },
+        scale: state.zoom
+      };
+      $("focus-restore-button").disabled = false;
+    }
+  }
+
+  function captureWheelViewport(surface) {
+    var timer = state.wheelCaptureTimers[surface];
+    if (timer !== null) window.clearTimeout(timer);
+    else capturePreviousViewport(surface);
+    state.wheelCaptureTimers[surface] = window.setTimeout(function () {
+      state.wheelCaptureTimers[surface] = null;
+    }, 180);
+  }
+
+  function finishWheelCapture(surface) {
+    var timer = state.wheelCaptureTimers[surface];
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      state.wheelCaptureTimers[surface] = null;
+    }
+  }
+
+  function restorePreviousViewport(surface) {
+    var previous = surface === "overview" ? state.overviewPreviousViewport : state.focusPreviousViewport;
+    if (!previous) return;
+    finishWheelCapture(surface);
+    stopInertia(surface);
+    capturePreviousViewport(surface);
+    if (surface === "overview") {
+      state.overviewPan = { x: previous.pan.x, y: previous.pan.y };
+      state.overviewScale = previous.scale;
+      setSurfacePan(surface, state.overviewPan);
+      persistLayoutState();
+      applyOverviewTransform();
+      return;
+    }
+    state.focusPan = { x: previous.pan.x, y: previous.pan.y };
+    state.zoom = previous.scale;
+    setSurfacePan(surface, state.focusPan);
+    applyFocusScale();
+    persistLayoutState();
+  }
+
+  function fitSurface(surface) {
+    var metrics = surfaceMetrics(surface);
+    if (!metrics) return;
+    finishWheelCapture(surface);
+    stopInertia(surface);
+    capturePreviousViewport(surface);
+    var scale = clamp(
+      Math.min(metrics.viewportWidth / metrics.width, metrics.viewportHeight / metrics.height) * .92,
+      surface === "overview" ? .01 : .1,
+      1.8
+    );
+    var pan = {
+      x: (metrics.viewportWidth - metrics.width * scale) / 2,
+      y: (metrics.viewportHeight - metrics.height * scale) / 2
+    };
+    if (surface === "overview") {
+      state.overviewScale = scale;
+      setSurfacePan(surface, pan);
+      persistLayoutState();
+      applyOverviewTransform();
+    } else {
+      state.zoom = scale;
+      setSurfacePan(surface, pan);
+      applyFocusScale();
+      persistLayoutState();
+    }
+  }
+
+  function surfaceMetrics(surface) {
+    var svgElement = surfaceSvg(surface);
+    var wrap = $(surface === "overview" ? "overview-wrap" : "radial-wrap");
+    var viewBox = svgElement && svgElement.viewBox && svgElement.viewBox.baseVal;
+    if (!svgElement || !wrap || !viewBox || !viewBox.width || !viewBox.height) return null;
+    var width = Math.max(1, svgElement.clientWidth || viewBox.width);
+    var height = Math.max(1, svgElement.clientHeight || viewBox.height);
+    return {
+      width: viewBox.width,
+      height: viewBox.height,
+      viewportWidth: Math.max(1, wrap.clientWidth / (width / viewBox.width)),
+      viewportHeight: Math.max(1, wrap.clientHeight / (height / viewBox.height))
+    };
+  }
+
+  function clampSurfacePan(surface, pan) {
+    var metrics = surfaceMetrics(surface);
+    if (!metrics) return { x: Number(pan.x) || 0, y: Number(pan.y) || 0 };
+    var scale = surfaceScale(surface);
+    var margin = Math.min(96, Math.max(24, Math.min(metrics.viewportWidth, metrics.viewportHeight) * .12));
+    var scaledWidth = metrics.width * scale;
+    var scaledHeight = metrics.height * scale;
+    var centerX = (metrics.viewportWidth - scaledWidth) / 2;
+    var centerY = (metrics.viewportHeight - scaledHeight) / 2;
+    var minX = scaledWidth >= metrics.viewportWidth ? metrics.viewportWidth - scaledWidth - margin : centerX - margin;
+    var maxX = scaledWidth >= metrics.viewportWidth ? margin : centerX + margin;
+    var minY = scaledHeight >= metrics.viewportHeight ? metrics.viewportHeight - scaledHeight - margin : centerY - margin;
+    var maxY = scaledHeight >= metrics.viewportHeight ? margin : centerY + margin;
+    return {
+      x: clamp(Number(pan.x) || 0, Math.min(minX, maxX), Math.max(minX, maxX)),
+      y: clamp(Number(pan.y) || 0, Math.min(minY, maxY), Math.max(minY, maxY))
+    };
+  }
+
+  function stopInertia(surface) {
+    var frame = state.inertiaFrames[surface];
+    if (frame !== null) {
+      window.cancelAnimationFrame(frame);
+      state.inertiaFrames[surface] = null;
+    }
+  }
+
+  function setSurfacePan(surface, pan) {
+    var next = clampSurfacePan(surface, pan);
+    if (surface === "overview") {
+      state.overviewPan = next;
+      applyOverviewTransform();
+    } else {
+      state.focusPan = next;
+      applyFocusPan();
+    }
+    return next;
+  }
+
+  function startInertia(surface, velocity) {
+    stopInertia(surface);
+    var speed = Math.hypot(velocity.x, velocity.y);
+    if (!Number.isFinite(speed) || speed < .02) return;
+    var lastTime = performance.now();
+    var startedAt = lastTime;
+    var currentVelocity = { x: velocity.x, y: velocity.y };
+    var step = function (now) {
+      var elapsed = Math.min(40, Math.max(1, now - lastTime));
+      lastTime = now;
+      var previous = surface === "overview" ? state.overviewPan : state.focusPan;
+      var next = setSurfacePan(surface, {
+        x: previous.x + currentVelocity.x * elapsed,
+        y: previous.y + currentVelocity.y * elapsed
+      });
+      if (Math.abs(next.x - previous.x) < .001) currentVelocity.x = 0;
+      if (Math.abs(next.y - previous.y) < .001) currentVelocity.y = 0;
+      var decay = Math.pow(.88, elapsed / 16);
+      currentVelocity.x *= decay;
+      currentVelocity.y *= decay;
+      var active = Math.hypot(currentVelocity.x, currentVelocity.y) >= .02 && now - startedAt < 900;
+      if (active) {
+        state.inertiaFrames[surface] = window.requestAnimationFrame(step);
+      } else {
+        state.inertiaFrames[surface] = null;
+        persistLayoutState();
+      }
+    };
+    state.inertiaFrames[surface] = window.requestAnimationFrame(step);
   }
 
   function touchPointerCount(surface) {
@@ -568,10 +773,12 @@
 
   function beginTouchPointer(surface, event) {
     var svgElement = surfaceSvg(surface);
+    stopInertia(surface);
     var pointers = state.touchPointers[surface];
     pointers[event.pointerId] = { x: event.clientX, y: event.clientY };
     capturePointer(svgElement, event.pointerId);
     if (touchPointerCount(surface) !== 2) return;
+    capturePreviousViewport(surface);
     var points = touchPointerList(surface);
     var midpoint = touchMidpoint(points[0], points[1]);
     state.touchGestures[surface] = {
@@ -579,7 +786,9 @@
       startDistance: touchDistance(points[0], points[1]),
       basePan: surface === "overview" ? { x: state.overviewPan.x, y: state.overviewPan.y } : { x: state.focusPan.x, y: state.focusPan.y },
       baseScale: surfaceScale(surface),
-      moved: false
+      moved: false,
+      lastTime: performance.now(),
+      velocity: { x: 0, y: 0 }
     };
   }
 
@@ -599,18 +808,29 @@
       midpoint.y - gesture.startMidpoint.y,
       gesture.baseScale
     );
-    var scale = clamp(gesture.baseScale * distance / gesture.startDistance, .65, 1.8);
+    var scale = clamp(gesture.baseScale * distance / gesture.startDistance, surface === "overview" ? .01 : .1, 1.8);
+    var now = performance.now();
+    var elapsed = Math.max(1, now - gesture.lastTime);
+    var previousPan = surface === "overview" ? state.overviewPan : state.focusPan;
+    var nextPan = {
+      x: gesture.basePan.x + panDelta.x,
+      y: gesture.basePan.y + panDelta.y
+    };
+    gesture.velocity = {
+      x: clamp((nextPan.x - previousPan.x) / elapsed, -2, 2),
+      y: clamp((nextPan.y - previousPan.y) / elapsed, -2, 2)
+    };
+    gesture.lastTime = now;
     if (Math.abs(panDelta.x) + Math.abs(panDelta.y) > 3 || Math.abs(scale - gesture.baseScale) > .01) {
       gesture.moved = true;
     }
     if (surface === "overview") {
-      state.overviewPan = { x: gesture.basePan.x + panDelta.x, y: gesture.basePan.y + panDelta.y };
       state.overviewScale = scale;
+      setSurfacePan("overview", nextPan);
       applyOverviewTransform();
     } else {
-      state.focusPan = { x: gesture.basePan.x + panDelta.x, y: gesture.basePan.y + panDelta.y };
       state.zoom = scale;
-      applyFocusPan();
+      setSurfacePan("focus", nextPan);
       applyFocusScale();
     }
   }
@@ -620,12 +840,15 @@
     var gesture = state.touchGestures[surface];
     releasePointer(svgElement, event.pointerId);
     delete state.touchPointers[surface][event.pointerId];
-    if (gesture && gesture.moved) {
+    if (gesture && gesture.moved && !touchPointerCount(surface)) {
       if (surface === "overview") {
         state.suppressOverviewClick = true;
-        persistLayoutState();
+        startInertia(surface, gesture.velocity);
+        if (state.inertiaFrames.overview === null) persistLayoutState();
       } else {
         state.suppressRadialClick = true;
+        startInertia(surface, gesture.velocity);
+        if (state.inertiaFrames.focus === null) persistLayoutState();
       }
     }
     if (!touchPointerCount(surface)) state.touchGestures[surface] = null;
@@ -634,13 +857,17 @@
   function applyOverviewTransform() {
     var root = $("overview-content");
     if (!root) return;
+    state.overviewPan = clampSurfacePan("overview", state.overviewPan);
     root.setAttribute("transform", "translate(" + state.overviewPan.x + " " + state.overviewPan.y + ") scale(" + state.overviewScale + ")");
     $("overview-zoom-label").textContent = Math.round(state.overviewScale * 100) + "%";
   }
 
   function applyFocusPan() {
     var root = $("radial-content");
-    if (root) root.setAttribute("transform", "translate(" + state.focusPan.x + " " + state.focusPan.y + ")");
+    if (root) {
+      state.focusPan = clampSurfacePan("focus", state.focusPan);
+      root.setAttribute("transform", "translate(" + state.focusPan.x + " " + state.focusPan.y + ")");
+    }
   }
 
   function shortTitle(title, max) {
@@ -2082,9 +2309,7 @@
   }
 
   function setOverviewScale(value) {
-    state.overviewScale = clamp(Number(value) || 1, .65, 1.8);
-    persistLayoutState();
-    applyOverviewTransform();
+    setSurfaceScale("overview", value);
   }
 
   function populateProjects() {
@@ -2097,6 +2322,7 @@
       state.overview = null;
       state.history = null;
       state.reviewQueue = [];
+      $("delete-project-button").disabled = true;
       updateHistoryButtons();
       renderDetail(null);
       var option = document.createElement("option");
@@ -2114,10 +2340,15 @@
       option.selected = state.project && state.project.id === project.id;
       select.appendChild(option);
     });
+    $("delete-project-button").disabled = !state.project;
   }
 
   function loadProjects(selectId) {
     var requestId = ++projectRequestId;
+    finishWheelCapture("overview");
+    finishWheelCapture("focus");
+    stopInertia("overview");
+    stopInertia("focus");
     invalidatePendingInteraction();
     stopEventStream();
     setLoading(true);
@@ -2136,6 +2367,14 @@
         state.overview = null;
         state.history = null;
         state.reviewQueue = [];
+        state.overviewPan = { x: 0, y: 0 };
+        state.overviewScale = 1;
+        state.focusPan = { x: 0, y: 0 };
+        state.zoom = 1;
+        state.overviewPreviousViewport = null;
+        state.focusPreviousViewport = null;
+        $("overview-restore-button").disabled = true;
+        $("focus-restore-button").disabled = true;
         updateHistoryButtons();
         setStatus("请创建第一个项目", false);
         setLoading(false);
@@ -2186,7 +2425,180 @@
     }).catch(function (error) { return showProjectError(error, null, requestId); });
   }
 
+  function requestDeleteProject(confirmToken) {
+    var project = state.project;
+    if (!project) return;
+    var projectId = project.id;
+    var requestId = projectRequestId;
+    var query = "?reason=" + encodeURIComponent("通过目标管理界面删除项目") + "&actor_type=user";
+    if (confirmToken) query += "&confirm_token=" + encodeURIComponent(confirmToken);
+    $("delete-project-button").disabled = true;
+    setStatus("正在删除项目并归档目标...", false);
+    api("/api/goals/projects/" + encodeURIComponent(projectId) + query, {
+      method: "DELETE"
+    }).then(function () {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
+      closeDialog();
+      state.selected = null;
+      state.editing = false;
+      state.backStack = [];
+      state.forwardStack = [];
+      updateNodeHash(null);
+      return loadProjects(null).then(function () {
+        setStatus("项目已删除，目标和关系已归档", false);
+      });
+    }).catch(function (error) {
+      if (!currentProjectRequestValid(projectId, requestId)) return null;
+      $("delete-project-button").disabled = false;
+      if (error.payload && error.payload.requires_confirm) {
+        openConfirm(
+          "服务端确认删除项目",
+          "Goal Service 要求再次确认。确认后项目内的所有目标和关系都会软删除，审计记录会保留。",
+          function () { requestDeleteProject(error.payload.confirm_token); },
+          "确认删除项目"
+        );
+        return;
+      }
+      return showProjectError(error, projectId, requestId);
+    });
+  }
+
+  function restoreArchivedProject(projectId) {
+    var requestId = projectRequestId;
+    setStatus("正在恢复归档项目...", false);
+    api("/api/goals/projects/" + encodeURIComponent(projectId) + "/restore?reason=" +
+      encodeURIComponent("通过目标管理界面恢复归档项目") + "&actor_type=user", {
+      method: "POST"
+    }).then(function () {
+      closeDialog();
+      return loadProjects(projectId).then(function () {
+        if (requestId === projectRequestId) setStatus("项目已恢复", false);
+      });
+    }).catch(function (error) {
+      if (requestId === projectRequestId) showError(error);
+    });
+  }
+
+  function purgeArchivedProject(project, confirmToken, confirmName, reason) {
+    var query = "?confirm_name=" + encodeURIComponent(confirmName) +
+      "&reason=" + encodeURIComponent(reason) +
+      "&actor_type=user";
+    if (confirmToken) query += "&confirm_token=" + encodeURIComponent(confirmToken);
+    api("/api/goals/projects/" + encodeURIComponent(project.id) + "/purge" + query, {
+      method: "DELETE"
+    }).then(function () {
+      closeDialog();
+      setStatus("归档项目已永久删除", false);
+      openArchivedProjectsDialog();
+    }).catch(function (error) {
+      if (error.payload && error.payload.requires_confirm) {
+        openConfirm(
+          "服务端确认永久删除",
+          "这是不可恢复的永久删除操作。服务端要求再次确认后才会清除全部数据。",
+          function () { purgeArchivedProject(project, error.payload.confirm_token, confirmName, reason); },
+          "确认永久删除"
+        );
+        return;
+      }
+      showError(error);
+    });
+  }
+
+  function openPurgeProjectDialog(project) {
+    var submitPurge = function () {
+      var name = $("purge-project-name").value.trim();
+      var reason = $("purge-project-reason").value.trim();
+      if (name !== project.name) {
+        setStatus("项目名称不匹配，未执行永久删除", true);
+        $("purge-project-name").focus();
+        state.dialogAction = submitPurge;
+        return;
+      }
+      if (!reason) {
+        setStatus("永久删除原因不能为空", true);
+        $("purge-project-reason").focus();
+        state.dialogAction = submitPurge;
+        return;
+      }
+      purgeArchivedProject(project, null, name, reason);
+    };
+    openDialog(
+      "永久删除归档项目",
+      '<form id="purge-project-form" class="dialog-form">' +
+      '<p class="dialog-message">此操作不可恢复，会清除项目的目标、关系、证据、引用和审计记录。</p>' +
+      '<label>输入项目名称确认<input id="purge-project-name" type="text" autocomplete="off" placeholder="' +
+      escapeHtml(project.name || "") + '"></label>' +
+      '<label>原因<input id="purge-project-reason" type="text" maxlength="240" value="通过目标管理界面永久删除归档项目"></label>' +
+      '</form>',
+      submitPurge,
+      "永久删除"
+    );
+    $("purge-project-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      runDialogAction();
+    });
+    $("purge-project-name").focus();
+  }
+
+  function renderArchivedProjectsDialog(projects, query, sort) {
+    var content = '<form id="archived-project-filter" class="archived-project-filter">' +
+      '<label>搜索<input id="archived-project-search" type="search" value="' + escapeHtml(query || "") + '" placeholder="项目名称或描述"></label>' +
+      '<label>排序<select id="archived-project-sort">' +
+      ['archived_desc', 'archived_asc', 'name_asc', 'name_desc'].map(function (value) {
+        var label = { archived_desc: "最近归档", archived_asc: "最早归档", name_asc: "名称 A-Z", name_desc: "名称 Z-A" }[value];
+        return '<option value="' + value + '"' + (value === sort ? " selected" : "") + '>' + label + '</option>';
+      }).join("") + '</select></label><button type="submit" class="button button-primary">筛选</button></form>';
+    if (!projects.length) {
+      content += '<p class="dialog-message">没有匹配的归档项目。</p>';
+    } else {
+      content += '<div class="archived-project-list">' + projects.map(function (project) {
+        return '<div class="archived-project-item"><div><strong>' + escapeHtml(project.name || "未命名项目") + '</strong>' +
+          '<small>归档于 ' + escapeHtml(project.archived_at || project.deleted_at || "未知时间") + '</small></div>' +
+          '<div class="archived-project-actions"><button type="button" class="button button-quiet" data-restore-project-id="' +
+          escapeHtml(project.id) + '">恢复</button><button type="button" class="button button-danger" data-purge-project-id="' +
+          escapeHtml(project.id) + '">永久删除</button></div></div>';
+      }).join("") + '</div>';
+    }
+    openDialog("已归档项目", content, closeDialog, "关闭");
+    $("archived-project-filter").addEventListener("submit", function (event) {
+      event.preventDefault();
+      openArchivedProjectsDialog($("archived-project-search").value.trim(), $("archived-project-sort").value);
+    });
+    $("archived-project-sort").addEventListener("change", function () {
+      openArchivedProjectsDialog($("archived-project-search").value.trim(), this.value);
+    });
+    document.querySelectorAll("[data-restore-project-id]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var project = projects.find(function (item) { return item.id === button.dataset.restoreProjectId; });
+        if (!project) return;
+        openConfirm("恢复归档项目", "恢复后项目中的目标、关系和项目入口都会重新可用。", function () {
+          restoreArchivedProject(project.id);
+        }, "确认恢复");
+      });
+    });
+    document.querySelectorAll("[data-purge-project-id]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var project = projects.find(function (item) { return item.id === button.dataset.purgeProjectId; });
+        if (project) openPurgeProjectDialog(project);
+      });
+    });
+  }
+
+  function openArchivedProjectsDialog(query, sort) {
+    query = query || "";
+    sort = sort || "archived_desc";
+    setStatus("正在加载归档项目...", false);
+    var path = "/api/goals/projects/archived?query=" + encodeURIComponent(query) + "&sort=" + encodeURIComponent(sort);
+    api(path).then(function (payload) {
+      renderArchivedProjectsDialog(payload.projects || [], query, sort);
+    }).catch(function (error) { showError(error); });
+  }
+
   $("project-select").addEventListener("change", function (event) {
+    finishWheelCapture("overview");
+    finishWheelCapture("focus");
+    stopInertia("overview");
+    stopInertia("focus");
     invalidatePendingInteraction();
     stopEventStream();
     state.project = state.projects.find(function (project) {
@@ -2299,6 +2711,17 @@
     renderDetail(null);
   });
   $("new-project-button").addEventListener("click", function () { toggleProjectForm(true); });
+  $("delete-project-button").addEventListener("click", function () {
+    var project = state.project;
+    if (!project) return;
+    openConfirm(
+      "删除目标项目",
+      "项目“" + project.name + "”及其全部目标和关系将被软删除并归档。审计记录会保留，Goal Service 还会要求再次确认。",
+      function () { requestDeleteProject(); },
+      "删除项目"
+    );
+  });
+  $("archived-projects-button").addEventListener("click", openArchivedProjectsDialog);
   $("empty-create-button").addEventListener("click", function () { toggleProjectForm(true); });
   $("cancel-project-button").addEventListener("click", function () { toggleProjectForm(false); });
   $("create-project-button").addEventListener("click", createProject);
@@ -2315,39 +2738,47 @@
     loadOverview();
   });
   $("focus-reset-button").addEventListener("click", function () {
+    finishWheelCapture("focus");
+    stopInertia("focus");
+    capturePreviousViewport("focus");
     state.zoom = 1;
     state.focusPan = { x: 0, y: 0 };
     renderRadial();
+    persistLayoutState();
   });
+  $("focus-restore-button").addEventListener("click", function () { restorePreviousViewport("focus"); });
   $("overview-zoom-in").addEventListener("click", function () { setOverviewScale(state.overviewScale + .1); });
   $("overview-zoom-out").addEventListener("click", function () { setOverviewScale(state.overviewScale - .1); });
-  $("overview-fit-button").addEventListener("click", function () {
-    state.overviewPan = { x: 0, y: 0 };
-    state.overviewScale = 1;
-    persistLayoutState();
-    applyOverviewTransform();
-  });
+  $("overview-fit-button").addEventListener("click", function () { fitSurface("overview"); });
+  $("overview-restore-button").addEventListener("click", function () { restorePreviousViewport("overview"); });
   $("radial-wrap").addEventListener("wheel", function (event) {
     event.preventDefault();
+    captureWheelViewport("focus");
     var continuous = Math.abs(event.deltaY) < 50;
     if (event.ctrlKey || !continuous) {
-      setSurfaceScale("focus", state.zoom + (event.deltaY < 0 ? .05 : -.05));
+      setSurfaceScale("focus", state.zoom + (event.deltaY < 0 ? .05 : -.05), true);
       return;
     }
-    state.focusPan.x -= event.deltaX * .7;
-    state.focusPan.y -= event.deltaY * .7;
-    applyFocusPan();
+    stopInertia("focus");
+    setSurfacePan("focus", {
+      x: state.focusPan.x - event.deltaX * .7,
+      y: state.focusPan.y - event.deltaY * .7
+    });
+    persistLayoutState();
   }, { passive: false });
   $("overview-wrap").addEventListener("wheel", function (event) {
     event.preventDefault();
+    captureWheelViewport("overview");
     var continuous = Math.abs(event.deltaY) < 50;
     if (event.ctrlKey || !continuous) {
-      setSurfaceScale("overview", state.overviewScale + (event.deltaY < 0 ? .08 : -.08));
+      setSurfaceScale("overview", state.overviewScale + (event.deltaY < 0 ? .08 : -.08), true);
       return;
     }
-    state.overviewPan.x -= event.deltaX * .7;
-    state.overviewPan.y -= event.deltaY * .7;
-    applyOverviewTransform();
+    stopInertia("overview");
+    setSurfacePan("overview", {
+      x: state.overviewPan.x - event.deltaX * .7,
+      y: state.overviewPan.y - event.deltaY * .7
+    });
     persistLayoutState();
   }, { passive: false });
   $("overview-svg").addEventListener("pointerdown", function (event) {
@@ -2357,11 +2788,17 @@
     }
     if (event.button !== 0) return;
     var overviewSvg = $("overview-svg");
+    finishWheelCapture("overview");
+    stopInertia("overview");
+    capturePreviousViewport("overview");
     state.overviewPanDrag = {
       pointerId: event.pointerId,
       startClient: { x: event.clientX, y: event.clientY },
       base: { x: state.overviewPan.x, y: state.overviewPan.y },
-      moved: false
+      moved: false,
+      lastClient: { x: event.clientX, y: event.clientY },
+      lastTime: performance.now(),
+      velocity: { x: 0, y: 0 }
     };
     $("overview-svg").classList.add("is-panning");
     capturePointer(overviewSvg, event.pointerId);
@@ -2374,12 +2811,20 @@
     var drag = state.overviewPanDrag;
     if (!drag) return;
     var delta = svgClientDelta($("overview-svg"), drag.startClient, event, state.overviewScale);
+    var now = performance.now();
+    var elapsed = Math.max(1, now - drag.lastTime);
+    var stepDelta = svgPixelDelta($("overview-svg"), event.clientX - drag.lastClient.x, event.clientY - drag.lastClient.y, state.overviewScale);
+    drag.velocity = {
+      x: drag.velocity.x * .65 + clamp(stepDelta.x / elapsed, -2, 2) * .35,
+      y: drag.velocity.y * .65 + clamp(stepDelta.y / elapsed, -2, 2) * .35
+    };
+    drag.lastClient = { x: event.clientX, y: event.clientY };
+    drag.lastTime = now;
     if (Math.abs(delta.x) + Math.abs(delta.y) > 3) drag.moved = true;
-    state.overviewPan = {
+    setSurfacePan("overview", {
       x: drag.base.x + delta.x,
       y: drag.base.y + delta.y
-    };
-    applyOverviewTransform();
+    });
   });
   $("overview-svg").addEventListener("pointerup", function (event) {
     if (event.pointerType === "touch") {
@@ -2393,7 +2838,8 @@
     $("overview-svg").classList.remove("is-panning");
     if (drag.moved) {
       state.suppressOverviewClick = true;
-      persistLayoutState();
+      startInertia("overview", drag.velocity);
+      if (state.inertiaFrames.overview === null) persistLayoutState();
     }
   });
   $("overview-svg").addEventListener("pointercancel", function () {
@@ -2409,11 +2855,17 @@
       return;
     }
     if (event.button !== 0) return;
+    finishWheelCapture("focus");
+    stopInertia("focus");
+    capturePreviousViewport("focus");
     state.focusPanDrag = {
       pointerId: event.pointerId,
       startClient: { x: event.clientX, y: event.clientY },
       base: { x: state.focusPan.x, y: state.focusPan.y },
-      moved: false
+      moved: false,
+      lastClient: { x: event.clientX, y: event.clientY },
+      lastTime: performance.now(),
+      velocity: { x: 0, y: 0 }
     };
     $("radial-svg").classList.add("is-panning");
     capturePointer($("radial-svg"), event.pointerId);
@@ -2426,9 +2878,17 @@
     var drag = state.focusPanDrag;
     if (!drag) return;
     var delta = svgClientDelta($("radial-svg"), drag.startClient, event, state.zoom);
+    var now = performance.now();
+    var elapsed = Math.max(1, now - drag.lastTime);
+    var stepDelta = svgPixelDelta($("radial-svg"), event.clientX - drag.lastClient.x, event.clientY - drag.lastClient.y, state.zoom);
+    drag.velocity = {
+      x: drag.velocity.x * .65 + clamp(stepDelta.x / elapsed, -2, 2) * .35,
+      y: drag.velocity.y * .65 + clamp(stepDelta.y / elapsed, -2, 2) * .35
+    };
+    drag.lastClient = { x: event.clientX, y: event.clientY };
+    drag.lastTime = now;
     if (Math.abs(delta.x) + Math.abs(delta.y) > 3) drag.moved = true;
-    state.focusPan = { x: drag.base.x + delta.x, y: drag.base.y + delta.y };
-    applyFocusPan();
+    setSurfacePan("focus", { x: drag.base.x + delta.x, y: drag.base.y + delta.y });
   });
   $("radial-svg").addEventListener("pointerup", function (event) {
     if (event.pointerType === "touch") {
@@ -2440,7 +2900,11 @@
     releasePointer($("radial-svg"), event.pointerId);
     state.focusPanDrag = null;
     $("radial-svg").classList.remove("is-panning");
-    if (drag.moved) state.suppressRadialClick = true;
+    if (drag.moved) {
+      state.suppressRadialClick = true;
+      startInertia("focus", drag.velocity);
+      if (state.inertiaFrames.focus === null) persistLayoutState();
+    }
   });
   $("radial-svg").addEventListener("pointercancel", function () {
     state.focusPanDrag = null;
