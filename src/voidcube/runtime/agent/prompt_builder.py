@@ -595,8 +595,12 @@ def _index_description(desc: str) -> str:
 
     clause = _trim_overlap(head, _trigger_tail(desc))
     if clause:
-        return f"{head} … {clause}"
-    return head if truncated else head
+        candidate = f"{head} … {clause}"
+        # Never render longer than the description itself: for medium-length
+        # descriptions keeping the whole text is both smaller and complete.
+        stripped = desc.strip()
+        return stripped if len(candidate) >= len(stripped) else candidate
+    return head
 
 
 def _build_skills_index_line(name: str, desc: str) -> str:
@@ -611,11 +615,15 @@ def _build_skills_index_line(name: str, desc: str) -> str:
         return f"    - {name}"
     desc_part = _index_description(desc)
     line = f"    - {name}: {desc_part}"
-    if len(line) > _INDEX_LINE_BUDGET and " … " in desc_part:
-        head_part, clause = desc_part.split(" … ", 1)
+    if len(line) > _INDEX_LINE_BUDGET:
         excess = len(line) - _INDEX_LINE_BUDGET
-        clause = clause[: max(len(clause) - excess, 20)].rstrip()
-        line = f"    - {name}: {head_part} … {clause}"
+        if " … " in desc_part:
+            head_part, clause = desc_part.split(" … ", 1)
+            clause = clause[: max(len(clause) - excess, 20)].rstrip()
+            line = f"    - {name}: {head_part} … {clause}"
+        elif len(desc_part) > 24:
+            desc_part = desc_part[: max(len(desc_part) - excess - 3, 20)].rstrip() + "..."
+            line = f"    - {name}: {desc_part}"
     return line
 
 
@@ -623,10 +631,11 @@ def _build_skills_index(
     skills_by_category: dict[str, list[tuple[str, str]]],
     category_descriptions: dict[str, str],
 ) -> str:
-    """Build a compact index-only representation of available skills.
+    """Build the compact category+name listing of available skills.
 
-    Returns just the category+name listing without instructions, for use in
-    initial system prompts where full descriptions would bloat context.
+    Each line is rendered by ``_build_skills_index_line`` (head budget plus a
+    retained "when to use" clause), for use in system prompts where full
+    descriptions would bloat context.
     """
     if not skills_by_category:
         return ""
@@ -646,6 +655,43 @@ def _build_skills_index(
     return "\n".join(index_lines)
 
 
+_SKILLS_PROMPT_HEADER = (
+    "## Skills (mandatory)\n"
+    "Before replying, scan the skills below. If a skill matches or is even partially relevant "
+    "to your task, you MUST load it with skill_view(name) and follow its instructions. "
+    "Err on the side of loading — it is always better to have context you don't need "
+    "than to miss critical steps, pitfalls, or established workflows. "
+    "Skills contain specialized knowledge — API endpoints, tool-specific commands, "
+    "and proven workflows that outperform general-purpose approaches. Load the skill "
+    "even if you think you could handle the task with basic tools like web_search or terminal. "
+    "Skills also encode the user's preferred approach, conventions, and quality standards "
+    "for tasks like code review, planning, and testing — load them even for tasks you "
+    "already know how to do, because the skill defines how it should be done here.\n"
+    "If a skill has issues, fix it with skill_manage(action='patch').\n"
+    "After difficult/iterative tasks, offer to save as a skill. "
+    "If a skill you loaded was missing steps, had wrong commands, or needed "
+    "pitfalls you discovered, update it before finishing.\n"
+    "\n"
+    "<available_skills>\n"
+)
+
+_SKILLS_PROMPT_FOOTER = (
+    "\n</available_skills>\n"
+    "\n"
+    "Only proceed without loading a skill if genuinely none are relevant to the task."
+)
+
+
+def _format_skills_prompt(index_lines: list[str]) -> str:
+    """Wrap *index_lines* in the mandatory skills envelope.
+
+    Both prompt modes share this envelope: the loading rule, the manage/patch
+    reminder, and the ``<available_skills>`` fence. Only the description
+    rendering differs between ``full`` and ``index``.
+    """
+    return _SKILLS_PROMPT_HEADER + "\n".join(index_lines) + _SKILLS_PROMPT_FOOTER
+
+
 def build_skills_system_prompt(
     available_tools: "set[str] | None" = None,
     available_toolsets: "set[str] | None" = None,
@@ -663,9 +709,11 @@ def build_skills_system_prompt(
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
 
-    *mode* controls verbosity:
-      - ``"full"`` (default): includes instructions and full descriptions
-      - ``"index"``: compact listing only, for initial context reduction
+    *mode* controls description rendering; both modes share the same mandatory
+    envelope (loading rule, manage/patch reminder, ``<available_skills>`` fence):
+      - ``"full"``: full descriptions per skill
+      - ``"index"``: compact per-line rendering (head budget plus the retained
+        "when to use" clause), used by the runtime to cut system-prompt size
     """
     skills_dirs = get_all_skills_dirs()
     if not any(skills_dir.is_dir() for skills_dir in skills_dirs):
@@ -729,8 +777,12 @@ def build_skills_system_prompt(
     if not skills_by_category:
         result = ""
     elif mode == "index":
-        # Compact mode: just the index lines, no instructions
-        result = _build_skills_index(skills_by_category, category_descriptions)
+        # Compact mode: same mandatory envelope, but descriptions are rendered
+        # by ``_build_skills_index_line`` (head budget + retained trigger
+        # clause) so the listing stays small without hiding "when to use".
+        result = _format_skills_prompt(
+            _build_skills_index(skills_by_category, category_descriptions).splitlines()
+        )
     else:
         index_lines = []
         for category in sorted(skills_by_category.keys()):
@@ -750,29 +802,7 @@ def build_skills_system_prompt(
                 else:
                     index_lines.append(f"    - {name}")
 
-        result = (
-            "## Skills (mandatory)\n"
-            "Before replying, scan the skills below. If a skill matches or is even partially relevant "
-            "to your task, you MUST load it with skill_view(name) and follow its instructions. "
-            "Err on the side of loading — it is always better to have context you don't need "
-            "than to miss critical steps, pitfalls, or established workflows. "
-            "Skills contain specialized knowledge — API endpoints, tool-specific commands, "
-            "and proven workflows that outperform general-purpose approaches. Load the skill "
-            "even if you think you could handle the task with basic tools like web_search or terminal. "
-            "Skills also encode the user's preferred approach, conventions, and quality standards "
-            "for tasks like code review, planning, and testing — load them even for tasks you "
-            "already know how to do, because the skill defines how it should be done here.\n"
-            "If a skill has issues, fix it with skill_manage(action='patch').\n"
-            "After difficult/iterative tasks, offer to save as a skill. "
-            "If a skill you loaded was missing steps, had wrong commands, or needed "
-            "pitfalls you discovered, update it before finishing.\n"
-            "\n"
-            "<available_skills>\n"
-            + "\n".join(index_lines) + "\n"
-            "</available_skills>\n"
-            "\n"
-            "Only proceed without loading a skill if genuinely none are relevant to the task."
-        )
+        result = _format_skills_prompt(index_lines)
 
     # ── Store in LRU cache ────────────────────────────────────────────
     with _SKILLS_PROMPT_CACHE_LOCK:

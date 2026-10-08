@@ -137,6 +137,43 @@ def test_long_description_keeps_when_to_use_clause(monkeypatch, tmp_path):
     assert "需要做代码审查或变更复核时使用。" in result
 
 
+def test_index_mode_keeps_mandatory_envelope_and_trigger_clause(monkeypatch, tmp_path):
+    """回归：运行时切到 mode="index" 后，强制包裹与触发子句都不能丢。
+
+    紧凑模式此前只输出清单行（丢掉加载规则与 <available_skills> 围栏），
+    直接切换会静默削弱技能加载行为；描述侧也必须保留\"何时使用\"触发子句，
+    否则等于把技能发现失败换了个开关重新打开。
+    """
+    root = tmp_path / "skills"
+    description = (
+        "审查 VoidCube 的代码、技能、插件和 Pull Request，重点检查行为回归、所有权边界、安全性、"
+        "测试证据、运行时兼容性和无效兼容分支，覆盖 Python 服务、CLI 命令、插件 web 资源、"
+        "技能文档、测试夹具与打包契约等所有变更面，并在发现回归时给出最小复现步骤与已验证的修法，"
+        "必要时补充回归测试。需要做代码审查或变更复核时使用。"
+    )
+    assert len(description) > prompt_builder._INDEX_LINE_BUDGET, "前提：描述长于索引行预算"
+    _write_skill(root, "long-skill", description)
+    registry_path = tmp_path / ".skills_registry.sqlite3"
+    monkeypatch.setattr(prompt_builder, "get_all_skills_dirs", lambda: [root])
+    monkeypatch.setattr(prompt_builder, "get_disabled_skill_names", lambda: set())
+    monkeypatch.setattr(prompt_builder, "_skills_registry_path", lambda: registry_path)
+    prompt_builder.clear_skills_system_prompt_cache()
+
+    compact = prompt_builder.build_skills_system_prompt(mode="index")
+    full = prompt_builder.build_skills_system_prompt(mode="full")
+
+    for marker in (
+        "## Skills (mandatory)",
+        "MUST load it with skill_view",
+        "<available_skills>",
+        "</available_skills>",
+        "Only proceed without loading a skill",
+    ):
+        assert marker in compact, marker
+    assert "需要做代码审查或变更复核时使用。" in compact
+    assert len(compact) < len(full)
+
+
 def test_index_line_does_not_cut_inside_technical_token():
     """回归：紧凑索引不得在 llama.cpp / *.run 之类技术词的英文点号处切断。"""
     line = prompt_builder._build_skills_index_line(

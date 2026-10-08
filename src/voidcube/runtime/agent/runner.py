@@ -2351,6 +2351,11 @@ class AIAgent:
             skills_prompt = build_skills_system_prompt(
                 available_tools=self.valid_tool_names,
                 available_toolsets=avail_toolsets,
+                # Compact rendering: the mandatory envelope is identical, only
+                # descriptions are rendered per line (head budget + retained
+                # "when to use" clause) instead of verbatim, which cuts the
+                # skills block by roughly half.
+                mode="index",
             )
         else:
             skills_prompt = ""
