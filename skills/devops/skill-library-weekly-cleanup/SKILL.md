@@ -99,10 +99,14 @@ import difflib,itertools
 1. **名称口径三方一致性（最容易漏、危害最直接）**：同一批技能名在三个面口径不同——
    系统提示词清单用**目录名**，`skills_list()` 用 frontmatter **name**，`skill_view()` **只认目录名**。
    目录名 != frontmatter name 时，agent 从 `skills_list` 拿到名字去 `skill_view` → `not found`
-   （技能"看得见但打不开"）。**实测：79 个技能里 20 个违例（25%）**——11 个 * 前缀类
-   （目录 `doc` / name `doc`）+ 9 个 mlops/* 类（目录 `peft` / name `peft-fine-tuning`、
-   目录 `vllm` / name `serving-llms-vllm`）。修法属产品决策（先报告再动）：把 frontmatter name
-   改成与目录名一致（**必须重算 manifest 键，避免留孤儿键**），或改目录名（影响路径与外部引用）。
+   （技能「看得见但打不开」）。
+   - 历史：2026-09-22 全库 79 个里 **20 个违例**——11 个 `dsh-` 前缀类（目录 `doc` → name `dsh-doc`），
+     9 个 mlops/* 类（目录 `peft` → name `peft-fine-tuning`、目录 `vllm` → name `serving-llms-vllm`）。
+   - **现状（2026-10-07 复核）：0 违例**，已由「统一技能名称和描述」修正完成；本条保留为**回归守卫**，
+     体检必须复核，出现 ≥1 就报告（修法属产品决策：改 frontmatter name 时**必须重算 manifest 键**，
+     避免留孤儿键；或改目录名，但会影响路径与外部引用）。
+   - 改名后必查 **manifest 孤儿键/缺键**：`set(manifest) - {frontmatter name}` 与反向都应为空
+     （2026-10-07 实测 79/79 对齐；孤儿键会让 sync 的 `cleaned` 静默摘掉条目）。
 2. **重复 vs 互补**：见步骤 4 的 0.30 阈值 + 子集占比判定。
 3. **注册类一致性**：`deprecated=1` 残留；`supersedes` 指向不存在的技能；同名 home/repo 两条记录
    `content_hash` 不一致（= 同名不同内容冲突）。2026-09-22 实测三项均为 0。
@@ -129,5 +133,5 @@ import difflib,itertools
 - 运行时 79 SKILL.md / 仓库 73 / manifest 73 条目 / registry 152 行（home 79 + repo 73，双根索引是设计非 bug）
 - 运行时独有（不在仓库/manifest，手工或 Agent 专属）6 个：bilibili-media-playback、browser-media-silence、manual-skill-validation、skill-library-weekly-cleanup、voidcube-change-regression-review、voidcube-cli-command-refactor
 - `sync_skills()` 的 `user_modified` 列表需逐项判"manifest 陈旧"还是"真实分叉"，判别方法见 `manual-skill-validation` 第 2 步（raw / LF 归一化双 hash 对照）
-- **冲突体检实测（2026-09-22）**：名称口径违例 20 个（P1，见体检章节第 1 条）；frontmatter 重名 0；目录重名 0；内容重复 0（唯一 ≥0.30 的 github/* 为互补）；deprecated 0；supersedes 失效 0；同名 home/repo 内容不一致 0；技能名与工具名重合 0；触发语完全重合 0
+- **冲突体检实测（2026-10-07 复核）**：名称口径违例 **0**（2026-09-22 曾 20，已修，见体检章节第 1 条）；frontmatter 重名 0；目录重名 0；内容重复 0（唯一 ≥0.30 的 github/* 四件套为互补）；deprecated 0；supersedes 失效 0；同名 home/repo 内容不一致 0；技能名与工具名重合 0（工具名 54）；触发语完全重合 0；manifest 孤儿键/缺键 0；registry 158 行（home 79 + repo 79）
 - 数量每次清理都会变，以本节命令实测为准，不要引用本节的数字当结论
