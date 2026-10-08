@@ -441,5 +441,13 @@ full 分支**直接渲染注册表里存的 `description`，不调用** `_build_
   全量门禁 `scripts/run_ci_tests.py` → 3673 passed。
 - 提示词变长（实测 8688→16397 字符，≈+2k tokens）：描述不再被砍的直接代价。若在意预算，另做
   "提示词侧句点感知压到首句 + 触发子句"的有界渲染，但**别再回到 60 这种硬截**。
+  该有界渲染**已实现**（`prompt_builder._index_description` + `_INDEX_LINE_BUDGET=170`）：
+  head 预算 70 字符 + 尾段保留触发子句（`时使用`/`Use when` 等 15 个触发词），并对 head 与尾段做
+  重叠去重、整行长度回裁。实测效果（79 技能）：描述含触发语的 44 个技能，index 行里看不到触发语的
+  数量 **44 → 0**；无一行超预算；`index` 体积 8656 字符 vs `full` 16397（省 47%）。回归测试：
+  `test_index_line_keeps_trailing_trigger_clause_for_long_cjk_description` 与
+  `test_index_line_stays_bounded_without_trigger_clause`（后者带「描述长于头部预算」的前提断言）。
+  判据提醒：head 预算仍会截断首句（出现 `…`），尾段是**触发子句窗口**（触发词前 20 字符起、上限 70 字符），
+  因此判断 index 行是否可用，要看触发子句在不在，而不是看首句是否完整。
 - 改本技能文本时仍须 repo == runtime == manifest 三方一致 + `test_integration_policy.py`
   （描述文本也在扫描面内）。
