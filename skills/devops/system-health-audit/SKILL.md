@@ -645,6 +645,44 @@ event_coverage=0.684   failed_checks=['event_coverage','validated_event_coverage
 
 交付按“已复现缺陷 / 静态风险 / 设计待确认 / 改进建议”分栏；附当前版本、证据、影响范围和验证限制。不要将所有假设写成持久故障基线。
 
+## 本次审计新增经验（2026-10-07）
+
+### recall_traces 写入侧仍用本地时间 → 启动归一化只是"存量迁移"，混用会复发
+启动时 `_normalize_timestamp_timezones` 会把 `recall_traces.created_at/completed_at` 改写为 UTC，
+但**写入侧未改**：`Mem/src/memai/application/memory_service.py:5590` 与 `:5794` 用
+`datetime.now().astimezone().isoformat()` 生成本地 +08:00。因此每次服务重启后新写入的
+recall_trace 又是 +08:00，`+00:00`/`+08:00` 重新混存。
+判据：`SELECT created_at,completed_at FROM recall_traces ORDER BY created_at DESC LIMIT 3`——
+最新一行是 +08:00 而历史是 +00:00，即为写入侧未修（turns 因写入侧已用 UTC 故保持全 UTC）。
+附带：`turns.compression_retry_after` 也是本地 +08:00，且不在 `_TIMESTAMP_COLUMN_TARGETS` 白名单；
+排查时区混用不要只盯 `turns.timestamp`。
+
+### 诊断类记忆隔离的词表覆盖缺口
+兜底隔离 `_quarantine_diagnostic_memories` 的标记词只有 `("审计","自检")`。
+实测 `hidden=0` 中仍有 12 条标题含 诊断/评估/审查/review（如"Mem 时区问题诊断""记忆系统专项深度诊断"
+"上下文与屏幕感知诊断"），可被无关提问召回。扩词表前必须先做误伤检查，不要一次性放宽 LIKE。
+
+### Tier2 质量门禁的 polarity_consistency 在大批次上疑似系统性误杀
+`tier1_to_tier2_bridge.py:915-919` 的极性一致性用 `_has_explicit_negation` 粗粒度启发式：
+摘要的"是否含显式否定"与来源 turn 集合不一致即记 0.0；单事件批次一旦判 0 →
+`no_valid_events` → 整批 rejected。
+判据：读 `compression_quality_audit` 最近 N 条，若大量出现 `cand=14 pol≈0.12` 且
+`source_support`/`identifier_fidelity` 均通过、**仅极性失败**，应怀疑启发式误杀而非真实质量问题。
+即 `quality_rejected` 不等于"提取差"——要先分清是哪个 check 在拦、拦得是否合理。
+
+### 周任务失败的可观测性缺口：run 只存 error 字符串，无 traceback
+`技能库每周清理`（weekly）连续两次 run failed，error=`'AIAgent' object has no attribute '_session_db'`，
+elapsed 仅 1.4-1.7s（早于 LLM 调用）。`AIAgent.__init__`（runner.py:418）无条件设置 `self._session_db`，
+故正常实例不应缺该属性；而 `commands/registry.py` 多处直接读 `host._session_db`
+（278-280/533-540/676-679/835/1219），较新代码已改用 getattr/`__dict__.get` 保护
+（registry.py:1952、application.py:5011）——说明"无 `_session_db` 的 host"是被预期的，
+未保护的访问点是候选。因 scheduled run 记录不含堆栈，定位前需先补 traceback 采集，不能只凭 error 字符串猜。
+
+### 备份新鲜度与构建残留纳入常规报告
+本轮活跃库 mtime 2026-10-07，最新备份 2026-09-10（26.7 天，远超 3 天阈值）。
+构建残留：仓库根 `build/`(12M)、`dist/`(2.4M)、`voidcube_agent.egg-info/`(71K)（已被 .gitignore 忽略，
+不污染 git），非 `.venv`/`.git` 下 1234 个 `.pyc`。这些不影响服务，但会误导排障，应在报告中显式列出。
+
 ## 复用建议
 - 每次系统自检后，将新发现的模式追加到 `endogenous-failure-analysis` 或 `memory-system-diagnostics` 技能的"已知根因模式"部分
 - 如果发现了新的健康指标阈值，更新本技能的"关键阈值"段落
