@@ -542,18 +542,81 @@ def _first_sentence(desc: str) -> str:
     return desc
 
 
+_INDEX_HEAD_BUDGET = 70
+_INDEX_TAIL_BUDGET = 70
+_INDEX_LINE_BUDGET = 170
+
+# Most skills place their "when to use" clause at the tail of the description.
+# The compact index must keep that clause: a bare head-truncation hides the
+# trigger for every long single-sentence (mostly CJK) description, and taking
+# only the first sentence hides it for multi-sentence descriptions as well.
+_TRIGGER_TOKENS = (
+    "时使用", "时调用", "时加载", "时优先", "时参考", "时检查",
+    "时执行", "时读取", "时应用", "时处理", "时排查", "时诊断",
+    "Use when", "use when", "when the user",
+)
+
+
+def _contains_trigger(text: str) -> bool:
+    return any(token in text for token in _TRIGGER_TOKENS)
+
+
+def _trigger_tail(desc: str) -> str:
+    """Return the trailing 'when to use' clause of *desc*, or ``""``."""
+    position = -1
+    for token in _TRIGGER_TOKENS:
+        position = max(position, desc.rfind(token))
+    if position < 0:
+        return ""
+    start = max(0, position - 20)
+    return desc[start : start + _INDEX_TAIL_BUDGET].strip()
+
+
+def _trim_overlap(head: str, clause: str) -> str:
+    """Drop a clause prefix that already ends *head* (avoids duplicated text)."""
+    for size in range(min(len(clause), len(head)), 0, -1):
+        if clause.startswith(head[-size:]):
+            return clause[size:].strip()
+    return clause
+
+
+def _index_description(desc: str) -> str:
+    """Render *desc* for the compact index, always keeping the trigger clause."""
+    first_sentence = _first_sentence(desc).strip() or desc.strip()
+    if len(first_sentence) <= _INDEX_HEAD_BUDGET:
+        head = first_sentence
+        truncated = False
+    else:
+        head = first_sentence[: _INDEX_HEAD_BUDGET - 3] + "..."
+        truncated = True
+
+    if _contains_trigger(head):
+        return head
+
+    clause = _trim_overlap(head, _trigger_tail(desc))
+    if clause:
+        return f"{head} … {clause}"
+    return head if truncated else head
+
+
 def _build_skills_index_line(name: str, desc: str) -> str:
     """Build one line of the compact skills index.
 
-    Keeps the description to its first sentence (~80 chars) so the index stays
-    compact, without cutting inside technical tokens (``*.cpp``, ``*.run`` ...).
+    Keeps the description compact without cutting inside technical tokens
+    (``*.cpp``, ``*.run`` ...) and without dropping the trailing "when to use"
+    clause that most skills rely on for discovery.  The assembled line stays
+    within ``_INDEX_LINE_BUDGET``.
     """
     if not desc:
         return f"    - {name}"
-    first_sentence = _first_sentence(desc)
-    if len(first_sentence) > 80:
-        first_sentence = first_sentence[:77] + "..."
-    return f"    - {name}: {first_sentence}"
+    desc_part = _index_description(desc)
+    line = f"    - {name}: {desc_part}"
+    if len(line) > _INDEX_LINE_BUDGET and " … " in desc_part:
+        head_part, clause = desc_part.split(" … ", 1)
+        excess = len(line) - _INDEX_LINE_BUDGET
+        clause = clause[: max(len(clause) - excess, 20)].rstrip()
+        line = f"    - {name}: {head_part} … {clause}"
+    return line
 
 
 def _build_skills_index(

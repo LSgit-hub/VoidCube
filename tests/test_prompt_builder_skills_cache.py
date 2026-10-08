@@ -145,3 +145,30 @@ def test_index_line_does_not_cut_inside_technical_token():
 
     assert "llama.cpp" in line
     assert "第二句" not in line
+
+
+def test_index_line_keeps_trailing_trigger_clause_for_long_cjk_description():
+    """回归：中文长单句描述把『何时使用』写在末尾，紧凑索引不能把触发条件砍掉。"""
+    desc = (
+        "审计和整理 VoidCube 项目的长期记录、决策说明与维护文档，"
+        "并判断记录是否仍有未来价值、是否已被当前代码或文档取代、以及是否应归档或删除时使用。"
+    )
+    line = prompt_builder._build_skills_index_line("archive-agent-notes", desc)
+
+    assert "时使用" in line
+    assert line.rstrip().endswith("时使用。")
+    assert len(line) <= prompt_builder._INDEX_LINE_BUDGET
+
+
+def test_index_line_stays_bounded_without_trigger_clause():
+    """无触发子句时只保留首句头部，且行长度有界（不引入无意义尾段）。"""
+    desc = (
+        "在 VoidCube 中寻找可验证的简化机会，删除重复状态、失效兼容逻辑、过度抽象，"
+        "以及与当前行为脱节的文档，同时保持现有边界与测试证据不被削弱。"
+    )
+    assert len(desc) > prompt_builder._INDEX_HEAD_BUDGET, "前提：描述长于头部预算"
+
+    line = prompt_builder._build_skills_index_line("find-simplifications", desc)
+
+    assert line.rstrip().endswith("...")
+    assert len(line) <= prompt_builder._INDEX_LINE_BUDGET
