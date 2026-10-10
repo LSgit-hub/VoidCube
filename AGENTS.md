@@ -9,3 +9,4 @@
    - 已由仓库级守卫强制：`.githooks/pre-commit`（通过 `git config core.hooksPath .githooks` 启用）。暂存集合同时包含 `skills/` 与 `src/`、`Mem/src/` 时会被拒绝提交。
    - 确需合并提交时使用 git 的显式逃生口 `git commit --no-verify`；停用守卫用 `git config --unset core.hooksPath`。
    - 该守卫只拦截"技能 × 代码"混合这一确定性规则；提交信息与改动范围是否一致仍需人工把关。
+7. 小范围改动尽量只做相关测试，避免总使用全量门禁测试浪费时间。
