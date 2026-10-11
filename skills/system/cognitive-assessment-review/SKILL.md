@@ -1,6 +1,6 @@
 ---
 name: cognitive-assessment-review
-description: 审查 VoidCube 内生认知评估记忆（cognitive assessment memory）的标准流程。当 self_learning 任务的学习分支为 cognitive_assessment_review、或需对比"任务派发快照"与"实时评估数据"提取漂移（drift）、或需复现 build_cognitive_assessment_memory 系列构建器时使用。
+description: "当用户审查或复现内生认知评估记忆构建器时使用。 审查 VoidCube 内生认知评估记忆（cognitive assessment memory）的标准流程。当 self_learning 任务的学习分支为 cognitive_assessment_review、或需对比\"任务派发快照\"与\"实时评估数据\"提取漂移（drift）、或需复现 build_cognitive_assessment_memory 系列构建器时使用。"
 ---
 
 # 内生认知评估记忆审查 (cognitive_assessment_review)

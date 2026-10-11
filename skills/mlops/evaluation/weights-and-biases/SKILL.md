@@ -1,6 +1,6 @@
 ---
 name: weights-and-biases
-description: 使用W&B跟踪ML实验，自动记录日志，实时可视化训练过程，通过扫描优化超参数，管理模型注册表 - 协作式MLOps平台当用户需要跟踪 ML 实验、对比运行、做超参扫描或管理模型注册表时使用。
+description: "当用户需要跟踪 ML 实验、对比运行、做超参扫描或管理模型注册表时使用。 使用W&B跟踪ML实验，自动记录日志，实时可视化训练过程，通过扫描优化超参数，管理模型注册表 - 协作式MLOps平台"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

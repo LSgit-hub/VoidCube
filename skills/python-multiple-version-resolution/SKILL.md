@@ -1,9 +1,6 @@
 ---
 name: python-multiple-version-resolution
-description: >
-  诊断和解决 Windows 上多版本 Python 冲突问题。当 check_dependencies 误报 Python 版本过旧、
-  或 python 命令指向错误的 Python 版本时使用。触发词："Python 找不到"、"版本不对"、
-  "PATH 优先级"、"多个 Python"、"python --version 结果不对"。
+description: "当 Python 版本不对、找不到或 PATH 优先级异常时使用。 诊断和解决 Windows 上多版本 Python 冲突问题。当 check_dependencies 误报 Python 版本过旧、 或 python 命令指向错误的 Python 版本时使用。触发词：\"Python 找不到\"、\"版本不对\"、 \"PATH 优先级\"、\"多个 Python\"、\"python --version 结果不对\"。"
 version: 1.0.0
 platforms: [windows]
 metadata:

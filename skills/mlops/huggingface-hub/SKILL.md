@@ -1,6 +1,6 @@
 ---
 name: huggingface-hub
-description: Hugging Face Hub CLI (hf) — 搜索、下载和上传模型与数据集，管理仓库，用SQL查询数据集，部署推理端点，管理Spaces和存储桶。当用户需要用 hf CLI 搜索、下载或上传模型与数据集、管理仓库或 Spaces，或用 SQL 查询数据集时使用。
+description: "当用户需要搜索、下载或上传模型与数据集时使用。 Hugging Face Hub CLI (hf) — 搜索、下载和上传模型与数据集，管理仓库，用SQL查询数据集，部署推理端点，管理Spaces和存储桶。"
 version: 1.0.0
 author: Hugging Face
 license: MIT

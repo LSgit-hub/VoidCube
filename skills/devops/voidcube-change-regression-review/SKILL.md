@@ -1,7 +1,7 @@
 ---
 name: voidcube-change-regression-review
 category: devops
-description: 复查 VoidCube 最近一轮代码改动（提交或工作区）引入的回归、死代码与一致性缺口。当用户说“复查/再检查一下这轮优化有没有问题”“review your recent changes”“提交后验证”时使用。核心是跑全量 pytest 而非只跑目标用例——目标用例会漏掉被破坏的无关测试。
+description: "当用户要求复查最近改动、提交后验证或查回归时使用。 复查 VoidCube 最近一轮代码改动（提交或工作区）引入的回归、死代码与一致性缺口。当用户说“复查/再检查一下这轮优化有没有问题”“review your recent changes”“提交后验证”时使用。核心是跑全量 pytest 而非只跑目标用例——目标用例会漏掉被破坏的无关测试。"
 ---
 
 # VoidCube 最近改动回归复查

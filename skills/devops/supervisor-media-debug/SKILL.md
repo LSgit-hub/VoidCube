@@ -1,6 +1,6 @@
 ---
 name: supervisor-media-debug
-description: 调试 VoidCube 多媒体展示板白屏问题。当 media_display 推送成功但 Web UI 显示白屏时使用。
+description: "当 media_display 推送成功但 Web UI 白屏时使用。 调试 VoidCube 多媒体展示板白屏问题。当 media_display 推送成功但 Web UI 显示白屏时使用。"
 ---
 
 # VoidCube 多媒体展示板调试

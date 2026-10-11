@@ -1,6 +1,6 @@
 ---
 name: skill-library-weekly-cleanup
-description: VoidCube 技能库每周清理流程（列库→查 deprecated→查待补全→查重复子集→查依赖→出报告）。当收到"技能库每周清理"定时任务或用户要求清理/审计技能库时使用。
+description: "当用户要求清理或审计技能库、收到每周清理任务时使用。 VoidCube 技能库每周清理流程（列库→查 deprecated→查待补全→查重复子集→查依赖→出报告）。当收到\"技能库每周清理\"定时任务或用户要求清理/审计技能库时使用。"
 category: devops
 ---
 

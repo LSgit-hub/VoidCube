@@ -1,6 +1,6 @@
 ---
 name: pytorch-fsdp
-description: 使用PyTorch FSDP进行完全分片数据并行训练的专家指导 - 参数分片、混合精度、CPU卸载、FSDP2当用户使用 FSDP 或 FSDP2 做多卡训练、询问参数分片/混合精度/CPU 卸载配置，或排查分布式训练问题时使用。
+description: "当用户使用 FSDP 或 FSDP2 做多卡训练或排查分布式训练问题时使用。 使用PyTorch FSDP进行完全分片数据并行训练的专家指导 - 参数分片、混合精度、CPU卸载、FSDP2"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

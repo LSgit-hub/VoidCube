@@ -1,6 +1,6 @@
 ---
 name: github-issues
-description: 创建、管理、分类和关闭GitHub问题。搜索现有问题、添加标签、分配人员并链接到PR。使用gh CLI或回退到git + GitHub REST API通过curl。当用户要求创建、搜索、分类或关闭 GitHub issue，或把 issue 关联到 PR 时使用。
+description: "当用户要求创建、搜索或关闭 GitHub issue 时使用。 创建、管理、分类和关闭GitHub问题。搜索现有问题、添加标签、分配人员并链接到PR。使用gh CLI或回退到git + GitHub REST API通过curl。"
 version: 1.1.0
 author: Voidcube Agent
 license: MIT

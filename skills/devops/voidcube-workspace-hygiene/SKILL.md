@@ -1,6 +1,6 @@
 ---
 name: voidcube-workspace-hygiene
-description: VoidCube 仓库与运行时工作区卫生清理——构建产物/缓存/幽灵 pyc、残留 git worktree 注册、测试现场目录、陈旧运行时绑定记录、日志轮转、运行时技能入库。当用户说"清理残留/工程卫生/回收磁盘/worktree 太多/日志太大/整理工作区"时使用。
+description: "当用户要求清理残留、整理工作区或回收磁盘时使用。 VoidCube 仓库与运行时工作区卫生清理——构建产物/缓存/幽灵 pyc、残留 git worktree 注册、测试现场目录、陈旧运行时绑定记录、日志轮转、运行时技能入库。当用户说\"清理残留/工程卫生/回收磁盘/worktree 太多/日志太大/整理工作区\"时使用。"
 category: devops
 created: 2026-09-10
 updated: 2026-09-10

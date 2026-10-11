@@ -1,6 +1,6 @@
 ---
 name: voidcube-context-compression-debug
-description: 诊断 VoidCube 的 context 压缩机制提前触发 / context_length 被判定为 128K 的问题。当用户抱怨"压缩太早"、"context 一直显示 128K"、"到 50% 就压缩"、"自动配置一点用没有"、"startup_probe/adaptive_by_model 无效"时使用。揭示 context_length 解析链路、startup_probe 设计缺陷、adaptive_by_model 为 no-op 的根因，并给出配置覆盖与代码修复两类方案。
+description: "当 context 压缩提前触发、context_length 被误判时使用。 诊断 VoidCube 的 context 压缩机制提前触发 / context_length 被判定为 128K 的问题。当用户抱怨\"压缩太早\"、\"context 一直显示 128K\"、\"到 50% 就压缩\"、\"自动配置一点用没有\"、\"startup_probe/adaptive_by_model 无效\"时使用。揭示 context_length 解析链路、startup_probe 设计缺陷、adaptive_by_model 为 no-op 的根因，并给出配置覆盖与代码修复两类方案。"
 ---
 
 # VoidCube Context Compression 诊断

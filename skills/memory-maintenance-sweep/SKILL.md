@@ -1,6 +1,6 @@
 ---
 name: memory-maintenance-sweep
-description: 系统化执行内存维护扫掠，检查 Tier1/Tier2 状态、内生驱动历史、认知对齐度，并生成维护报告。当收到 memory_maintenance 类型任务、或需定期审计记忆健康时执行。
+description: "当用户要求执行记忆健康审计或收到维护任务时使用。 系统化执行内存维护扫掠，检查 Tier1/Tier2 状态、内生驱动历史、认知对齐度，并生成维护报告。当收到 memory_maintenance 类型任务、或需定期审计记忆健康时执行。"
 ---
 
 # Memory Maintenance Sweep

@@ -1,6 +1,6 @@
 ---
 name: segment-anything
-description: 基础模型,用于零样本迁移的图像分割。当需要使用点、框或掩码作为提示分割图像中的任何对象,或自动生成图像中的所有对象掩码时使用。
+description: "当用户需要用点、框或掩码提示做零样本图像分割时使用。 基础模型,用于零样本迁移的图像分割。当需要使用点、框或掩码作为提示分割图像中的任何对象,或自动生成图像中的所有对象掩码时使用。"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

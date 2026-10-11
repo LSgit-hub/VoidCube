@@ -1,6 +1,6 @@
 ---
 name: endogenous-failure-analysis
-description: 系统化诊断 VoidCube 内生认知管道中的信号退化与自我锁死循环。当某个内生方向（grounding、governance、body_eligibility 等）学习未改善交付效果时使用。核心方法：从退化的信号标签反向追踪数据流，识别根因（证据不足/引用对齐漂移/假设错误/执行偏移），输出结构化审查报告。
+description: "当用户诊断内生认知信号退化或自我锁死循环时使用。 系统化诊断 VoidCube 内生认知管道中的信号退化与自我锁死循环。当某个内生方向（grounding、governance、body_eligibility 等）学习未改善交付效果时使用。核心方法：从退化的信号标签反向追踪数据流，识别根因（证据不足/引用对齐漂移/假设错误/执行偏移），输出结构化审查报告。"
 ---
 
 # 内生管道失败模式分析

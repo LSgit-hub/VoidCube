@@ -1,6 +1,6 @@
 ---
 name: scheduled-task-cleanup
-description: 清理 VoidCube 定时任务列表（批量删除一次性历史任务、保留周期性任务）。当用户说"清理定时任务/任务记录"、"删除已完成/失败/取消的任务"、"除了每周任务都删掉"时使用。包含 DB 只读审计法（避免工具 list 输出爆炸）、scheduled_task 动作去重（duplicate_or_in_flight_action）绕过方法、并行批量删除模式、"过期未认领 active 任务"的识别与上报判据，以及**取消失效 active 任务的治本流程**（scheduled_tasks 只是物化视图，真源是 autonomous_chain_store.json，须用 6002 的 decision 接口把 approved 置为 cancelled，否则 12~23 秒内复生）。
+description: "当用户要求清理定时任务列表、删除一次性历史任务时使用。 清理 VoidCube 定时任务列表（批量删除一次性历史任务、保留周期性任务）。当用户说\"清理定时任务/任务记录\"、\"删除已完成/失败/取消的任务\"、\"除了每周任务都删掉\"时使用。包含 DB 只读审计法（避免工具 list 输出爆炸）、scheduled_task 动作去重（duplicate_or_in_flight_action）绕过方法、并行批量删除模式、\"过期未认领 active 任务\"的识别与上报判据，以及**取消失效 active 任务的治本流程**（scheduled_tasks 只是物化视图，真源是 autonomous_chain_store.json，须用 6002 的 decision 接口把 approved 置为 cancelled，否则 12~23 秒内复生）。"
 ---
 
 # 定时任务清理（scheduled-task-cleanup）

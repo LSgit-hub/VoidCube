@@ -1,6 +1,6 @@
 ---
 name: lm-evaluation-harness
-description: 在60+学术基准测试（MMLU、HumanEval、GSM8K、TruthfulQA、HellaSwag）上评估LLM。用于基准测试模型质量、比较模型、报告学术结果或跟踪训练进度。EleutherAI、HuggingFace和主要实验室使用的行业标准。支持HuggingFace、vLLM、API。当用户需要用标准学术基准评测模型、比较模型质量、复现评估或跟踪训练进度时使用。
+description: "当用户需要用学术基准评测模型或比较模型质量时使用。 在60+学术基准测试（MMLU、HumanEval、GSM8K、TruthfulQA、HellaSwag）上评估LLM。用于基准测试模型质量、比较模型、报告学术结果或跟踪训练进度。EleutherAI、HuggingFace和主要实验室使用的行业标准。支持HuggingFace、vLLM、API。"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

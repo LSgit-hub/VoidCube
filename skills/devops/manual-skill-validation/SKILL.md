@@ -1,7 +1,7 @@
 ---
 name: manual-skill-validation
 category: devops
-description: 探针法验证手工复制到 ~/.VoidCube/skills 的技能是否真实有效，并按“有用留/没用删/有问题修”裁定与修复——发现域/注册中心/提示词三处可见性、manifest 三方 hash 对账、E2E 复制-索引-摘除复现、文档引用与硬编码标识的外部核验、bundled 技能三方对齐（repo == runtime == manifest）。当用户说手动添加了技能、要求验证技能是否真实有效可用，或反复追问同一问题时使用。
+description: "当用户要求验证手工添加的技能是否有效可用时使用。 探针法验证手工复制到 ~/.VoidCube/skills 的技能是否真实有效，并按“有用留/没用删/有问题修”裁定与修复——发现域/注册中心/提示词三处可见性、manifest 三方 hash 对账、E2E 复制-索引-摘除复现、文档引用与硬编码标识的外部核验、bundled 技能三方对齐（repo == runtime == manifest）。"
 ---
 
 # 手工技能验证（探针法）

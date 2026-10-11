@@ -1,6 +1,6 @@
 ---
 name: audiocraft
-description: 用于音频生成的PyTorch库，包括文本转音乐（MusicGen）和文本转声音（AudioGen）。需要从文本描述生成音乐、创建音效或执行旋律条件音乐生成时使用。
+description: "当用户需要从文本生成音乐、音效或旋律条件音频时使用。 用于音频生成的PyTorch库，包括文本转音乐（MusicGen）和文本转声音（AudioGen）。需要从文本描述生成音乐、创建音效或执行旋律条件音乐生成时使用。"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

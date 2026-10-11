@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: 审查 VoidCube 的代码、技能、插件和 Pull Request，重点检查行为回归、所有权边界、安全性、测试证据、运行时兼容性和无效兼容分支。需要做代码审查或变更复核时使用。
+description: "当用户要求代码审查或变更复核时使用。 审查 VoidCube 的代码、技能、插件和 Pull Request，重点检查行为回归、所有权边界、安全性、测试证据、运行时兼容性和无效兼容分支。需要做代码审查或变更复核时使用。"
 ---
 
 # VoidCube 代码审查

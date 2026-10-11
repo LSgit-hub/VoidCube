@@ -1,6 +1,6 @@
 ---
 name: system-health-audit
-description: 系统化自检 VoidCube 全栈健康状态。当用户要求"检查系统问题/缺陷/健康状态"、"review your system"、"找问题"或主动进行全面诊断时使用。覆盖服务、记忆管道、outbox、body_runtime、安全扫描器、技能库等多个维度。
+description: "当用户要求全面自检、查找系统问题或诊断健康状态时使用。 系统化自检 VoidCube 全栈健康状态。当用户要求\"检查系统问题/缺陷/健康状态\"、\"review your system\"、\"找问题\"或主动进行全面诊断时使用。覆盖服务、记忆管道、outbox、body_runtime、安全扫描器、技能库等多个维度。"
 tags: [health, audit, diagnosis, self-check]
 ---
 

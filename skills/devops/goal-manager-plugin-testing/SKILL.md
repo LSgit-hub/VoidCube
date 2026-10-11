@@ -1,7 +1,7 @@
 ---
 name: goal-manager-plugin-testing
 category: devops
-description: 目标管理器（goal_manager）插件功能验证与 HTTP API 使用指南 — 6003 端口全链路测试（项目/节点/边/批量/回滚/证据/乐观锁），含端点清单、payload 格式与实测踩坑。当用户要测试目标管理器插件功能、直接用 HTTP 操作目标图谱、或验证 goal_* 工具链路时使用。
+description: "当用户要测试 goal_manager 插件或 HTTP 操作目标图谱时使用。 目标管理器（goal_manager）插件功能验证与 HTTP API 使用指南 — 6003 端口全链路测试（项目/节点/边/批量/回滚/证据/乐观锁），含端点清单、payload 格式与实测踩坑。当用户要测试目标管理器插件功能、直接用 HTTP 操作目标图谱、或验证 goal_* 工具链路时使用。"
 ---
 
 # 目标管理器插件测试与 API 使用

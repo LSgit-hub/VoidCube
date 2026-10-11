@@ -1,6 +1,6 @@
 ---
 name: speed-up-perf
-description: 调查和优化 VoidCube 的 Python、CLI、记忆、技能索引、网络和 Web 响应性能，用可重复的用户路径测量支持行为不变的改进。需要性能分析或优化时使用。
+description: "当用户要求性能分析或优化、需可重复测量支撑时使用。 调查和优化 VoidCube 的 Python、CLI、记忆、技能索引、网络和 Web 响应性能，用可重复的用户路径测量支持行为不变的改进。需要性能分析或优化时使用。"
 ---
 
 # VoidCube 性能优化

@@ -1,6 +1,6 @@
 ---
 name: voidcube-session-transcript-divergence
-description: 诊断和修复 VoidCube 会话 transcript 与 SQLite 已提交前缀分叉（日志 "local transcript diverges from committed prefix"）。含取证脚本、危害评估与“先备份再重建基线”的安全修复模式当用户遇到 local transcript diverges from committed prefix、会话历史与 SQLite 不一致或上下文异常时使用。
+description: "当 transcript 与已提交前缀分叉或会话历史异常时使用。 诊断和修复 VoidCube 会话 transcript 与 SQLite 已提交前缀分叉（日志 \"local transcript diverges from committed prefix\"）。含取证脚本、危害评估与“先备份再重建基线”的安全修复模式"
 category: devops
 created: 2026-09-10
 updated: 2026-09-10

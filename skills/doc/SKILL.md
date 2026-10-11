@@ -1,6 +1,6 @@
 ---
 name: doc
-description: 编写、重构、审查和维护 VoidCube 的 README、docs、技能说明与操作文档。需要让文档与当前代码、命令、配置和用户流程一致时使用。
+description: "当用户要求编写、重构或核对项目文档与操作手册时使用。 编写、重构、审查和维护 VoidCube 的 README、docs、技能说明与操作文档。需要让文档与当前代码、命令、配置和用户流程一致时使用。"
 ---
 
 # VoidCube 文档

@@ -1,6 +1,6 @@
 ---
 name: axolotl
-description: 使用 Axolotl 进行 LLM 微调的参考流程，覆盖 YAML 配置、LoRA/QLoRA 和常见训练验证；具体参数必须以已安装版本的 Axolotl 文档和 CLI 校验结果为准。当用户使用 Axolotl 微调模型、询问其配置或 API、编写训练脚本或排查训练问题时使用。
+description: "当用户用 Axolotl 微调、写训练脚本或排查训练问题时使用。 使用 Axolotl 进行 LLM 微调的参考流程，覆盖 YAML 配置、LoRA/QLoRA 和常见训练验证；具体参数必须以已安装版本的 Axolotl 文档和 CLI 校验结果为准。"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

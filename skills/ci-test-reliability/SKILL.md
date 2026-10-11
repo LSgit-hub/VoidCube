@@ -1,6 +1,6 @@
 ---
 name: ci-test-reliability
-description: 设计、审查和诊断 VoidCube 的 pytest 测试，使其在 Windows、并发执行、共享资源、子进程、网络监听和异步清理下保持稳定。新增或排查易波动测试时使用。
+description: "当用户新增或排查不稳定的 pytest 测试时使用。 设计、审查和诊断 VoidCube 的 pytest 测试，使其在 Windows、并发执行、共享资源、子进程、网络监听和异步清理下保持稳定。新增或排查易波动测试时使用。"
 ---
 
 # 测试可靠性

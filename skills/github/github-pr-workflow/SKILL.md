@@ -1,6 +1,6 @@
 ---
 name: github-pr-workflow
-description: 完整的pull request生命周期 — 创建分支、提交变更、打开PR、监控CI状态、自动修复失败并合并。使用gh CLI或回退到git + GitHub REST API通过curl。当用户要求开 PR、监控 CI、自动修复失败流水线或合并 PR 时使用。
+description: "当用户要求开 PR、监控 CI 或合并 PR 时使用。 完整的pull request生命周期 — 创建分支、提交变更、打开PR、监控CI状态、自动修复失败并合并。使用gh CLI或回退到git + GitHub REST API通过curl。"
 version: 1.1.0
 author: Voidcube Agent
 license: MIT

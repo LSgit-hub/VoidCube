@@ -1,7 +1,7 @@
 ---
 name: voidcube-architecture-audit
 category: devops
-description: VoidCube 仓库架构整理/重构后的自检流程。当用户说"整理/调整了 agent 文件架构，检查一下有没有问题"或架构改动后需要验收时使用。包含 ARCHITECTURE.md 规定的验收命令、幽灵 pyc 检测、构建残留扫描和技能目录差异核对。
+description: "当仓库架构改动后需要验收、查幽灵 pyc 与构建残留时使用。 VoidCube 仓库架构整理/重构后的自检流程。当用户说\"整理/调整了 agent 文件架构，检查一下有没有问题\"或架构改动后需要验收时使用。包含 ARCHITECTURE.md 规定的验收命令、幽灵 pyc 检测、构建残留扫描和技能目录差异核对。"
 ---
 
 # VoidCube 架构整理后自检

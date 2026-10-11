@@ -1,6 +1,6 @@
 ---
 name: voidcube-cli-display-diagnostics
-description: 排查 VoidCube CLI/桌面版的显示控制命令与 emoji 渲染异常。当用户问"哪个命令开关思考内容/工具信息显示"、"emoji/符号显示不正常"、"输入栏错位/乱码"时使用。
+description: "当 emoji 或符号显示异常、输入栏错位时使用。 排查 VoidCube CLI/桌面版的显示控制命令与 emoji 渲染异常。当用户问\"哪个命令开关思考内容/工具信息显示\"、\"emoji/符号显示不正常\"、\"输入栏错位/乱码\"时使用。"
 ---
 
 # VoidCube CLI 显示控制与 emoji 渲染诊断

@@ -1,11 +1,6 @@
 ---
 name: bootstrap
-description: >
-  Agent self-bootstrap — check and install external runtime dependencies
-  (git, node, bash, docker, etc.) so the agent environment is ready for
-  all tools.  Triggered on first install, on `voidcube doctor` failures,
-  when a tool reports a missing command, or when the user asks to
-  "setup", "bootstrap", or "检查环境".
+description: "Use when a runtime dependency is missing or setup is requested. Agent self-bootstrap — check and install external runtime dependencies (git, node, bash, docker, etc.) so the agent environment is ready for all tools.  Triggered on first install, on `voidcube doctor` failures, when a tool reports a missing command, or when the user asks to \"setup\", \"bootstrap\", or \"检查环境\"."
 version: 1.0.0
 platforms: [windows, macos, linux]
 metadata:

@@ -1,7 +1,7 @@
 ---
 name: voidcube-plugin-development
 category: devops
-description: VoidCube 插件开发与集成规范 — 标准插件布局契约、plugin.json 扩展 schema、四层对接（Agent 工具/服务进程/Web UI/配置）、B1-B4 基建已落地的真实契约与已验证流程。当用户要求开发、规划或集成 VoidCube 插件（如目标管理、context_engine、memory 迁移）时使用。
+description: "当用户要求开发、规划或集成 VoidCube 插件时使用。 VoidCube 插件开发与集成规范 — 标准插件布局契约、plugin.json 扩展 schema、四层对接（Agent 工具/服务进程/Web UI/配置）、B1-B4 基建已落地的真实契约与已验证流程。当用户要求开发、规划或集成 VoidCube 插件（如目标管理、context_engine、memory 迁移）时使用。"
 ---
 
 # VoidCube 插件开发与集成

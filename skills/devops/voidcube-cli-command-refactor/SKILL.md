@@ -1,6 +1,6 @@
 ---
 name: voidcube-cli-command-refactor
-description: 修改 VoidCube CLI 内建斜杠命令（如 /model、/provider、/api）时的架构地图与安全改造流程。当需要新增/删除命令、增删标志位、改变量选择器行为、或调整命令帮助文案时使用。含 .venv 测试运行方式与 AGENTS 提交纪律。
+description: "当用户修改 CLI 内建斜杠命令、增删标志位时使用。 修改 VoidCube CLI 内建斜杠命令（如 /model、/provider、/api）时的架构地图与安全改造流程。当需要新增/删除命令、增删标志位、改变量选择器行为、或调整命令帮助文案时使用。含 .venv 测试运行方式与 AGENTS 提交纪律。"
 ---
 
 # VoidCube CLI 斜杠命令改造

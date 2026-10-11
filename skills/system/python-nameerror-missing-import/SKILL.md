@@ -1,6 +1,6 @@
 ---
 name: python-nameerror-missing-import
-description: 诊断 Python 运行时的 NameError（如 `name 'json' is not defined`）——某个模块用到了标准库/第三方模块却没有 import 它。当工具在深层调用链里抛 NameError、而明显的主模块又确实有 import 时使用。核心是用 AST（而非正则）精确定位"用了某名字但没 import"的文件。
+description: "当 NameError 缺 import 但主模块明明有 import 时使用。 诊断 Python 运行时的 NameError（如 `name 'json' is not defined`）——某个模块用到了标准库/第三方模块却没有 import 它。当工具在深层调用链里抛 NameError、而明显的主模块又确实有 import 时使用。核心是用 AST（而非正则）精确定位\"用了某名字但没 import\"的文件。"
 ---
 
 # 诊断 NameError: name 'X' is not defined（缺 import）

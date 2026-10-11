@@ -1,6 +1,6 @@
 ---
 name: vector-databases
-description: Design, configure, and troubleshoot vector databases and embedding-backed retrieval systems for RAG and semantic search. Use when implementing vector storage, similarity queries, embedding pipelines, indexing, or retrieval evaluation.
+description: "Use when implementing vector storage or semantic search. Design, configure, and troubleshoot vector databases and embedding-backed retrieval systems for RAG and semantic search. Use when implementing vector storage, similarity queries, embedding pipelines, indexing, or retrieval evaluation."
 ---
 
 # 向量数据库

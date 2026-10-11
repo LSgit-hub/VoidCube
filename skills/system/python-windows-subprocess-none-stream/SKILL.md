@@ -1,6 +1,6 @@
 ---
 name: python-windows-subprocess-none-stream
-description: 诊断和修复 Windows 上 subprocess.run(text=True) 因本地编码解码失败导致 stdout/stderr 变成 None 的静默缺陷——典型症状是 AttributeError 'NoneType' object has no attribute 'strip'，同时子进程真实输出丢失。当日志出现该 AttributeError、或看到 "Unexpected git error running ..." / 子进程输出莫名为空时使用。
+description: "当 Windows 子进程 stdout/stderr 莫名 None 或输出为空时使用。 诊断和修复 Windows 上 subprocess.run(text=True) 因本地编码解码失败导致 stdout/stderr 变成 None 的静默缺陷——典型症状是 AttributeError 'NoneType' object has no attribute 'strip'，同时子进程真实输出丢失。当日志出现该 AttributeError、或看到 \"Unexpected git error running ...\" / 子进程输出莫名为空时使用。"
 category: system
 created: 2026-09-10
 updated: 2026-09-10

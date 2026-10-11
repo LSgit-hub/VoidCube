@@ -1,6 +1,6 @@
 ---
 name: translate-docs
-description: 按 VoidCube 的术语和代码事实翻译或维护中英文文档与技能说明，保持结构、命令、代码块、链接和语义一致。只在用户明确要求文档翻译或双语同步时使用。
+description: "当用户明确要求文档翻译或中英文文档双语同步时使用。 按 VoidCube 的术语和代码事实翻译或维护中英文文档与技能说明，保持结构、命令、代码块、链接和语义一致。只在用户明确要求文档翻译或双语同步时使用。"
 disable-model-invocation: true
 user-invocable: true
 ---

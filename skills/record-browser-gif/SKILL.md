@@ -1,6 +1,6 @@
 ---
 name: record-browser-gif
-description: 录制 VoidCube Desktop 或浏览器界面的真实交互 GIF，用于说明 UI 变化、工具流程或问题复现。需要录制演示、检查可视状态或把 GIF 附加到 Pull Request 时使用。
+description: "当用户需要录制界面演示 GIF 或检查可视状态时使用。 录制 VoidCube Desktop 或浏览器界面的真实交互 GIF，用于说明 UI 变化、工具流程或问题复现。需要录制演示、检查可视状态或把 GIF 附加到 Pull Request 时使用。"
 ---
 
 # 录制 VoidCube UI GIF

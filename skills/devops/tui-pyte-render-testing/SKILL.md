@@ -1,6 +1,6 @@
 ---
 name: tui-pyte-render-testing
-description: 用 pyte 终端模拟器对 prompt_toolkit TUI 做真实渲染+交互集成测试（非打桩断言）。当需要断言 TUI 实际绘制内容、验证按键序列驱动 UI 变化、在无终端/CI 环境下测试 prompt_toolkit Application，或用户要求"真实 TUI 组件测试"时使用。
+description: "当用户要求对 prompt_toolkit TUI 做真实渲染测试时使用。 用 pyte 终端模拟器对 prompt_toolkit TUI 做真实渲染+交互集成测试（非打桩断言）。当需要断言 TUI 实际绘制内容、验证按键序列驱动 UI 变化、在无终端/CI 环境下测试 prompt_toolkit Application，或用户要求\"真实 TUI 组件测试\"时使用。"
 ---
 
 # TUI 真实渲染 + 交互集成测试（pyte + prompt_toolkit）

@@ -1,6 +1,6 @@
 ---
 name: dspy
-description: 使用声明式编程构建复杂AI系统，自动优化提示，使用DSPy创建模块化RAG系统和代理 - Stanford NLP的系统化LM编程框架当用户想用声明式编程构建 AI 系统、自动优化提示、搭建模块化 RAG 或代理时使用。
+description: "当用户想用声明式编程构建 AI 系统、自动优化提示、搭建模块化 RAG 或代理时使用。 使用声明式编程构建复杂AI系统，自动优化提示，使用DSPy创建模块化RAG系统和代理 - Stanford NLP的系统化LM编程框架"
 version: 1.0.0
 author: Orchestra Research
 license: MIT

@@ -1,6 +1,6 @@
 ---
 name: merging-stacked-prs
-description: 管理多个相互依赖的 GitHub Pull Request，包括检查依赖顺序、同步分支、逐层验证和安全合并。用户提到 stacked PR、PR stack 或依赖分支时使用。
+description: "当用户提到 stacked PR、依赖分支或需逐层合并时使用。 管理多个相互依赖的 GitHub Pull Request，包括检查依赖顺序、同步分支、逐层验证和安全合并。用户提到 stacked PR、PR stack 或依赖分支时使用。"
 ---
 
 # 合并依赖 PR

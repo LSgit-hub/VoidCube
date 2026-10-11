@@ -1,6 +1,6 @@
 ---
 name: voidcube-tier2-bridge-convergence
-description: 诊断和修复 VoidCube Tier1→Tier2 记忆压缩流水线"停滞/不收敛"（no_events_generated 长期失败、pending 永不下降），以及 /health 长期 degraded 的"健康信号过敏"（低信息批次跳过 vs 真失败、部分失败走连续阈值）。含判定性 SQL 签名（retry_count 全 0）、零事件分支漏记重试的根因、候选池取证与测试套路当用户报告 Tier1→Tier2 压缩停滞、pending 不下降、no_events_generated，或 /health 长期 degraded 时使用。
+description: "当 Tier1→Tier2 压缩停滞、pending 不下降时使用。 诊断和修复 VoidCube Tier1→Tier2 记忆压缩流水线\"停滞/不收敛\"（no_events_generated 长期失败、pending 永不下降），以及 /health 长期 degraded 的\"健康信号过敏\"（低信息批次跳过 vs 真失败、部分失败走连续阈值）。含判定性 SQL 签名（retry_count 全 0）、零事件分支漏记重试的根因、候选池取证与测试套路"
 category: devops
 created: 2026-09-10
 updated: 2026-09-11

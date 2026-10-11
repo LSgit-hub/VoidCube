@@ -1,6 +1,6 @@
 ---
 name: memory-system-diagnostics
-description: 系统化诊断 VoidCube Mem 记忆系统问题。当记忆服务不可用、mem_search 报错、记忆数据异常或怀疑记忆写入/持久化链路故障时使用。
+description: "当记忆服务异常、mem_search 报错或怀疑链路故障时使用。 系统化诊断 VoidCube Mem 记忆系统问题。当记忆服务不可用、mem_search 报错、记忆数据异常或怀疑记忆写入/持久化链路故障时使用。"
 ---
 
 # 记忆系统诊断

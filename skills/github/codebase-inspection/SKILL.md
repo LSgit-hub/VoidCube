@@ -1,6 +1,6 @@
 ---
 name: codebase-inspection
-description: 使用pygount检查和分析代码库,进行LOC计数、语言分解和代码与注释比率。当被要求检查代码行数、仓库大小、语言组成或代码库统计时使用。
+description: "当用户要求统计代码行数、仓库大小或语言组成时使用。 使用pygount检查和分析代码库,进行LOC计数、语言分解和代码与注释比率。当被要求检查代码行数、仓库大小、语言组成或代码库统计时使用。"
 version: 1.0.0
 author: Voidcube Agent
 license: MIT

@@ -1,7 +1,7 @@
 ---
 name: context-optimization
 category: devops
-description: 诊断和修复 VoidCube agent 运行时上下文膨胀问题——skill 索引两级加载、memory prefetch 去噪+min_score过滤、use_prior_content中文标记、prefetch诊断日志。当用户报告上下文过大、token 消耗高或响应慢，或要求优化 system prompt 与 memory prefetch 质量时使用。
+description: "当用户报告上下文过大、token 消耗高或响应慢时使用。 诊断和修复 VoidCube agent 运行时上下文膨胀问题——skill 索引两级加载、memory prefetch 去噪+min_score过滤、use_prior_content中文标记、prefetch诊断日志。"
 ---
 
 # Context Optimization — VoidCube Agent 上下文瘦身

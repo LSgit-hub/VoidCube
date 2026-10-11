@@ -1,6 +1,6 @@
 ---
 name: voidcube-supervisor-fix
-description: 诊断和修复 VoidCube supervisor 问题——启动失败（残留进程/PID、git 工作树损坏）以及已启动但 degraded（slot_worktree_dirty / slot_head_metadata_mismatch，用官方 prepare 入口重物化 slot 修复）当用户报告 supervisor 启动失败、残留进程、slot_worktree_dirty 或 slot_head_metadata_mismatch 时使用。
+description: "当用户报告 supervisor 启动失败、残留进程或 degraded 时使用。 诊断和修复 VoidCube supervisor 问题——启动失败（残留进程/PID、git 工作树损坏）以及已启动但 degraded（slot_worktree_dirty / slot_head_metadata_mismatch，用官方 prepare 入口重物化 slot 修复）"
 category: devops
 created: 2026-08-21
 updated: 2026-09-10

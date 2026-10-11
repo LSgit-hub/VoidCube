@@ -1,6 +1,6 @@
 ---
 name: webhook-subscriptions
-description: 创建和管理Webhook订阅以实现事件驱动的Agent激活。当用户希望外部服务自动触发Agent运行时使用。
+description: "当用户希望外部服务通过 webhook 自动触发 Agent 时使用。 创建和管理Webhook订阅以实现事件驱动的Agent激活。当用户希望外部服务自动触发Agent运行时使用。"
 version: 1.0.0
 metadata:
   VoidCube:
