@@ -1,7 +1,7 @@
 ---
 name: voidcube-architecture
 category: devops
-description: VoidCube 系统架构分析 - 九大模块深度解读
+description: VoidCube 系统架构分析 - 九大模块深度解读当用户要求解读 VoidCube 九大模块架构、定位模块职责或梳理跨模块数据流时使用。
 ---
 
 # VoidCube 系统架构分析

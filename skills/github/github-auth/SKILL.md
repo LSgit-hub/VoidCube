@@ -1,6 +1,6 @@
 ---
 name: github-auth
-description: 使用git(通用可用)或gh CLI为智能体设置GitHub认证。涵盖HTTPS令牌、SSH密钥、凭据助手和gh auth — 带有检测流程自动选择正确方法。
+description: 使用git(通用可用)或gh CLI为智能体设置GitHub认证。涵盖HTTPS令牌、SSH密钥、凭据助手和gh auth — 带有检测流程自动选择正确方法。当用户需要为智能体配置 GitHub 认证、设置 git 凭据/令牌/SSH，或遇到权限拒绝时使用。
 version: 1.1.0
 author: Voidcube Agent
 license: MIT

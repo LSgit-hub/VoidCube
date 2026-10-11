@@ -1,6 +1,6 @@
 ---
 name: llama-cpp
-description: 使用 llama.cpp/llama-cpp-python 加载、运行和服务已有 GGUF 模型，面向 CPU、Apple Silicon、AMD/Intel GPU 和边缘部署。模型转换与量化请使用 gguf-quantization。
+description: 使用 llama.cpp/llama-cpp-python 加载、运行和服务已有 GGUF 模型，面向 CPU、Apple Silicon、AMD/Intel GPU 和边缘部署。模型转换与量化请使用 gguf-quantization。当用户要在 CPU、Apple Silicon、无 CUDA 的 GPU 或边缘设备上加载、运行或服务 GGUF 模型时使用。
 version: 1.0.0
 author: Orchestra Research
 license: MIT

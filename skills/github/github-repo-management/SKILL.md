@@ -1,6 +1,6 @@
 ---
 name: github-repo-management
-description: 克隆、创建、fork、配置和管理GitHub仓库。管理远程、密钥、发布和工作流。使用gh CLI或回退到git + GitHub REST API通过curl。
+description: 克隆、创建、fork、配置和管理GitHub仓库。管理远程、密钥、发布和工作流。使用gh CLI或回退到git + GitHub REST API通过curl。当用户要求克隆、创建、fork 或配置 GitHub 仓库，或管理远程、发布与工作流时使用。
 version: 1.1.0
 author: Voidcube Agent
 license: MIT

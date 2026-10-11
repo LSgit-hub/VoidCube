@@ -1,6 +1,6 @@
 ---
 name: github-code-review
-description: 通过分析git diff审查代码变更,在PR上留下内联评论,并执行彻底的推送前审查。使用gh CLI或回退到git + GitHub REST API通过curl。
+description: 通过分析git diff审查代码变更,在PR上留下内联评论,并执行彻底的推送前审查。使用gh CLI或回退到git + GitHub REST API通过curl。当用户要求审查代码变更、审查 PR，或在推送前做一次彻底复核时使用。
 version: 1.1.0
 author: Voidcube Agent
 license: MIT

@@ -1,7 +1,7 @@
 ---
 name: bilibili-media-playback
 category: media
-description: B站视频播放与媒体交付完整流程 — 包含BV号获取、媒体推送到展板和播放器的方法
+description: B站视频播放与媒体交付完整流程 — 包含BV号获取、媒体推送到展板和播放器的方法当用户要求播放B站视频或音乐、把媒体推送到小屋播放器或展板时使用。
 ---
 
 # B站视频播放与媒体交付技能

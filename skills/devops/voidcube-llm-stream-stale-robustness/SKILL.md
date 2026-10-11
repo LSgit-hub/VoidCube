@@ -1,6 +1,6 @@
 ---
 name: voidcube-llm-stream-stale-robustness
-description: 诊断和修复 VoidCube LLM 流式传输的卡死与误判——"Stream stale"/"read operation timed out"/"Partial stream delivered; returning terminal stub"/"Empty response ... No fallback available"。含 stale 看门狗与 httpx 读超时的阈值倒置、一次性看门狗等根因模式
+description: 诊断和修复 VoidCube LLM 流式传输的卡死与误判——"Stream stale"/"read operation timed out"/"Partial stream delivered; returning terminal stub"/"Empty response ... No fallback available"。含 stale 看门狗与 httpx 读超时的阈值倒置、一次性看门狗等根因模式当用户报告流式输出卡死、Stream stale、读超时，或收到 terminal stub 与空响应时使用。
 category: devops
 created: 2026-09-10
 updated: 2026-09-10

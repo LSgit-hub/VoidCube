@@ -1,6 +1,6 @@
 ---
 name: outlines
-description: 【单次类型安全输出】在生成期间保证有效的JSON/XML/代码结构，使用Pydantic模型实现类型安全输出，支持本地模型（Transformers、vLLM），使用Outlines最大化推理速度 - dottxt.ai的结构化生成库。适用：单次JSON Schema/Pydantic约束生成。对比：多步工作流/ReAct代理请用guidance技能。
+description: 【单次类型安全输出】在生成期间保证有效的JSON/XML/代码结构，使用Pydantic模型实现类型安全输出，支持本地模型（Transformers、vLLM），使用Outlines最大化推理速度 - dottxt.ai的结构化生成库。适用：单次JSON Schema/Pydantic约束生成。对比：多步工作流/ReAct代理请用guidance技能。当用户需要单次调用就产出合法 JSON/XML、用 Pydantic 模型约束输出，或在本地模型上加速结构化生成时使用。
 version: 1.0.0
 author: Orchestra Research
 license: MIT

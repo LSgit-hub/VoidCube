@@ -1,7 +1,7 @@
 ---
 name: media-display-guide
 category: media
-description: 交付展板（media_display）使用指南，支持文本、HTML、图片、视频推送
+description: 交付展板（media_display）使用指南，支持文本、HTML、图片、视频推送当用户要求把内容推送到小屋展板，或展示图片、网页、HTML 报告与视频时使用。
 ---
 
 # 交付展板（media_display）使用指南

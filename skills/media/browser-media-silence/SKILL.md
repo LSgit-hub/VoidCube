@@ -1,7 +1,7 @@
 ---
 name: browser-media-silence
 category: media
-description: 使用浏览器工具访问媒体网站（B站等）时的静音规则，避免自动播放声音外放
+description: 使用浏览器工具访问媒体网站（B站等）时的静音规则，避免自动播放声音外放当用户要求用浏览器打开音视频页面、或需要静音访问媒体站点时使用。
 ---
 
 # 浏览器媒体访问静音规则
