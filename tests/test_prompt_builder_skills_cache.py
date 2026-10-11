@@ -112,6 +112,25 @@ def test_root_skill_category_matches_registry_when_fallback_is_used(monkeypatch,
     assert fallback == indexed
 
 
+def test_skills_from_registry_returns_entries_without_dead_row_list(monkeypatch, tmp_path):
+    """回归：_skills_from_registry 只返回分类条目与分类描述。
+
+    旧实现额外返回第三条 `entries`（含全部去重前记录），调用方从未消费，
+    是死变量。本测试锁死返回值元数为 2，防止把死数据加回来。
+    """
+    root = tmp_path / "skills"
+    _write_skill(root, "dup", "Runtime copy")
+    prompt_builder.clear_skills_system_prompt_cache()
+
+    result = prompt_builder._skills_from_registry([root], None, None, set())
+
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    skills_by_category, category_descriptions = result
+    assert skills_by_category == {"general": [("dup", "Runtime copy")]}
+    assert isinstance(category_descriptions, dict)
+
+
 def test_long_description_keeps_when_to_use_clause(monkeypatch, tmp_path):
     """回归：>60 字符的描述必须保留结尾的"何时使用"触发条件。
 

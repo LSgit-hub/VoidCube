@@ -64,10 +64,15 @@ def _security_scan_skill(skill_dir: Path) -> Optional[str]:
             report = format_scan_report(result)
             return f"Security scan blocked this skill ({reason}):\n{report}"
         if allowed is None:
-            # "ask" — allow but include the warning so the user sees the findings
-            report = format_scan_report(result)
-            logger.warning("Agent-created skill has security findings: %s", reason)
-            # Don't block — return None to allow, but log the warning
+            # "ask" — not a confirmation queue: the skill is created either way.
+            # Log at info with the skill name so a routine agent-created write
+            # does not repeat the same advisory finding in the error log on
+            # every write; the "blocked" path above still returns an error.
+            logger.info(
+                "Agent-created skill %s has advisory security findings (%s)",
+                skill_dir.name,
+                reason,
+            )
             return None
     except Exception as e:
         logger.warning("Security scan failed for %s: %s", skill_dir, e, exc_info=True)

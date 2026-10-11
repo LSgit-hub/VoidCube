@@ -246,6 +246,41 @@ def test_skill_manage_refreshes_index_after_create(monkeypatch, tmp_path):
         connection.close()
 
 
+def test_security_scan_advisory_findings_do_not_warn(monkeypatch, tmp_path, caplog):
+    """回归：agent 自建技能的 advisory 结论不得再刷 warning。
+
+    "ask" 不是待确认队列——技能照常创建。旧实现每次写技能都打一条
+    warning，errors.log 里同类条目累计 100+，属告警噪音。blocked 路径
+    仍然必须返回错误并阻断。
+    """
+    import logging
+
+    class _Result:
+        findings = [{"severity": "dangerous", "message": "x"}]
+
+    reason = "Requires confirmation (agent-created source + dangerous verdict, 3 findings)"
+    monkeypatch.setattr(skills_manager, "scan_skill", lambda *_a, **_k: _Result())
+    monkeypatch.setattr(
+        skills_manager, "format_scan_report", lambda _r: "FAKE-REPORT"
+    )
+    monkeypatch.setattr(skills_manager, "should_allow_install", lambda _r: (False, reason))
+    with caplog.at_level(logging.INFO, logger="voidcube.extensions.skills.manager"):
+        blocked = skills_manager._security_scan_skill(tmp_path)
+    assert blocked is not None and "Security scan blocked" in blocked
+
+    monkeypatch.setattr(skills_manager, "should_allow_install", lambda _r: (None, reason))
+    with caplog.at_level(logging.INFO, logger="voidcube.extensions.skills.manager"):
+        advisory = skills_manager._security_scan_skill(tmp_path)
+
+    assert advisory is None
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings == [], f"advisory 结论不应产生 warning: {[r.getMessage() for r in warnings]}"
+    assert any(
+        r.levelno == logging.INFO and "advisory security findings" in r.getMessage()
+        for r in caplog.records
+    )
+
+
 def test_skill_manage_updates_lifecycle_metadata(monkeypatch, tmp_path):
     skills_root = tmp_path / "skills"
     _write_skill(skills_root, "managed", "Managed")

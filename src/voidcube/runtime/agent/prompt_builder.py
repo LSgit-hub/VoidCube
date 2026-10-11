@@ -430,41 +430,37 @@ def _skills_from_registry(
     available_tools: "set[str] | None",
     available_toolsets: "set[str] | None",
     disabled: set[str],
-) -> tuple[dict[str, list[tuple[str, str]]], list[dict], dict[str, str]]:
-    """Build prompt entries from the refreshed index, preserving precedence."""
+) -> tuple[dict[str, list[tuple[str, str]]], dict[str, str]]:
+    """Build the prompt entries from the refreshed index, preserving precedence.
+
+    Returns the per-category entries plus the category descriptions. Entries are
+    keyed by ``directory_name`` and the first record wins, which is how the
+    runtime copy takes precedence over the repository copy for the same skill.
+    """
     records = skills_registry.refresh_and_query(
         skills_dirs,
         path=_skills_registry_path(),
     )
     skills_by_category: dict[str, list[tuple[str, str]]] = {}
-    entries: list[dict] = []
     seen_skill_names: set[str] = set()
     for record in records:
         skill_name = str(record.get("directory_name") or "")[:64]
-        if not skill_name:
+        if not skill_name or skill_name in seen_skill_names:
             continue
-        entry = {
-            "skill_name": skill_name,
-            "category": record.get("category") or "general",
-            "frontmatter_name": str(record.get("frontmatter_name") or skill_name),
-            "description": str(record.get("description") or ""),
-            "platforms": record.get("platforms") or [],
-            "conditions": record.get("conditions") or {},
-        }
-        entries.append(entry)
-        if skill_name in seen_skill_names:
+        frontmatter_name = str(record.get("frontmatter_name") or skill_name)
+        if not skill_matches_platform({"platforms": record.get("platforms") or []}):
             continue
-        if not skill_matches_platform({"platforms": entry["platforms"]}):
+        if frontmatter_name in disabled or skill_name in disabled:
             continue
-        if entry["frontmatter_name"] in disabled or skill_name in disabled:
-            continue
-        if not _skill_should_show(entry["conditions"], available_tools, available_toolsets):
+        if not _skill_should_show(
+            record.get("conditions") or {}, available_tools, available_toolsets
+        ):
             continue
         seen_skill_names.add(skill_name)
-        skills_by_category.setdefault(entry["category"], []).append(
-            (skill_name, entry["description"])
+        skills_by_category.setdefault(record.get("category") or "general", []).append(
+            (skill_name, str(record.get("description") or ""))
         )
-    return skills_by_category, entries, _category_descriptions_from_files(skills_dirs)
+    return skills_by_category, _category_descriptions_from_files(skills_dirs)
 
 
 # =========================================================================
@@ -744,7 +740,7 @@ def build_skills_system_prompt(
 
     # ── Layer 2: rebuildable SQLite index ─────────────────────────────
     try:
-        skills_by_category, skill_entries, category_descriptions = _skills_from_registry(
+        skills_by_category, category_descriptions = _skills_from_registry(
             skills_dirs,
             available_tools,
             available_toolsets,
@@ -753,7 +749,6 @@ def build_skills_system_prompt(
     except Exception as exc:
         logger.warning("Skill registry unavailable; falling back to filesystem scan: %s", exc)
         skills_by_category = {}
-        skill_entries = []
         category_descriptions = {}
         seen_skill_names: set[str] = set()
         for skills_dir in skills_dirs:
@@ -762,7 +757,6 @@ def build_skills_system_prompt(
             for skill_file in iter_skill_index_files(skills_dir, "SKILL.md"):
                 is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
                 entry = _build_filesystem_entry(skill_file, skills_dir, frontmatter, desc)
-                skill_entries.append(entry)
                 skill_name = entry["skill_name"]
                 if not is_compatible or skill_name in seen_skill_names:
                     continue
