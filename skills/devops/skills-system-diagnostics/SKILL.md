@@ -499,3 +499,28 @@ pb._TRIGGER_TOKENS                     # 15 个触发词，"时使用/时调用/
 - 若据此改描述：改的是 `skills/**/SKILL.md` frontmatter，遵循本技能"对账与入库"全流程
   （repo == runtime == manifest 三侧一致、EOL 逐文件保留原生、`test_skill_registry` 自检）。
 - 描述文本同样在 `test_integration_policy.py` 扫描面内，不得写入退役厂商标记。
+
+### 修复流程（2026-10-11 实证，36 个 R0 一次补齐）
+
+把 R0 技能改造成含触发条件，踩过的坑与固定做法：
+
+1. **权威路径必须来自 registry record 的 `file_path`，且映射时防覆盖**。
+   `query_skills` 按 `priority` 排序（runtime 在前、repo 在后），
+   用 `{r["directory_name"]: r for r in recs}` 这种字典推导会让**后写入的 repo 记录覆盖
+   runtime 记录**——正确写法是 `setdefault` 保留优先级最高的那条。
+   （本轮踩过：拿到的 file_path 全是 repo 侧，`relative_to(home)` 直接 ValueError。）
+2. **写前先确认 repo == runtime**。用 LF 归一后的字节比对，逐技能过一遍；
+   不等齐就改会立刻制造分叉。本批 33 个 bundled 改前全等（LF 归一后）。
+3. **只改 frontmatter 的 description 行**，正文一律不碰。插入必须**引号感知**：
+   原行是 `description: "..."` 时要在闭合引号前插入（实测 microsoft-foundry 就是双引号包裹），
+   否则会产出 `"原文"。触发句` 这种非法 YAML。
+4. **长度硬约束 1024**：追加前先算 `len(value)`，超限宁可**整体替换压缩版**也不要超长
+   （microsoft-foundry 原标题 1001，只能换成 812 的压缩版，删 USE FOR 列表里语义重复的条目）。
+5. **触发子句对齐 `_TRIGGER_TOKENS`**：中文"当用户…时使用。"，英文" Use when …"（前导空格）。
+   注意描述里已有的 `USE FOR:` 不被判为触发条件——它不是触发词表成员。
+6. **manifest 重算**：`_hash()` 必须传**技能目录**、断言 != `d41d8cd9…` 空 hash、
+   键用 **frontmatter name**（不是目录名）。批量改完跑一次三方对账，分叉必须为 0。
+7. **已知取舍（要如实告知用户）**：触发子句统一**追加在末尾**会推高 R2/R6 计数
+   （本轮 R2 56→84、R6 7→23）。可见性没变——full 全文注入、index 模式靠
+   `_index_description` 保留尾部触发子句（R1 仍为 0）——但扫读优先级确实在末尾。
+   若用户在意，再单独做"触发子句前置到首句"（即 P3），并说明那会改变首句截断行为。
