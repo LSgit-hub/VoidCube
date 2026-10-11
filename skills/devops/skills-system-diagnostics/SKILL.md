@@ -451,3 +451,51 @@ full 分支**直接渲染注册表里存的 `description`，不调用** `_build_
   因此判断 index 行是否可用，要看触发子句在不在，而不是看首句是否完整。
 - 改本技能文本时仍须 repo == runtime == manifest 三方一致 + `test_integration_policy.py`
   （描述文本也在扫描面内）。
+
+## 描述触发条件全库审计（2026-10-11 实证，可复用）
+
+触发场景：用户要求"全库体检 / 描述命中审计 / 哪些技能会自动用上"。
+**核心命题：生产唯一可见面是描述**——`skill_view` 全文只有在我决定加载后才看到，
+描述是漏斗第一关。所以审计对象 = 描述，不是正文。
+
+### 判据全部复用生产函数，不自造词表
+```python
+from voidcube.runtime.agent import prompt_builder as pb
+pb._contains_trigger(desc)              # 全文是否有"何时使用"标记
+pb._first_sentence(desc)                # 首句（句点感知，不切 llama.cpp / plugin.json）
+pb._index_description(desc)             # index 模式渲染结果
+pb._build_skills_index_line(name, desc)  # 一行 index
+pb._TRIGGER_TOKENS                     # 15 个触发词，"时使用/时调用/…/Use when/when the user"
+```
+分级判据（严重度从高到低）：
+- R0 `NO_TRIGGER_AT_ALL`：描述全文无触发词——只写"是什么"没写"什么时候用"，纯靠语义联想
+- R1 `TRIGGER_LOST_IN_INDEX`：有触发词但 index 渲染后丢了（**真缺陷**）
+- R2 `TRIGGER_NOT_IN_FIRST_SENTENCE`：触发词在描述里但不在首句
+- R3 `EMPTY_DESC` / R4 `DESC_FROM_BODY_FALLBACK`（正文首行回退）/ R5 `REGISTRY_DESC_STALE`
+  （registry 存的值 != frontmatter 原文）/ R6 `FIRST_SENTENCE_OVERSIZED`（首句 >80 字符）
+
+### 权威口径（两个坑，本轮都踩了）
+1. **`refresh_and_query` 返回 `list[dict]`，不是连接**。要查派生版本/总行数必须另开
+   `open_registry()` 连接。把它当 conn 用会 `AttributeError: 'list' object has no attribute 'execute'`。
+2. **别按目录名猜 SKILL.md 路径**（`rglob(f"{name}/SKILL.md")`）——顶层技能与嵌套技能
+   混排时必漏。唯一权威来源是 registry record 的 `file_path`（这也与"凡路径推断先从
+   file_path 拿"的既有告诫一致，本轮重蹈说明该告诫要前置到显眼处）。
+
+### 实测基线（2026-10-11，home 97 + repo 79 = 176 索引行 → 96 可见技能）
+- 10-07 的描述截断修复**已验证完全生效**：R1 = 0（index 行无一丢触发词）、
+  R5 = 0（派生版本 2/2，无陈旧缓存继续吐 60 字旧值）。
+- **新的主风险是 R0 = 36/96（37.5%）**：描述无任何触发句式。
+  其中 28 个正文其实有触发条件小节（`## 何时使用此技能` / `## When to Use This Skill` /
+  `## 触发条件`），属**可搬运**；8 个描述与正文都没有，需**补写**。
+  英文技能是重灾区：`_TRIGGER_TOKENS` 只认 `Use when` / `when the user`，而英文描述惯用
+  `Discovers…` / `Handles…` / `Covers…` 能力陈述句，等于没有触发条件。
+- R2 = 56（触发词不在首句），其中 26 个偏移 >80 字符。full 模式全文注入下**不影响可见性**，
+  只影响扫读优先级——别把它当缺陷报，要如实说明影响面。
+- 体积对照（直接调生产函数）：full 19292 字符 / index 11756 字符（省 40%）。
+- 探针可见集必须与本会话 `<available_skills>` 逐一对齐才可信（本轮 96 == 96）。
+
+### 落盘与收尾
+- 探针放 `.test-tmp/`（已被 gitignore）；产出 JSON 一并落 `.test-tmp/`，不要进 tests/。
+- 若据此改描述：改的是 `skills/**/SKILL.md` frontmatter，遵循本技能"对账与入库"全流程
+  （repo == runtime == manifest 三侧一致、EOL 逐文件保留原生、`test_skill_registry` 自检）。
+- 描述文本同样在 `test_integration_policy.py` 扫描面内，不得写入退役厂商标记。
