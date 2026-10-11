@@ -200,7 +200,6 @@ hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` 
 
 
 ## 注册表：元数据位置、去重与优先级、孤儿文件（2026-09-11 实测，含一处误判修正）
-
 - `deprecated` / `supersedes` **不在 SKILL.md frontmatter 里**，而在活注册表
   `~/.VoidCube/.skills_registry.sqlite3`（`REGISTRY_FILENAME = ".skills_registry.sqlite3"`）的 `skills` 表
   （列含 `frontmatter_name, directory_name, category, source, content_hash, deprecated, supersedes, updated_at`）。
@@ -218,8 +217,7 @@ hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` 
 - 低危隐患（发现即记录，暂未改）：
   - 去重键是 `directory_name`，而工具侧（`tool.py`）用 `frontmatter_name` 标识技能名；
     若某技能"目录名不同但 frontmatter name 相同"，去重会失效并真的列出两条。
-  - `_skills_from_registry` 的 `skill_entries`（含重复行）被赋值后**从未被消费**（死变量）。
-- 孤儿文件 `~/.VoidCube/skills/registry.sqlite3`（旧版命名，75 行，mtime 2026-08-26）：
+  - `_skills_from_registry` 的 `skill_entries`（含重复行）被赋值后**从未被消费**（死变量）。- 孤儿文件 `~/.VoidCube/skills/registry.sqlite3`（旧版命名，75 行，mtime 2026-08-26）：
   无任何代码/配置引用（全仓库搜索只剩测试里的同名临时文件），与活注册表不是同一个文件。
   处置：Online Backup API 备份到
   `~/.VoidCube/runtime/backups/skills-registry/registry-orphan-<stamp>.sqlite3`（integrity ok、75 行）
@@ -238,6 +236,13 @@ hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` 
   给出的 reason 字符串，**不是待确认队列**。
 - 结论与建议：属**告警噪音**，会加剧告警疲劳（与 memory `/health` 的 degraded 过敏同因）。
   治理方向：把该 warning 降级为 info，或按技能聚合计数（现状是每个技能写入都重复打印）。
+
+### 已治理（2026-10-11）
+该 warning 已降级为 `logger.info`，并补上技能名与 findings 计数；`errors.log` 不再
+每次写技能都长一条。`blocked` 分支仍返回错误并阻断，行为不变。
+回归测试 `tests/test_skill_registry.py::
+test_security_scan_advisory_findings_do_not_warn` 用 caplog 锁死"advisory 不得产生
+warning + blocked 必须返回错误"两侧，并做过反向验证（改回 warning 该测试失败）。
 
 
 ## 对账与入库操作流程（2026-09-10 P7-B 实证，可复用）
