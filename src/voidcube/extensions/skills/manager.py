@@ -201,6 +201,25 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
     return SKILLS_DIR / name
 
 
+def _frontmatter_name(content: str) -> Optional[str]:
+    """Return the frontmatter ``name`` declared in *content*, if any.
+
+    Uses the same closing-delimiter search as ``_validate_frontmatter`` so a
+    malformed block yields ``None`` instead of a bogus name.
+    """
+    end_match = re.search(r"\n---\s*\n", content[3:])
+    if not end_match:
+        return None
+    try:
+        parsed = yaml.safe_load(content[3 : end_match.start() + 3])
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    name = str(parsed.get("name", "") or "").strip()
+    return name or None
+
+
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
     Find a skill by name across all skill directories.
@@ -215,6 +234,28 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
             continue
         for skill_md in skills_dir.rglob("SKILL.md"):
             if skill_md.parent.name == name:
+                return {"path": skill_md.parent}
+    return None
+
+
+def _find_skill_by_frontmatter_name(name: str) -> Optional[Dict[str, Any]]:
+    """Find a skill whose frontmatter ``name`` equals *name*.
+
+    The tool surface (``skills_list`` / ``skill_view``) identifies skills by
+    the frontmatter name, so creating a skill whose frontmatter name collides
+    with an existing one under a different directory would make one of them
+    unreachable. Returns {"path": Path} or None.
+    """
+    from .catalog import get_all_skills_dirs, parse_frontmatter
+    for skills_dir in get_all_skills_dirs():
+        if not skills_dir.exists():
+            continue
+        for skill_md in skills_dir.rglob("SKILL.md"):
+            try:
+                frontmatter, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if str(frontmatter.get("name", "")).strip() == name:
                 return {"path": skill_md.parent}
     return None
 
@@ -321,6 +362,22 @@ def _create_skill(name: str, content: str, category: str = None) -> Dict[str, An
             "success": False,
             "error": f"A skill named '{name}' already exists at {existing['path']}."
         }
+
+    # The tool surface identifies skills by their frontmatter ``name``, so a
+    # collision there hides an existing skill even when the directory differs.
+    declared_name = _frontmatter_name(content)
+    if declared_name:
+        clash = _find_skill_by_frontmatter_name(declared_name)
+        if clash:
+            return {
+                "success": False,
+                "error": (
+                    f"A skill with frontmatter name '{declared_name}' already exists at "
+                    f"{clash['path']}; it would be unreachable because skills_list and "
+                    f"skill_view identify skills by that name. Use a different 'name' "
+                    f"or edit the existing skill."
+                ),
+            }
 
     # Create the skill directory
     skill_dir = _resolve_skill_dir(name, category)

@@ -434,8 +434,11 @@ def _skills_from_registry(
     """Build the prompt entries from the refreshed index, preserving precedence.
 
     Returns the per-category entries plus the category descriptions. Entries are
-    keyed by ``directory_name`` and the first record wins, which is how the
-    runtime copy takes precedence over the repository copy for the same skill.
+    deduplicated by the frontmatter ``name`` — the identity the tool surface
+    reports and resolves — and the first record wins, which is how the runtime
+    copy takes precedence over the repository copy for the same skill. The
+    directory name is only the display label, so a directory/frontmatter
+    divergence must not produce two entries for one skill.
     """
     records = skills_registry.refresh_and_query(
         skills_dirs,
@@ -445,9 +448,11 @@ def _skills_from_registry(
     seen_skill_names: set[str] = set()
     for record in records:
         skill_name = str(record.get("directory_name") or "")[:64]
-        if not skill_name or skill_name in seen_skill_names:
+        if not skill_name:
             continue
-        frontmatter_name = str(record.get("frontmatter_name") or skill_name)
+        frontmatter_name = str(record.get("frontmatter_name") or skill_name)[:64]
+        if frontmatter_name in seen_skill_names:
+            continue
         if not skill_matches_platform({"platforms": record.get("platforms") or []}):
             continue
         if frontmatter_name in disabled or skill_name in disabled:
@@ -456,7 +461,7 @@ def _skills_from_registry(
             record.get("conditions") or {}, available_tools, available_toolsets
         ):
             continue
-        seen_skill_names.add(skill_name)
+        seen_skill_names.add(frontmatter_name)
         skills_by_category.setdefault(record.get("category") or "general", []).append(
             (skill_name, str(record.get("description") or ""))
         )
@@ -758,13 +763,14 @@ def build_skills_system_prompt(
                 is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
                 entry = _build_filesystem_entry(skill_file, skills_dir, frontmatter, desc)
                 skill_name = entry["skill_name"]
-                if not is_compatible or skill_name in seen_skill_names:
+                frontmatter_name = str(entry["frontmatter_name"] or skill_name)[:64]
+                if not is_compatible or frontmatter_name in seen_skill_names:
                     continue
                 if entry["frontmatter_name"] in disabled or skill_name in disabled:
                     continue
                 if not _skill_should_show(extract_skill_conditions(frontmatter), available_tools, available_toolsets):
                     continue
-                seen_skill_names.add(skill_name)
+                seen_skill_names.add(frontmatter_name)
                 skills_by_category.setdefault(entry["category"], []).append((skill_name, entry["description"]))
         category_descriptions = _category_descriptions_from_files(skills_dirs)
 

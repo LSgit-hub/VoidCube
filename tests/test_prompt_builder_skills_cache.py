@@ -131,6 +131,103 @@ def test_skills_from_registry_returns_entries_without_dead_row_list(monkeypatch,
     assert isinstance(category_descriptions, dict)
 
 
+def test_duplicate_frontmatter_name_collapses_to_one_entry(monkeypatch, tmp_path):
+    """回归：目录名不同但 frontmatter name 相同的两个技能只能出现一条。
+
+    提示词清单此前按 directory_name 去重，会在清单里列出两个条目；而
+    skills_list / skill_view 按 frontmatter name 标识，只能解析到其中一个，
+    另一条就是永远加载不到的幽灵条目。
+    """
+    root = tmp_path / "skills"
+    for sub in ("dir-a", "dir-b"):
+        (root / sub).mkdir(parents=True)
+        (root / sub / "SKILL.md").write_text(
+            "---\n"
+            f"name: shared-name\n"
+            f"description: From {sub}\n"
+            "---\n\nInstructions.\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(prompt_builder, "get_all_skills_dirs", lambda: [root])
+    monkeypatch.setattr(prompt_builder, "get_disabled_skill_names", lambda: set())
+    monkeypatch.setattr(
+        prompt_builder, "_skills_registry_path", lambda: tmp_path / ".skills_registry.sqlite3"
+    )
+    prompt_builder.clear_skills_system_prompt_cache()
+
+    prompt = prompt_builder.build_skills_system_prompt()
+
+    assert prompt.count("- dir-a: From dir-a") == 1
+    assert "- dir-b: From dir-b" not in prompt
+
+
+def test_frontmatter_name_resolves_even_when_directory_differs(monkeypatch, tmp_path):
+    """回归：skills_list 报出的 frontmatter name 必须能被 skill_view 解析。
+
+    skill_view 此前只按目录名/路径查找，名字分叉时列表给出的名字会加载失败。
+    """
+    import json
+
+    import voidcube.extensions.skills.catalog as skill_catalog
+    import voidcube.extensions.skills.tool as skills_tool
+
+    root = tmp_path / "skills"
+    skill_dir = root / "dir-a"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: fm-name\ndescription: Divergent\n---\n\nInstructions.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skill_catalog, "get_all_skills_dirs", lambda: [root])
+
+    listed = [s["name"] for s in json.loads(skills_tool.skills_list())["skills"]]
+    assert listed == ["fm-name"]
+    payload = json.loads(skills_tool.skill_view("fm-name"))
+    assert payload["success"] is True, payload.get("error")
+
+
+def test_create_skill_rejects_frontmatter_name_collision(monkeypatch, tmp_path):
+    """回归：frontmatter name 与既有技能冲突时必须拒绝创建。
+
+    只看目录名会漏掉这种冲突——工具侧按 frontmatter name 定位，冲突会让其中
+    一个技能永远不可达。
+    """
+    import json
+
+    import voidcube.extensions.skills.manager as skills_manager
+
+    skills_root = tmp_path / "skills"
+    (skills_root / "dir-a").mkdir(parents=True)
+    (skills_root / "dir-a" / "SKILL.md").write_text(
+        "---\nname: shared-name\ndescription: existing\n---\n\nInstructions.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skills_manager, "SKILLS_DIR", skills_root)
+    monkeypatch.setattr(skills_manager, "_security_scan_skill", lambda _p: None)
+    import voidcube.extensions.skills.catalog as skill_catalog
+
+    monkeypatch.setattr(skill_catalog, "get_all_skills_dirs", lambda: [skills_root])
+
+    clash = json.loads(
+        skills_manager.skill_manage(
+            "create",
+            "new-dir",
+            content="---\nname: shared-name\ndescription: clash\n---\n\nBody.\n",
+        )
+    )
+    assert clash["success"] is False
+    assert "shared-name" in clash["error"]
+
+    ok = json.loads(
+        skills_manager.skill_manage(
+            "create",
+            "other-dir",
+            content="---\nname: fresh-name\ndescription: fine\n---\n\nBody.\n",
+        )
+    )
+    assert ok["success"] is True, ok.get("error")
+
+
 def test_long_description_keeps_when_to_use_clause(monkeypatch, tmp_path):
     """回归：>60 字符的描述必须保留结尾的"何时使用"触发条件。
 

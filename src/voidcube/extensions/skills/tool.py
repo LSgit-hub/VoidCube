@@ -774,6 +774,25 @@ def skill_view(name: str, file_path: str = None, task_id: str = None) -> str:
                 if skill_md:
                     break
 
+        # Search by frontmatter ``name``.  ``skills_list`` reports that name, so
+        # a caller passing it back must resolve even when the directory name
+        # differs; without this the listed name leads to a dead end.
+        if not skill_md:
+            for search_dir in all_dirs:
+                for found_skill_md in search_dir.rglob("SKILL.md"):
+                    try:
+                        fm, _ = parse_frontmatter(
+                            found_skill_md.read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        continue
+                    if str(fm.get("name", "")).strip() == name:
+                        skill_dir = found_skill_md.parent
+                        skill_md = found_skill_md
+                        break
+                if skill_md:
+                    break
+
         if not skill_md or not skill_md.exists():
             available = [s["name"] for s in _find_all_skills()[:20]]
             return json.dumps(
