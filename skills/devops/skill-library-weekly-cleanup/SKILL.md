@@ -119,6 +119,41 @@ import difflib,itertools
 ① 有没有调用方（其它技能/脚本引用）② 有没有活跃周期任务依赖（查 scheduled_task 指令文本）
 ③ 有没有重复品（子集占比 ≥0.6）。三问全"无"才考虑删；任一命中即保留并说明理由。
 
+### 判读"临时生成/没复用价值"时的两个反向信号（2026-10-12 实测，别踩）
+
+用户说"技能太多、很多是临时生成的没复用价值"时，天然会去找"一次性痕迹"当证据。
+**这个直觉是反的**，实测结论：
+
+1. **正文里 commit hash / 日期 / 端口 / 临时路径的密度 ≠ 临时技能**，反而是**反向指标**。
+   实测 density 最高的几个恰好是最有沉淀价值的：`endogenous-failure-analysis` 123 处 commit、
+   29 处日期；`skills-system-diagnostics` 26 处日期、12 处"本轮"。
+   日期与 commit 在诊断型技能里是**证据锚点**（"这个结论是哪次改动验出来的"），删了技能就丢了出处。
+   → **禁止**用痕迹密度排序当删除依据；它只能用来识别"内容是否承载过真实问题"，承载过的要保留。
+2. **registry 的 `first_seen_at` 不是技能创建时间**，是**注册表重建/重索引时间**。
+   实测全库 96 个可见技能的 `first_seen_at` 全是同一天（2026-10-10 注册表重建），
+   因此它对"新旧/是否临时"毫无判读价值。判技能年龄必须用**文件 mtime**
+   （实测那批看着"集中在 10-10"的技能，真实 mtime 分散在 09-20~09-29）。
+   本轮就因误读 `first_seen_at` 得出过"这是刚建的未入库技能域"的错误结论。
+
+**正确判据优先级**（从强到弱）：调用方（斜杠命令入口 / 活跃周期任务）> 同族套装是否还是一整套在跑
+> 重复品（difflib 正文 >0.45）> 概念是否被别的技能覆盖。痕迹密度不参与判决。
+
+### 跨项目污染：技能池是"按用户"不是"按项目"（判读前必查）
+
+`get_all_skills_dirs()` = `~/.VoidCube/skills`（全局池）→ 当前仓库 `skills/`（bundled）
+→ 全局配置 `skills.external_dirs`。**没有任何项目级区分**，`get_config_path()` 恒为
+`~/.VoidCube/config.yaml`，所以 external_dirs 也是全局的。
+
+后果：另一个项目的技能只要躺在全局池，就会在**所有**项目的会话里全量注入系统提示词。
+实测撞见 10 个 `author: LSQuant` / `platforms: [windows]` / tags 带 Quant·QMT 的技能，
+加上一份 `domain/DESCRIPTION.md`，全是另一量化项目的资产，却出现在 VoidCube 会话提示词里。
+
+判读"这技能是不是本项目的"之前，先读 frontmatter 的 `author` / `platforms` / `metadata.tags`
+和同族命名后缀（如 `-lsquant`）。三个处理选项（`external_dirs` **达不到隔离**，因为它全局生效）：
+- **profile 隔离（正解）**：`VOIDCUBE_HOME` 指向不同 home，各自带独立技能池/配置/日志；代价是两家都要维护。
+- **移出全局池**：移到项目本地目录，需要 profile 或接受丢失。
+- **直接删**：项目已阶段性收尾时最干净，重新生成只要几分钟。
+
 ## 校验
 - 删除后：`skills_list` 可见数 == 文件数（无 deprecated 隐藏项）
 - registry 无 `deprecated=1` 残留、无指向已删文件的行
@@ -132,6 +167,11 @@ import difflib,itertools
 ## 当前实测基线（2026-09-22 探针复核，用前请刷新）
 - 运行时 79 SKILL.md / 仓库 73 / manifest 73 条目 / registry 152 行（home 79 + repo 73，双根索引是设计非 bug）
 - 运行时独有（不在仓库/manifest，手工或 Agent 专属）6 个：bilibili-media-playback、browser-media-silence、manual-skill-validation、skill-library-weekly-cleanup、voidcube-change-regression-review、voidcube-cli-command-refactor
+- **该清单已过期（2026-10-12 复核：17 个运行时独有）**，构成已变，勿引用上面这 6 个当全集：
+  10 个 `*-lsquant`（另一量化项目资产，见"跨项目污染"节）、1 个 `native-mcp`（mcp）、
+  6 个 software-development（plan / requesting-code-review / subagent-driven-development /
+  systematic-debugging / test-driven-development / writing-plans）。
+  复核命令：`refresh_and_query` 后对每条记录比对 `~/.VoidCube/skills` 之外的仓库镜像是否存在。
 - `sync_skills()` 的 `user_modified` 列表需逐项判"manifest 陈旧"还是"真实分叉"，判别方法见 `manual-skill-validation` 第 2 步（raw / LF 归一化双 hash 对照）
 - **冲突体检实测（2026-10-07 复核）**：名称口径违例 **0**（2026-09-22 曾 20，已修，见体检章节第 1 条）；frontmatter 重名 0；目录重名 0；内容重复 0（唯一 ≥0.30 的 github/* 四件套为互补）；deprecated 0；supersedes 失效 0；同名 home/repo 内容不一致 0；技能名与工具名重合 0（工具名 54）；触发语完全重合 0；manifest 孤儿键/缺键 0；registry 158 行（home 79 + repo 79）
 - 数量每次清理都会变，以本节命令实测为准，不要引用本节的数字当结论
