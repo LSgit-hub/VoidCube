@@ -216,6 +216,36 @@ hash 必须用与 `sync.py::_hash` 完全相同的算法（`sorted(rglob('*'))` 
   - `prompt_builder._skills_from_registry` 用 `seen_skill_names`（键 = `directory_name`）先到者胜去重，
     输出层还有二次 `seen` 去重 → 实测 `skills_list` 只输出 57 条、无重复。
   - **不要按"重复索引 bug"去修它**（本会话曾误报为缺陷，已修正）。
+
+### 技能身份口径：三层必须同一个键（2026-10-12 修复）
+
+同一条链路上有三个身份来源，改任何一个不同步就会断：
+
+| 层 | 旧键 | 现状 |
+|---|---|---|
+| `prompt_builder._skills_from_registry` 去重 | `directory_name` | 已改 **frontmatter_name** |
+| `prompt_builder` fallback 分支去重 | `directory_name` | 已同步改 |
+| `tool.py:_find_all_skills`（skills_list） | `frontmatter_name` | 原本就是，未动 |
+| `tool.py:skill_view` 定位 | 只按目录名/路径 | 已补 frontmatter_name 回退 |
+| `manager._create_skill` 冲突校验 | 只按目录名 | 已补 frontmatter_name 校验 |
+
+**分叉时的真实故障**（不是理论风险）：一旦出现"目录名不同、frontmatter name 相同"
+或"目录名 ≠ frontmatter name"的技能，清单按目录名列出一条、skills_list 按
+frontmatter name 列出另一条，而 `skill_view(frontmatter_name)` 找不到 →
+提示词里出现一条**永远加载不到的幽灵条目**，用户只会当成 bug 来排查，很难反推根因。
+
+**修 tier 顺序**（按断裂方向）：
+1. 先修 `skill_view` 的定位回退（这是技能能否被加载的最终一关，最致命）
+2. 再修去重键（修"列几条"）
+3. 最后在 manager 加创建时校验（防产生，不是防展现）
+   —— 注意 `_frontmatter_name()` 的 frontmatter 切片必须复用 `_validate_frontmatter`
+   的 `re.search(r"\n---\s*\n", content[3:])`；第一版用 `content.index("\n", 3)`
+   对 `---\nname:` 恰好切出空串，导致校验静默失效（返回 None = 不校验）。
+
+**验证方法**：tmp_path 造"两个目录、同一 frontmatter name"，断言清单只出现一条；
+再造"目录名 ≠ frontmatter name"，断言 `skills_list` 报的名字能被 `skill_view` 解析。
+真实全库口径必须不变（本机 96 个可见技能的 full/index 提示词 md5 前后一致）。
+三条改动都要做反向验证（改回旧键 → 新测试必须失败）。
 - **重要副作用**：既然运行时副本在索引中胜出，**只改仓库对 bundled 技能在本机不生效**
   （除非 sync 覆盖运行时）。这从另一侧解释了为什么必须维持 repo == runtime == manifest：
   只改仓库等于无效改动；只改运行时会永久阻断仓库下发。
