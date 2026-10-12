@@ -246,6 +246,25 @@ frontmatter name 列出另一条，而 `skill_view(frontmatter_name)` 找不到 
 再造"目录名 ≠ frontmatter name"，断言 `skills_list` 报的名字能被 `skill_view` 解析。
 真实全库口径必须不变（本机 96 个可见技能的 full/index 提示词 md5 前后一致）。
 三条改动都要做反向验证（改回旧键 → 新测试必须失败）。
+
+## 探针验证的副作用与核对纪律（2026-10-12 实证，四项全会让结论失真）
+
+1. **正向验证会污染注册表，制造幽灵技能**。用 tmp_path 造技能验证 `skill_view` /
+   `skills_list` 时，若探针把临时目录传给 `refresh_and_query`，注册表会记下这些路径；
+   临时目录删除后就留下**指向不存在文件的死记录**。它们被 `refresh_and_query` 的
+   `Path(...).is_file()` 过滤挡在可见集外（所以 `skills_list` 正常），但**读全表的审计探针
+   会报出幽灵技能**——本轮 `目录名 != frontmatter name` 突然冒出 dir-a/dir-b 就是这个原因，
+   看起来像真缺陷。清理：`DELETE FROM skills WHERE <file_path 指向的文件不存在>`
+   （该表主键是 `file_path`，**没有 id 列**）。验证完顺手查一次库里 stale 记录数，列为收尾项。
+2. **反向验证必须回退"真实行为"，不能只回退类型标注**。第一版守卫验证只把返回类型标注
+   改回三元写法、`return` 语句没动 → 运行行为没变 → 测试照过 → 得出"守卫有效"的**假结论**。
+   要用 `git show HEAD:<file>` 取改动前**整份文件**做完整 revert 再跑测试。
+3. **测试替身会被 except 吞掉，造成假结果**。验证 blocked 路径时用假对象喂
+   `format_scan_report`，它抛异常被 `_security_scan_skill` 的 `except Exception` 吞掉 →
+   返回 None，看起来像"blocked 没生效"。替身要替到**该路径会调用的每个函数**，或用真实对象。
+4. **行为等价基线只能用本会话自己测的值**。曾把记忆/技能文档里的历史 md5 当基准，得出
+   "行为被改变"的假警报；实际那是别的时间点、别的改动的值。核对第一步是先在本轮改动前
+   测一次并记录，之后只跟自己的值比。
 - **重要副作用**：既然运行时副本在索引中胜出，**只改仓库对 bundled 技能在本机不生效**
   （除非 sync 覆盖运行时）。这从另一侧解释了为什么必须维持 repo == runtime == manifest：
   只改仓库等于无效改动；只改运行时会永久阻断仓库下发。
