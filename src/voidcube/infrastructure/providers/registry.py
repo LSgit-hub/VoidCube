@@ -58,6 +58,11 @@ PROVIDER_REGISTRY = {
         "base_url_env_var": "OPENROUTER_BASE_URL",
         "auth_type": "api_key",
         "inference_base_url": "https://openrouter.ai/api/v1",
+        "headers": {
+            "HTTP-Referer": "https://VoidCube-agent.nousresearch.com",
+            "X-OpenRouter-Title": "Voidcube Agent",
+            "X-OpenRouter-Categories": "productivity,cli-agent",
+        },
     }),
     "zai": ProviderConfig({
         "name": "Z.AI / GLM",
@@ -74,6 +79,7 @@ PROVIDER_REGISTRY = {
         "base_url_env_var": "KIMI_BASE_URL",
         "auth_type": "api_key",
         "inference_base_url": "https://api.kimi.moonshot.cn/v1",
+        "headers": {"User-Agent": "KimiCLI/1.30.0"},
     }),
     "minimax": ProviderConfig({
         "name": "MiniMax",
@@ -101,6 +107,19 @@ PROVIDER_REGISTRY = {
     }),
 }
 
+# Header templates for runtime providers that are not API-key entries in the
+# registry.  Keeping these beside provider metadata avoids endpoint substring
+# matching while still allowing the standard request-header resolver to serve
+# OAuth-backed providers.
+PROVIDER_HEADER_TEMPLATES = {
+    "qwen-oauth": {
+        "User-Agent": "QwenCode/0.14.1 ({platform}; {machine})",
+        "X-DashScope-CacheControl": "enable",
+        "X-DashScope-UserAgent": "QwenCode/0.14.1 ({platform}; {machine})",
+        "X-DashScope-AuthType": "qwen-oauth",
+    },
+}
+
 SPECIAL_RUNTIME_PROVIDER_IDS = frozenset({
     "nous",
     "qwen-oauth",
@@ -115,6 +134,7 @@ RUNTIME_PROVIDER_IDS = frozenset(
 ) | SPECIAL_RUNTIME_PROVIDER_IDS | LOCAL_RUNTIME_PROVIDER_IDS
 
 __all__ = [
+    "PROVIDER_HEADER_TEMPLATES",
     "PROVIDER_REGISTRY",
     "LOCAL_RUNTIME_PROVIDER_IDS",
     "RUNTIME_PROVIDER_IDS",

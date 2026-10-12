@@ -103,7 +103,7 @@ def test_model_catalogs_are_live_api_only(monkeypatch):
     )
     calls = []
 
-    def fetch_models(api_key, base_url):
+    def fetch_models(api_key, base_url, **_kwargs):
         calls.append((api_key, base_url))
         return ["current-model", "new-model"]
 
@@ -138,7 +138,7 @@ def test_model_catalog_api_failure_has_no_static_fallback(monkeypatch):
 def test_model_validation_rejects_ids_missing_from_live_catalog(monkeypatch):
     monkeypatch.setattr(
         "voidcube.infrastructure.providers.model_catalog.fetch_api_models",
-        lambda *_args: ["current-model", "new-model"],
+        lambda *_args, **_kwargs: ["current-model", "new-model"],
     )
 
     result = validate_requested_model(
@@ -156,7 +156,7 @@ def test_model_validation_rejects_ids_missing_from_live_catalog(monkeypatch):
 def test_model_validation_allows_unverified_input_only_when_api_is_unavailable(
     monkeypatch,
 ):
-    monkeypatch.setattr("voidcube.infrastructure.providers.model_catalog.fetch_api_models", lambda *_args: None)
+    monkeypatch.setattr("voidcube.infrastructure.providers.model_catalog.fetch_api_models", lambda *_args, **_kwargs: None)
 
     result = validate_requested_model(
         "manual-model",

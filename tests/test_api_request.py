@@ -335,6 +335,132 @@ def test_native_image_input_expands_persisted_reference_only_for_api_request(tmp
     )
 
 
+@pytest.fixture
+def no_user_headers(monkeypatch):
+    """Simulate a provider with no user-configured headers.
+
+    Without this the resolution chain reads the developer's real
+    ``~/.VoidCube/config.yaml``, so these tests would pass or fail depending on
+    how that machine happens to be configured.
+    """
+    monkeypatch.setattr(
+        "voidcube.infrastructure.providers.request_headers._read_user_header_template",
+        lambda key: {},
+    )
+
+
+def test_unconfigured_endpoint_sends_no_implicit_headers(no_user_headers):
+    config = ChatRequestConfig(
+        model="step-5-preview-free",
+        base_url="https://opencode.ai/zen/go/v1",
+        provider="step5",
+        session_id="20261011_150139_0cdc79",
+    )
+
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+
+    assert "extra_headers" not in kwargs
+
+
+def test_unconfigured_endpoint_without_session_sends_no_headers(no_user_headers):
+    config = ChatRequestConfig(
+        model="step-5-preview-free",
+        base_url="https://opencode.ai/zen/go/v1",
+        provider="step5",
+    )
+
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+
+    assert "extra_headers" not in kwargs
+
+
+def test_configured_headers_override_the_builtin_endpoint_default():
+    config = ChatRequestConfig(
+        model="step-5-preview-free",
+        base_url="https://opencode.ai/zen/go/v1",
+        provider="step5",
+        session_id="20261011_150139_0cdc79",
+        headers={"x-opencode-session": "{session_id}", "User-Agent": "my-agent/1.0"},
+    )
+
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+
+    headers = kwargs["extra_headers"]
+    assert headers["x-opencode-session"] == "20261011_150139_0cdc79"
+    assert headers["User-Agent"] == "my-agent/1.0"
+
+
+def test_configured_header_context_supports_request_and_client_ids():
+    config = ChatRequestConfig(
+        model="model",
+        base_url="https://provider.example/v1",
+        provider="custom-provider",
+        client_id="client-1",
+        request_id="request-1",
+        headers={
+            "X-Client": "{client_id}",
+            "X-Request": "{request_id}",
+            "X-Version": "{client_version}",
+        },
+    )
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+    assert kwargs["extra_headers"]["X-Version"]
+    assert kwargs["extra_headers"]["X-Client"] == "client-1"
+    assert kwargs["extra_headers"]["X-Request"] == "request-1"
+
+
+def test_other_providers_do_not_receive_opencode_session_header(no_user_headers):
+    config = ChatRequestConfig(
+        model="deepseek-v4-flash",
+        base_url="https://api.deepseek.com/v1",
+        provider="ds",
+        session_id="20261011_150139_0cdc79",
+    )
+
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+
+    assert "extra_headers" not in kwargs
+
+
+def test_grok_request_without_config_sends_no_conversation_header(no_user_headers):
+    config = ChatRequestConfig(
+        model="grok-4.6",
+        base_url="https://api.x.ai/v1",
+        provider="xai",
+        session_id="20261011_150139_0cdc79",
+    )
+
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+
+    assert "extra_headers" not in kwargs
+
+
+def test_grok_request_without_session_sends_no_conversation_header(no_user_headers):
+    config = ChatRequestConfig(
+        model="grok-4.6",
+        base_url="https://api.x.ai/v1",
+        provider="xai",
+    )
+
+    kwargs = build_chat_completion_kwargs(
+        config, [{"role": "user", "content": "hi"}]
+    )
+
+    assert "extra_headers" not in kwargs
+
+
 def test_text_model_request_drops_attachment_metadata_without_expanding_image(tmp_path):
     image = tmp_path / "diagram.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\ntext-only")

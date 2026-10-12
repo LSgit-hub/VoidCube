@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path  # noqa: F401 — used by test mocks
 from typing import Any, Dict, List, Optional, Tuple
@@ -84,15 +85,21 @@ def _normalize_aux_provider(provider: Optional[str], *, for_vision: bool = False
         return "custom"
     return _PROVIDER_ALIASES.get(normalized, normalized)
 
-# OpenRouter app attribution headers
-_OR_HEADERS = {
-    "HTTP-Referer": "https://VoidCube-agent.nousresearch.com",
-    "X-OpenRouter-Title": "Voidcube Agent",
-    "X-OpenRouter-Categories": "productivity,cli-agent",
-}
+# OpenRouter app attribution headers — owned by the provider registry so the
+# client, auxiliary, and request paths cannot drift apart.
+from .registry import PROVIDER_REGISTRY as _PROVIDER_REGISTRY
+
+_OR_HEADERS = dict(_PROVIDER_REGISTRY["openrouter"]["headers"])
 
 _NOUS_DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
 _AUTH_JSON_PATH = get_VoidCube_home() / "auth.json"
+
+# Auxiliary tasks (title generation, compression, extraction) have no
+# conversation of their own, but OpenCode Go still rejects requests without a
+# session id. One install-scoped id keeps those calls routable and stable.
+_AUXILIARY_SESSION_ID = uuid.uuid5(
+    uuid.NAMESPACE_URL, f"voidcube-auxiliary:{get_VoidCube_home()}"
+).hex
 
 
 try:
@@ -101,7 +108,18 @@ except (ModuleNotFoundError, ImportError):
     from voidcube.infrastructure.providers import client_factory as _client_factory
 
 _to_openai_base_url = _client_factory.normalize_base_url
-_first_live_model = _client_factory.first_live_model
+def _first_live_model(
+    api_key: str,
+    base_url: str,
+    provider: str = "",
+) -> str | None:
+    """Probe models with the same configured headers as chat requests."""
+    from .model_catalog import fetch_api_models
+    from .request_headers import resolve_provider_headers
+
+    headers = resolve_provider_headers(provider, base_url=base_url)
+    models = fetch_api_models(api_key, base_url, headers=headers)
+    return models[0] if models else None
 
 
 def _select_pool_entry(provider: str) -> Tuple[bool, Optional[Any]]:
@@ -218,13 +236,14 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
             base_url = _to_openai_base_url(
                 _pool_runtime_base_url(entry, pconfig.inference_base_url) or pconfig.inference_base_url
             )
-            model = _first_live_model(api_key, base_url)
+            model = _first_live_model(api_key, base_url, provider_id)
             if not model:
                 continue
             logger.debug("Auxiliary text client: %s (%s) via pool", pconfig.name, model)
             extra = {}
-            if "api.kimi.com" in base_url.lower():
-                extra["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
+            endpoint_headers = _client_factory_headers_for_base_url(base_url)
+            if endpoint_headers:
+                extra["default_headers"] = endpoint_headers
             return _client_factory.create_openai_client(api_key, base_url, **extra), model
 
         creds = resolve_api_key_provider_credentials(provider_id)
@@ -235,13 +254,14 @@ def _resolve_api_key_provider() -> Tuple[Optional[OpenAI], Optional[str]]:
         base_url = _to_openai_base_url(
             str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
         )
-        model = _first_live_model(api_key, base_url)
+        model = _first_live_model(api_key, base_url, provider_id)
         if not model:
             continue
         logger.debug("Auxiliary text client: %s (%s)", pconfig.name, model)
         extra = {}
-        if "api.kimi.com" in base_url.lower():
-            extra["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
+        endpoint_headers = _client_factory_headers_for_base_url(base_url)
+        if endpoint_headers:
+            extra["default_headers"] = endpoint_headers
         return _client_factory.create_openai_client(api_key, base_url, **extra), model
 
     return None, None
@@ -256,7 +276,7 @@ def _try_openrouter() -> Tuple[Optional[OpenAI], Optional[str]]:
         if not or_key:
             return None, None
         base_url = _pool_runtime_base_url(entry, OPENROUTER_BASE_URL) or OPENROUTER_BASE_URL
-        model = _first_live_model(or_key, base_url)
+        model = _first_live_model(or_key, base_url, "openrouter")
         if not model:
             return None, None
         logger.debug("Auxiliary client: OpenRouter via pool")
@@ -267,7 +287,7 @@ def _try_openrouter() -> Tuple[Optional[OpenAI], Optional[str]]:
     or_key = os.getenv("OPENROUTER_API_KEY")
     if not or_key:
         return None, None
-    model = _first_live_model(or_key, OPENROUTER_BASE_URL)
+    model = _first_live_model(or_key, OPENROUTER_BASE_URL, "openrouter")
     if not model:
         return None, None
     logger.debug("Auxiliary client: OpenRouter")
@@ -390,7 +410,15 @@ def _try_custom_endpoint() -> Tuple[Optional[OpenAI], Optional[str]]:
     if not model:
         return None, None
     logger.debug("Auxiliary client: custom endpoint (%s)", model)
-    return _client_factory.create_openai_client(custom_key, custom_base), model
+    endpoint_headers = _client_factory_headers_for_base_url(custom_base)
+    return (
+        _client_factory.create_openai_client(
+            custom_key,
+            custom_base,
+            **({"default_headers": endpoint_headers} if endpoint_headers else {}),
+        ),
+        model,
+    )
 
 
 _AUTO_PROVIDER_LABELS = {
@@ -604,18 +632,24 @@ def _resolve_auto(main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[Option
 
 def _to_async_client(sync_client, model: str):
     """Convert a sync OpenAI-compatible client to its async counterpart."""
-    headers = None
-    base_lower = str(sync_client.base_url).lower()
-    if "openrouter" in base_lower:
-        headers = _OR_HEADERS
-    elif "api.kimi.com" in base_lower:
-        headers = {"User-Agent": "KimiCLI/1.30.0"}
+    headers = getattr(sync_client, "_default_headers", None)
+    if headers:
+        headers = dict(headers)
+    else:
+        headers = _client_factory_headers_for_base_url(str(sync_client.base_url))
     return _client_factory.create_async_openai_client(
         sync_client.api_key,
         str(sync_client.base_url),
         model,
         default_headers=headers,
     )
+
+
+def _client_factory_headers_for_base_url(base_url: str) -> dict[str, str] | None:
+    """Return the headers an endpoint requires, or None when it needs none."""
+    from .request_headers import resolve_provider_headers
+
+    return resolve_provider_headers(base_url=base_url) or None
 
 
 def _normalize_resolved_model(model_name: Optional[str], provider: str) -> Optional[str]:
@@ -722,8 +756,9 @@ def resolve_provider_client(
                 )
                 return None, None
             extra = {}
-            if "api.kimi.com" in custom_base.lower():
-                extra["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
+            endpoint_headers = _client_factory_headers_for_base_url(custom_base)
+            if endpoint_headers:
+                extra["default_headers"] = endpoint_headers
             client = _client_factory.create_openai_client(
                 custom_key, custom_base, **extra
             )
@@ -753,7 +788,7 @@ def resolve_provider_client(
                     model
                     or custom_runtime.get("model")
                     or _read_main_model()
-                    or _first_live_model(custom_key, custom_base),
+                    or _first_live_model(custom_key, custom_base, provider),
                     provider,
                 )
                 if not final_model:
@@ -762,7 +797,21 @@ def resolve_provider_client(
                         provider,
                     )
                     return None, None
-                client = _client_factory.create_openai_client(custom_key, custom_base)
+                from .request_headers import resolve_provider_headers
+
+                client = _client_factory.create_openai_client(
+                    custom_key,
+                    custom_base,
+                    **(
+                        {"default_headers": headers}
+                        if (headers := resolve_provider_headers(
+                            provider,
+                            base_url=custom_base,
+                            template=custom_runtime.get("headers"),
+                        ))
+                        else {}
+                    ),
+                )
                 logger.debug(
                     "resolve_provider_client: named custom provider %r (%s)",
                     provider, final_model)
@@ -807,7 +856,7 @@ def resolve_provider_client(
             str(creds.get("base_url", "")).strip().rstrip("/") or pconfig.inference_base_url
         )
 
-        default_model = _first_live_model(api_key, base_url)
+        default_model = _first_live_model(api_key, base_url, provider)
         if not model and not default_model:
             logger.warning(
                 "resolve_provider_client: provider %s did not return any models",
@@ -817,9 +866,7 @@ def resolve_provider_client(
         final_model = _normalize_resolved_model(model or default_model, provider)
 
         # Provider-specific headers
-        headers = {}
-        if "api.kimi.com" in base_url.lower():
-            headers["User-Agent"] = "KimiCLI/1.30.0"
+        headers = _client_factory_headers_for_base_url(base_url)
         client = _client_factory.create_openai_client(
             api_key,
             base_url,
@@ -1310,6 +1357,8 @@ def _build_call_kwargs(
         ChatRequestConfig(
             model=model,
             base_url=effective_base_url,
+            provider=provider,
+            session_id=_AUXILIARY_SESSION_ID,
             tools=tuple(tools or ()),
             max_tokens=max_tokens,
             include_reasoning=False,

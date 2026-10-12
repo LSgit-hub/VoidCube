@@ -39,6 +39,13 @@ def _normalize_custom_provider_name(value: str) -> str:
     return value.strip().lower().replace(" ", "-")
 
 
+def _normalize_custom_provider_headers(value: Any) -> Dict[str, str]:
+    """Return the validated custom request-header template for one Provider."""
+    from .request_headers import normalize_header_template
+
+    return normalize_header_template(value)
+
+
 def _auto_detect_local_model(base_url: str) -> str:
     """Query a local server for its model name when only one model is loaded."""
     if not base_url:
@@ -195,6 +202,7 @@ def _get_named_custom_provider(requested_provider: str) -> Optional[Dict[str, An
             "api_key": str(entry.get("api_key", "") or "").strip(),
             "api_key_env": str(entry.get("api_key_env", "") or "").strip(),
             "auth_mode": str(entry.get("auth_mode", "") or "").strip().lower(),
+            "headers": _normalize_custom_provider_headers(entry.get("headers")),
         }
         model_name = str(entry.get("selected_model") or entry.get("default_model") or entry.get("model", "") or "").strip()
         if model_name:
@@ -259,6 +267,7 @@ def _resolve_named_custom_runtime(
         model_name = custom_provider.get("model")
         if model_name:
             pool_result["model"] = model_name
+        pool_result["headers"] = dict(custom_provider.get("headers") or {})
         return pool_result
 
     api_key_env = str(custom_provider.get("api_key_env") or "").strip()
@@ -288,6 +297,7 @@ def _resolve_named_custom_runtime(
         "base_url": base_url,
         "api_key": api_key or "no-key-required",
         "source": f"custom_provider:{custom_provider.get('name', requested_provider)}",
+        "headers": dict(custom_provider.get("headers") or {}),
     }
     # Propagate the model name so callers can override self.model when the
     # provider name differs from the actual model string the API expects.

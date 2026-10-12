@@ -641,6 +641,15 @@ class ProviderPoolService:
         runtime = self._provider_runtime(provider_key)
         api_key = str(runtime.get("api_key") or "").strip()
         headers = {"Accept": "application/json"}
+        from ...infrastructure.providers.request_headers import resolve_provider_headers
+
+        headers.update(
+            resolve_provider_headers(
+                provider_key,
+                base_url=str(runtime.get("base_url") or ""),
+                template=runtime.get("headers"),
+            )
+        )
         if api_key and api_key != "no-key-required":
             headers["Authorization"] = f"Bearer {api_key}"
         url = f"{runtime['base_url']}/models"

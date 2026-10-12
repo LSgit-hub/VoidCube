@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ...domain.contracts.integration_policy import require_active_integration
+from ..providers.request_headers import (
+    resolve_provider_headers,
+)
 from .multimodal import build_user_content_with_attachments
 from .prompt_policy import DEVELOPER_ROLE_MODELS
 from .tool_schema import normalize_tool_definitions
@@ -25,6 +28,10 @@ class ChatRequestConfig:
     model: str
     base_url: str = ""
     session_id: str = ""
+    provider: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    client_id: str = ""
+    request_id: str = ""
     tools: tuple[dict[str, Any], ...] = ()
     max_tokens: int | None = None
     providers_allowed: tuple[str, ...] = ()
@@ -311,8 +318,9 @@ def build_chat_completion_kwargs(
         extra_body["vl_high_resolution_images"] = True
     if extra_body:
         api_kwargs["extra_body"] = extra_body
-    if "x.ai" in base_url_lower and config.session_id:
-        api_kwargs["extra_headers"] = {"x-grok-conv-id": config.session_id}
+    request_headers = _resolve_request_headers(config)
+    if request_headers:
+        api_kwargs["extra_headers"] = request_headers
     if include_request_overrides and config.request_overrides:
         api_kwargs.update(config.request_overrides)
     require_active_integration(
@@ -323,6 +331,23 @@ def build_chat_completion_kwargs(
         *config.providers_order,
     )
     return api_kwargs
+
+
+def _resolve_request_headers(config: ChatRequestConfig) -> dict[str, str]:
+    """Resolve the custom headers this request must carry.
+
+    An explicit template on the config wins; otherwise the provider's
+    configured template is looked up so callers that only know the provider
+    key still get the headers that endpoint requires.
+    """
+    return resolve_provider_headers(
+        config.provider,
+        base_url=config.base_url,
+        template=config.headers,
+        session_id=config.session_id,
+        client_id=config.client_id,
+        request_id=config.request_id,
+    )
 
 
 __all__ = [

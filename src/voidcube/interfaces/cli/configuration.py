@@ -1206,6 +1206,298 @@ def _prompt_native_input_modalities(
     return selected
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderPromptPorts:
+    """Terminal I/O seams for the interactive Provider management flows."""
+
+    prompt: Callable[..., str]
+    secret_prompt: Callable[..., str]
+    emit: Callable[[str], None]
+    header: Callable[[str], None]
+
+
+def _provider_pool_entries(providers_config: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Return the editable Provider pool entries in stable order."""
+    return [
+        (key, value)
+        for key, value in providers_config.items()
+        if isinstance(value, dict)
+    ]
+
+
+def _select_provider_key(
+    ports: ProviderPromptPorts,
+    providers_config: dict[str, Any],
+    *,
+    title: str,
+) -> str | None:
+    """Prompt for one Provider key, returning None when the user backs out."""
+    entries = _provider_pool_entries(providers_config)
+    if not entries:
+        ports.emit("  当前没有可操作的 Provider，请先添加。")
+        return None
+    ports.header(title)
+    for i, (key, value) in enumerate(entries, 1):
+        ports.emit(f"   [{i}] {value.get('label', key)} ({key})")
+    ports.emit("   [0] 返回")
+    try:
+        index = int(ports.prompt("选择 Provider")) - 1
+    except (ValueError, IndexError):
+        return None
+    if not 0 <= index < len(entries):
+        return None
+    return entries[index][0]
+
+
+def add_provider_entry(ports: ProviderPromptPorts) -> str | None:
+    """Add one OpenAI-compatible Provider to the shared pool."""
+    ports.header("添加 Provider")
+    ports.emit("\n直接添加支持 OpenAI 兼容 /models 的 Provider。输入 0 返回。")
+    provider_name = ports.prompt("Provider 名称")
+    if provider_name == "0":
+        return None
+    if not provider_name:
+        ports.emit("  ❌ Provider 名称不能为空")
+        return None
+    provider_key = ports.prompt(
+        "Provider 标识", _provider_key_from_name(provider_name)
+    ).strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider_key):
+        ports.emit("  ❌ Provider 标识只能包含小写字母、数字、连字符或下划线")
+        return None
+    base_url = ports.prompt("Base URL")
+    if not base_url:
+        ports.emit("  ❌ Base URL 不能为空")
+        return None
+    api_key = ports.secret_prompt("API Key（必填）")
+    if not api_key:
+        ports.emit("  ❌ API Key 不能为空；本地免鉴权请使用 [2] 本地模型（Ollama）")
+        return None
+    api_key_env = _provider_api_key_env(provider_key)
+    model_override = ports.prompt(
+        "模型名称（可留空，留空则从 /models 获取）"
+    ).strip()
+    models = get_provider_models_from_api(
+        provider_key, api_key=api_key, base_url=base_url
+    )
+    model_ids = [model_id for model_id, _ in models]
+    if not model_ids and not model_override:
+        ports.emit("  ❌ 无法从 Provider /models 获取模型列表；请检查 Base URL 和 Key")
+        return None
+    if model_override:
+        if model_override not in model_ids:
+            model_ids.append(model_override)
+        selected_model = model_override
+    else:
+        for i, model_id in enumerate(model_ids[:50], 1):
+            ports.emit(f"   [{i}] {model_id}")
+        try:
+            selected_model = model_ids[int(ports.prompt("选择默认模型", "1")) - 1]
+        except (ValueError, IndexError):
+            selected_model = model_ids[0]
+    if not save_env_value(api_key_env, api_key):
+        ports.emit("  ❌ API Key 保存失败")
+        return None
+    if not save_provider_pool_entry(
+        provider_key,
+        label=provider_name,
+        model_catalog=model_ids,
+        provider_type="openai_compatible",
+        base_url=base_url,
+        api_key_env=api_key_env,
+        auth_mode="env",
+        selected_model=selected_model,
+        model_override=model_override,
+    ):
+        ports.emit("  ❌ Provider 配置保存失败")
+        return None
+    ports.emit(f"  ✅ Provider {provider_key} 与 {len(model_ids)} 个模型已保存")
+    return provider_key
+
+
+def edit_provider_entry(ports: ProviderPromptPorts, provider_key: str) -> bool:
+    """Edit one existing Provider in place, preserving its stored secret."""
+    config = load_current_config()
+    providers = config.get("providers") if isinstance(config.get("providers"), dict) else {}
+    entry = providers.get(provider_key)
+    if not isinstance(entry, dict):
+        ports.emit(f"  ❌ Provider {provider_key} 不存在")
+        return False
+
+    label = str(entry.get("label") or provider_key)
+    base_url = str(entry.get("base_url") or "")
+    api_key_env = str(entry.get("api_key_env") or "")
+    provider_type = str(entry.get("type") or "openai_compatible")
+    auth_mode = str(entry.get("auth_mode") or "env")
+    model_ids = provider_model_catalog(entry)
+    manual_model = str(entry.get("model_override") or "").strip()
+    selected_model = str(entry.get("selected_model") or "").strip()
+
+    while True:
+        key_state = (
+            "已配置"
+            if provider_has_usable_credential(provider_key, api_key_env)
+            else "未配置"
+        )
+        model_state = (
+            f"{selected_model}（手动指定）" if manual_model else selected_model or "未设置"
+        )
+        ports.header(f"修改 Provider {provider_key}")
+        ports.emit(f"   [1] 名称      : {label}")
+        ports.emit(f"   [2] Base URL  : {base_url or '未设置'}")
+        ports.emit(f"   [3] API Key   : {key_state}（{api_key_env or '无'}，留空保留）")
+        ports.emit(f"   [4] 默认模型  : {model_state}")
+        ports.emit("   [5] 刷新模型目录")
+        ports.emit("   [0] 完成")
+        choice = ports.prompt("请选择")
+
+        if choice == "0":
+            break
+
+        if choice == "1":
+            new_label = ports.prompt("Provider 名称", label).strip()
+            if new_label:
+                label = new_label
+            continue
+
+        if choice == "2":
+            new_base_url = ports.prompt("Base URL", base_url).strip()
+            if not new_base_url:
+                ports.emit("  ❌ Base URL 不能为空")
+                continue
+            base_url = new_base_url
+            continue
+
+        if choice == "3":
+            new_key = ports.secret_prompt(
+                f"请输入 API Key（留空保留 {api_key_env or '当前 Key'}）"
+            ).strip()
+            if not new_key:
+                ports.emit("  ℹ️ 保留原有 API Key")
+                continue
+            if not api_key_env:
+                ports.emit("  ❌ 该 Provider 没有关联的 Key 环境变量，无法保存")
+                continue
+            if not save_env_value(api_key_env, new_key):
+                ports.emit("  ❌ API Key 保存失败")
+                continue
+            ports.emit(f"  ✅ API Key 已更新（{api_key_env}）")
+            continue
+
+        if choice == "4":
+            candidates = list(model_ids)
+            if manual_model and manual_model not in candidates:
+                candidates.append(manual_model)
+            if not candidates:
+                ports.emit("  ℹ️ 尚无模型目录，请先使用 [5] 刷新模型目录")
+                continue
+            for i, model_id in enumerate(candidates, 1):
+                ports.emit(f"   [{i}] {model_id}")
+            ports.emit("   [m] 手动输入模型名称")
+            answer = ports.prompt("选择模型", "0").strip()
+            if answer.lower() == "m":
+                typed = ports.prompt("模型名称", selected_model).strip()
+                if typed:
+                    manual_model = typed
+                    selected_model = typed
+                continue
+            try:
+                picked = candidates[int(answer) - 1]
+            except (ValueError, IndexError):
+                continue
+            manual_model = ""
+            selected_model = picked
+            continue
+
+        if choice == "5":
+            from ...infrastructure.config.configuration import save_config
+
+            refreshed, refreshed_ids = refresh_provider_pool_catalog(
+                load_current_config(), provider_key
+            )
+            if not refreshed_ids:
+                ports.emit("  ❌ 模型目录刷新失败，请检查 Base URL 和 Key")
+                continue
+            save_config(refreshed)
+            model_ids = refreshed_ids
+            if selected_model not in model_ids:
+                selected_model = model_ids[0]
+            ports.emit(f"  ✅ 模型目录已刷新（{len(model_ids)} 个模型）")
+            continue
+
+        ports.emit("  ❌ 无效选择，请重新选择。")
+
+    if not save_provider_pool_entry(
+        provider_key,
+        label=label,
+        model_catalog=model_ids,
+        provider_type=provider_type,
+        base_url=base_url,
+        api_key_env=api_key_env,
+        auth_mode=auth_mode,
+        selected_model=selected_model,
+        model_override=manual_model,
+        headers=entry.get("headers"),
+    ):
+        ports.emit("  ❌ Provider 配置保存失败")
+        return False
+    ports.emit(f"  ✅ Provider {provider_key} 已更新")
+    return True
+
+
+def delete_provider_entry(ports: ProviderPromptPorts, provider_key: str) -> bool:
+    """Remove one Provider after confirming it is no longer referenced."""
+    providers = load_current_config().get("providers")
+    if not isinstance(providers, dict) or not isinstance(providers.get(provider_key), dict):
+        ports.emit(f"  ❌ Provider {provider_key} 不存在")
+        return False
+    if ports.prompt(
+        f"确认删除 Provider {provider_key}？(y/n)", "n"
+    ).strip().lower() not in {"y", "yes", "1", "true"}:
+        return False
+    if not save_remove_provider_pool_entry(provider_key):
+        ports.emit("  ❌ 删除失败：Provider 仍可能被 API-A、API-B、员工角色或路由引用")
+        return False
+    ports.emit(f"  ✅ Provider {provider_key} 已删除；原 API Key 环境变量未删除")
+    return True
+
+
+def manage_provider_pool(ports: ProviderPromptPorts) -> None:
+    """Add, edit, or remove Providers from the shared pool."""
+    while True:
+        ports.header("Provider 管理")
+        ports.emit("\n   [1] 添加 Provider")
+        ports.emit("   [2] 修改 Provider")
+        ports.emit("   [3] 删除 Provider")
+        ports.emit("   [0] 返回")
+        choice = ports.prompt("请选择")
+
+        if choice == "0":
+            return
+
+        if choice == "1":
+            add_provider_entry(ports)
+            continue
+
+        if choice in {"2", "3"}:
+            providers_config = load_current_config().get("providers", {})
+            if not isinstance(providers_config, dict):
+                providers_config = {}
+            title = "修改 Provider" if choice == "2" else "删除 Provider"
+            provider_key = _select_provider_key(
+                ports, providers_config, title=title
+            )
+            if not provider_key:
+                continue
+            if choice == "2":
+                edit_provider_entry(ports, provider_key)
+            else:
+                delete_provider_entry(ports, provider_key)
+            continue
+
+        ports.emit("  ❌ 无效选择，请重新选择。")
+
+
 def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     """运行 API 配置向导"""
     
@@ -1319,81 +1611,36 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
     # 主菜单循环
     while True:
         p("\n请选择配置模式：")
-        p("   [1] 添加 Provider")
+        p("   [1] Provider（添加 / 修改 / 删除）")
         p("   [2] 本地模型（Ollama）")
         p("   [3] Agent 模型配置（API-A）")
         p("   [4] 记忆模型配置（API-B）")
         p("   [5] 图像模型配置")
         p("   [6] 视频模型配置")
         p("   [7] 查看当前配置")
-        p("   [8] 删除 Provider")
         p("   [0] 退出")
-        
+
         choice = inp("\n请选择")
-        
+
         if choice == "0":
             p("\n已取消配置。")
             break
-        
+
         elif choice == "1":
-            # Shared Provider pool entry
-            while True:
-                ph("添加 Provider")
-                p("\n直接添加支持 OpenAI 兼容 /models 的 Provider。输入 0 返回。")
-                provider_name = inp("Provider 名称")
-                if provider_name == "0":
-                    break
-                if not provider_name:
-                    pe("Provider 名称不能为空")
-                    continue
-                provider_key = inp(
-                    "Provider 标识", _provider_key_from_name(provider_name)
-                ).strip().lower()
-                if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider_key):
-                    pe("Provider 标识只能包含小写字母、数字、连字符或下划线")
-                    continue
-                base_url = inp("Base URL")
-                if not base_url:
-                    pe("Base URL 不能为空")
-                    continue
-                api_key = secret_inp("API Key（必填）")
-                if not api_key:
-                    pe("API Key 不能为空；本地免鉴权请使用 [2] 本地模型（Ollama）")
-                    continue
-                auth_mode = "env"
-                api_key_env = _provider_api_key_env(provider_key)
-                model_override = inp(
-                    "模型名称（可留空，留空则从 /models 获取）"
-                ).strip()
-                models = get_provider_models_from_api(
-                    provider_key, api_key=api_key, base_url=base_url
+            manage_provider_pool(
+                ProviderPromptPorts(
+                    prompt=inp,
+                    secret_prompt=secret_inp,
+                    emit=p,
+                    header=ph,
                 )
-                model_ids = [model_id for model_id, _ in models]
-                if not model_ids and not model_override:
-                    pe("无法从 Provider /models 获取模型列表；请检查 Base URL 和 Key")
-                    continue
-                if model_override:
-                    if model_override not in model_ids:
-                        model_ids.append(model_override)
-                    selected_model = model_override
-                else:
-                    for i, model_id in enumerate(model_ids[:50], 1):
-                        p(f"   [{i}] {model_id}")
-                    try:
-                        selected_model = model_ids[int(inp("选择默认模型", "1")) - 1]
-                    except (ValueError, IndexError):
-                        selected_model = model_ids[0]
-                if not save_env_value(api_key_env, api_key):
-                    pe("API Key 保存失败")
-                    continue
-                if not save_provider_pool_entry(provider_key, label=provider_name, model_catalog=model_ids, provider_type="openai_compatible", base_url=base_url, api_key_env=api_key_env, auth_mode=auth_mode, selected_model=selected_model, model_override=model_override):
-                    pe("Provider 配置保存失败")
-                    continue
-                ps(f"Provider {provider_key} 与 {len(model_ids)} 个模型已保存")
-                current_config = load_current_config()
-                providers_config = current_config.get("providers", {})
-                break
-        
+            )
+            current_config = load_current_config()
+            providers_config = current_config.get("providers", {})
+            if not isinstance(providers_config, dict):
+                providers_config = {}
+            continue
+
         elif choice == "2":
             ph("本地模型（Ollama）")
             existing = providers_config.get("ollama", {})
@@ -1439,44 +1686,12 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             pi("API-A、API-B 和员工代理现在都可以选择该 Provider")
             continue
 
-        elif choice == "8":
-            ph("删除 Provider")
-            entries = [
-                (key, value)
-                for key, value in providers_config.items()
-                if isinstance(value, dict)
-            ]
-            if not entries:
-                pe("当前没有可删除的 Provider")
-                continue
-            for i, (key, value) in enumerate(entries, 1):
-                p(f"   [{i}] {value.get('label', key)} ({key})")
-            p("   [0] 返回")
-            try:
-                provider_key, _provider_cfg = entries[int(inp("选择 Provider")) - 1]
-            except (ValueError, IndexError):
-                continue
-            if inp(f"确认删除 Provider {provider_key}？(y/n)", "n").strip().lower() not in {
-                "y",
-                "yes",
-                "1",
-                "true",
-            }:
-                continue
-            if save_remove_provider_pool_entry(provider_key):
-                ps(f"Provider {provider_key} 已删除；原 API Key 环境变量未删除")
-                current_config = load_current_config()
-                providers_config = current_config.get("providers", {})
-            else:
-                pe("删除失败：Provider 仍可能被 API-A、API-B、员工角色或路由引用")
-            continue
-
         elif choice == "3":
             # API-A selection
             while True:
                 ph("Agent 模型配置（API-A）")
                 entries = [(key, value) for key, value in providers_config.items() if isinstance(value, dict)]
-                if not entries: pe("请先使用 [1] 添加 Provider 或 [2] 配置本地模型"); break
+                if not entries: pe("请先使用 [1] Provider 管理 或 [2] 配置本地模型"); break
                 for i, (key, value) in enumerate(entries, 1): p(f"   [{i}] {value.get('label', key)} ({key})")
                 p("   [0] 返回")
                 try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]
@@ -1528,7 +1743,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             while True:
                 ph("记忆模型配置（API-B）")
                 entries = [(key, value) for key, value in providers_config.items() if isinstance(value, dict)]
-                if not entries: pe("请先使用 [1] 添加 Provider 或 [2] 配置本地模型"); break
+                if not entries: pe("请先使用 [1] Provider 管理 或 [2] 配置本地模型"); break
                 for i, (key, value) in enumerate(entries, 1): p(f"   [{i}] {value.get('label', key)} ({key})")
                 p("   [0] 返回")
                 try: provider_key, provider_cfg = entries[int(inp("选择 Provider")) - 1]

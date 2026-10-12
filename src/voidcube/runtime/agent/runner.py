@@ -2983,6 +2983,7 @@ class AIAgent:
             model=self.model,
             base_url=self.base_url,
             session_id=self.session_id or "",
+            provider=self.provider or "",
             tools=tuple(self.tools or ()),
             max_tokens=self.max_tokens,
             providers_allowed=tuple(self.providers_allowed or ()),

@@ -124,6 +124,17 @@ def test_auto_mode_uses_openrouter_default_when_router_has_no_client(monkeypatch
     assert result.client_kwargs["default_headers"]["X-OpenRouter-Title"] == "Voidcube Agent"
 
 
+def test_unconfigured_custom_client_does_not_guess_headers():
+    result = AgentClientInitializationRuntime(
+        _ports(
+            requested_base_url="https://opencode.ai/zen/go/v1",
+            provider="step5",
+        )
+    ).initialize()
+
+    assert "default_headers" not in result.client_kwargs
+
+
 def test_primary_client_failure_keeps_initialization_error_boundary():
     class _FailingLifecycle(_Lifecycle):
         def initialize_primary(self, *, reason: str):

@@ -2122,7 +2122,20 @@ def _normalize_provider_entry(
     else:
         normalized.pop("api_key", None)
 
+    header_template = _normalize_provider_header_template(entry.get("headers"))
+    if header_template:
+        normalized["headers"] = header_template
+    else:
+        normalized.pop("headers", None)
+
     return normalized
+
+
+def _normalize_provider_header_template(value: Any) -> Dict[str, str]:
+    """Return a validated custom request-header template for one Provider."""
+    from ..providers.request_headers import normalize_header_template
+
+    return normalize_header_template(value)
 
 
 def _normalize_provider_runtime_config(config: Dict[str, Any]) -> Dict[str, Any]:

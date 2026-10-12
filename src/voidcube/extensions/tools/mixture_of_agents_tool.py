@@ -122,6 +122,7 @@ def _build_openrouter_request(
         ChatRequestConfig(
             model=model,
             base_url=OPENROUTER_BASE_URL,
+            provider="openrouter",
             max_tokens=max_tokens,
             reasoning_config={"enabled": True, "effort": "xhigh"},
             request_overrides=overrides,

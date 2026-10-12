@@ -118,6 +118,7 @@ def persist_provider_pool_entry(
     selected_model: str = "",
     capabilities: dict[str, Any] | None = None,
     model_override: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return config with one shared provider credential/catalog entry updated."""
     auth = _provider_auth_module()
@@ -177,6 +178,13 @@ def persist_provider_pool_entry(
         current_model_capabilities[selected_model] = normalized_capabilities
     if current_model_capabilities:
         entry["model_capabilities"] = current_model_capabilities
+    normalized_headers = headers
+    if normalized_headers is None and isinstance(current, dict):
+        normalized_headers = current.get("headers")
+    if normalized_headers:
+        from ..providers.request_headers import normalize_header_template
+
+        entry["headers"] = normalize_header_template(normalized_headers)
     return _config_module().upsert_provider(
         dict(config or {}),
         provider_key,
@@ -509,7 +517,13 @@ def get_provider_models_from_api(provider: str, *, api_key: str = "", base_url: 
         resolved_base_url = base_url or str(
             provider_cfg.get("inference_base_url") or provider_cfg.get("base_url") or ""
         )
-        model_ids = fetch_api_models(api_key.strip(), resolved_base_url) or []
+        from ..providers.request_headers import resolve_provider_headers
+
+        request_headers = resolve_provider_headers(provider, base_url=resolved_base_url)
+        fetch_kwargs = {"headers": request_headers} if request_headers else {}
+        model_ids = fetch_api_models(
+            api_key.strip(), resolved_base_url, **fetch_kwargs
+        ) or []
         if provider.strip().lower() == "ollama" and not model_ids:
             model_ids = fetch_ollama_models(resolved_base_url)
         return [(model_id, "") for model_id in model_ids]

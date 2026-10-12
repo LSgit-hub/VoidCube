@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform
 import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -13,41 +12,26 @@ from ...infrastructure.providers.endpoints import OPENROUTER_BASE_URL
 from .client_lifecycle import ChatClientLifecycle
 
 
-_QWEN_CODE_VERSION = "0.14.1"
-
-
-def build_qwen_portal_headers() -> dict[str, str]:
-    """Return the headers required by the Qwen Portal endpoint."""
-    user_agent = (
-        f"QwenCode/{_QWEN_CODE_VERSION} "
-        f"({platform.system().lower()}; {platform.machine()})"
-    )
-    return {
-        "User-Agent": user_agent,
-        "X-DashScope-CacheControl": "enable",
-        "X-DashScope-UserAgent": user_agent,
-        "X-DashScope-AuthType": "qwen-oauth",
-    }
-
-
 def build_client_kwargs_for_credentials(
     api_key: str,
     base_url: str,
+    *,
+    provider: str = "",
 ) -> dict[str, Any]:
     """Build one canonical OpenAI-compatible client configuration."""
-    from ...infrastructure.providers.auxiliary_client import _OR_HEADERS
+    from ...infrastructure.providers.request_headers import (
+        resolve_provider_headers,
+    )
 
     client_kwargs: dict[str, Any] = {
         "api_key": api_key,
         "base_url": base_url,
     }
-    normalized_base_url = (base_url or "").lower()
-    if "openrouter" in normalized_base_url:
-        client_kwargs["default_headers"] = dict(_OR_HEADERS)
-    elif "api.kimi.com" in normalized_base_url:
-        client_kwargs["default_headers"] = {"User-Agent": "KimiCLI/1.30.0"}
-    elif "portal.qwen.ai" in normalized_base_url:
-        client_kwargs["default_headers"] = build_qwen_portal_headers()
+    template = resolve_provider_headers(provider, base_url=base_url)
+    # No conversation id exists yet at client construction, so session-scoped
+    # headers resolve away here and are attached per request instead.
+    if template:
+        client_kwargs["default_headers"] = template
     return client_kwargs
 
 
@@ -110,6 +94,7 @@ class AgentClientInitializationRuntime:
             client_kwargs = build_client_kwargs_for_credentials(
                 ports.requested_api_key,
                 ports.requested_base_url,
+                provider=ports.provider,
             )
             if ports.provider == "copilot-acp":
                 client_kwargs["command"] = ports.acp_command
@@ -147,6 +132,7 @@ class AgentClientInitializationRuntime:
             "default_headers": build_client_kwargs_for_credentials(
                 "",
                 OPENROUTER_BASE_URL,
+                provider="openrouter",
             )["default_headers"],
         }
 

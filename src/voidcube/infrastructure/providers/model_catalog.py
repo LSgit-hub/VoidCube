@@ -7,6 +7,7 @@ import os
 import urllib.request
 import urllib.error
 from difflib import get_close_matches
+from collections.abc import Mapping
 from typing import Any, Optional
 
 from ...domain.contracts.integration_policy import contains_retired_integration
@@ -701,7 +702,15 @@ def _provider_model_ids_unfiltered(
     if not base_url:
         return []
     api_key = str(runtime.get("api_key") or "").strip()
-    return fetch_api_models(api_key, base_url) or []
+    from .request_headers import resolve_provider_headers
+
+    request_headers = resolve_provider_headers(
+        normalized,
+        base_url=base_url,
+        template=runtime.get("headers"),
+    )
+    fetch_kwargs = {"headers": request_headers} if request_headers else {}
+    return fetch_api_models(api_key, base_url, **fetch_kwargs) or []
 
 
 def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) -> list[str]:
@@ -731,6 +740,7 @@ def probe_api_models(
     api_key: Optional[str],
     base_url: Optional[str],
     timeout: float = 5.0,
+    headers: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Probe an OpenAI-compatible ``/models`` endpoint with light URL heuristics."""
     normalized = (base_url or "").strip().rstrip("/")
@@ -753,13 +763,13 @@ def probe_api_models(
         candidates.append((alternate_base, True))
 
     tried: list[str] = []
-    headers: dict[str, str] = {}
+    request_headers: dict[str, str] = dict(headers or {})
     if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+        request_headers["Authorization"] = f"Bearer {api_key}"
     for candidate_base, is_fallback in candidates:
         url = candidate_base.rstrip("/") + "/models"
         tried.append(url)
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(url, headers=request_headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode())
@@ -794,13 +804,14 @@ def fetch_api_models(
     api_key: Optional[str],
     base_url: Optional[str],
     timeout: float = 5.0,
+    headers: Mapping[str, str] | None = None,
 ) -> Optional[list[str]]:
     """Fetch the list of available model IDs from the provider's ``/models`` endpoint.
 
     Returns a list of model ID strings, or ``None`` if the endpoint could not
     be reached (network error, timeout, auth failure, etc.).
     """
-    return probe_api_models(api_key, base_url, timeout=timeout).get("models")
+    return probe_api_models(api_key, base_url, timeout=timeout, headers=headers).get("models")
 
 
 def validate_requested_model(
@@ -845,7 +856,11 @@ def validate_requested_model(
         }
 
     if normalized == "custom":
-        probe = probe_api_models(api_key, base_url)
+        from .request_headers import resolve_provider_headers
+
+        request_headers = resolve_provider_headers(normalized, base_url=base_url)
+        probe_kwargs = {"headers": request_headers} if request_headers else {}
+        probe = probe_api_models(api_key, base_url, **probe_kwargs)
         api_models = probe.get("models")
         if api_models is not None:
             if requested_for_lookup in set(api_models):
@@ -894,7 +909,11 @@ def validate_requested_model(
         }
 
     # Probe the live API to check if the model actually exists
-    api_models = fetch_api_models(api_key, base_url)
+    from .request_headers import resolve_provider_headers
+
+    request_headers = resolve_provider_headers(normalized, base_url=base_url)
+    fetch_kwargs = {"headers": request_headers} if request_headers else {}
+    api_models = fetch_api_models(api_key, base_url, **fetch_kwargs)
 
     if api_models is not None:
         if requested_for_lookup in set(api_models):
