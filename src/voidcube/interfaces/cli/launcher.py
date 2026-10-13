@@ -37,7 +37,7 @@ from .application import (
 from .i18n import t
 
 CLI_CONFIG: dict[str, Any] = {}
-translate: Callable[..., str] = t
+translate: Callable[..., str] = t  # type: ignore[assignment]
 
 
 def _get_language_preference_prompt() -> str:
@@ -138,7 +138,7 @@ def main(
     # Ensure CLI_CONFIG is cached in module globals so bare-name references
     # in main(), VoidcubeCLI.__init__, and class methods resolve correctly.
     config = _get_cli_config()
-    _app.CLI_CONFIG = config
+    setattr(_app, "CLI_CONFIG", config)
     globals()["CLI_CONFIG"] = config
 
     # Signal to terminal_tool that we're in interactive mode

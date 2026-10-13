@@ -535,7 +535,7 @@ def load_cli_config() -> Dict[str, Any]:
     return reload_application_config(load_config)
 
 
-def _get_cli_config():
+def _get_cli_config() -> dict[str, Any]:
     """Lazy-load and cache the CLI configuration (called automatically on first access)."""
     from ...infrastructure.config.configuration import load_config
 

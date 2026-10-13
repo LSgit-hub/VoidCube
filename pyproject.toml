@@ -115,6 +115,11 @@ plugins = ["*/plugin.json", "*/web/dist/*", "*/web/dist/**/*"]
 target-version = "py314"
 exclude = [".test-tmp", ".venv", "build", "dist"]
 
+[tool.pyright]
+pythonVersion = "3.14"
+include = ["src", "plugins", "scripts", "tests", "Mem/src", "Mem/tests"]
+exclude = ["**/node_modules", "**/__pycache__", ".venv", "build", "dist"]
+
 [tool.ruff.lint]
 # Start with deterministic parser/control-flow failures. F821 is reported
 # separately in CI until the existing undefined-name baseline is retired.
