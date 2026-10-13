@@ -3766,6 +3766,9 @@ class AIAgent:
             host._goal_event_sink = lambda event: self._event_port.emit(event)
             host._session_goal_port = getattr(self, "_session_goal_port", None)
             host._goal_lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+            host._stop_goal_execution = lambda: self.interrupt(
+                "session goal state changed"
+            )
             if host._session_goal_port is None:
                 host._session_goal_port = DefaultSessionGoalPort()
             host._goal_manager_port = getattr(

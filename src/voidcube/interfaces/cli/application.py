@@ -2098,8 +2098,21 @@ class VoidcubeCLI:
 
         lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
         with lifecycle_lock if lifecycle_lock is not None else nullcontext():
+            self._stop_goal_execution()
             self._discard_pending_goal_continuations()
             self.agent = None
+
+    def _stop_goal_execution(self) -> None:
+        """Interrupt a turn that is still carrying a changed session goal."""
+        agent = getattr(self, "agent", None)
+        if agent is None:
+            return
+        interrupt = getattr(agent, "interrupt", None)
+        if callable(interrupt):
+            try:
+                interrupt("session goal state changed")
+            except Exception:
+                logger.debug("Failed to interrupt agent after session goal change", exc_info=True)
 
     def _discard_pending_goal_continuations(self) -> None:
         """Remove stale automatic goal prompts while preserving user input."""

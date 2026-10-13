@@ -142,13 +142,16 @@ def test_agent_goal_objective_steering_is_turn_local_and_drained_once():
 
 def test_goal_state_mutation_invalidates_queued_continuation():
     invalidations = []
+    stops = []
     host = SimpleNamespace(
         session_id="session-a",
         _session_goals={},
         _discard_pending_goal_continuations=lambda: invalidations.append("discard"),
+        _stop_goal_execution=lambda: stops.append("stop"),
     )
     create_goal(host, "Finish the task")
     invalidations.clear()
+    stops.clear()
 
     paused = json.loads(
         dispatch_session_goal("update", host=host, status="paused", reason="User pause")
@@ -156,6 +159,24 @@ def test_goal_state_mutation_invalidates_queued_continuation():
 
     assert paused["success"] is True
     assert invalidations == ["discard"]
+    assert stops == ["stop"]
+
+
+def test_goal_completion_requests_current_turn_stop():
+    stops = []
+    host = SimpleNamespace(
+        session_id="session-a",
+        _session_goals={},
+        _stop_goal_execution=lambda: stops.append("stop"),
+    )
+    create_goal(host, "Finish the task")
+
+    completed = json.loads(
+        dispatch_session_goal("update", host=host, status="completed")
+    )
+
+    assert completed["success"] is True
+    assert stops == ["stop"]
 
 
 def test_goal_lifecycle_emits_structured_events_when_host_subscribes():

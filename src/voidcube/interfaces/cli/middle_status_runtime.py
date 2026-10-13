@@ -131,21 +131,22 @@ class CliMiddleStatusRuntime:
             try:
                 goal = dict(ports.goal_snapshot() or {})
                 status = str(goal.get("status") or "").strip().casefold()
-                objective = " ".join(str(goal.get("objective") or "").split())
-                if status and objective:
-                    if len(objective) > 24:
-                        objective = objective[:21].rstrip() + "..."
+                # Completed goals remain queryable until `/goal clear`, but
+                # they are no longer active status-bar work.
+                if status in {"active", "paused", "blocked"}:
                     status_labels = {
-                        "active": ("*" if ascii_mode else "◎", "#60A5FA"),
-                        "paused": ("||" if ascii_mode else "Ⅱ", "#FBBF24"),
-                        "blocked": ("!", "#FF6B6B"),
-                        "completed": ("v" if ascii_mode else "✓", "#7CC9A0"),
+                        "active": (("*", "Running") if ascii_mode else ("◎", "运行中"), "#60A5FA"),
+                        "paused": (("||", "Paused") if ascii_mode else ("Ⅱ", "已暂停"), "#FBBF24"),
+                        "blocked": (("!", "Blocked") if ascii_mode else ("!", "已阻塞"), "#FF6B6B"),
                     }
-                    icon, color = status_labels.get(status, ("?", "#9CA3AF"))
+                    (icon, label), color = status_labels.get(
+                        status,
+                        (("?", status), "#9CA3AF"),
+                    )
                     if fragments:
                         fragments.append((f"{self._BACKGROUND} #4B5563", " · "))
                     fragments.append((f"{self._BACKGROUND} {color} bold", icon))
-                    fragments.append((f"{self._BACKGROUND} {color}", f" {objective}"))
+                    fragments.append((f"{self._BACKGROUND} {color}", f" {label}"))
             except Exception:
                 pass
 

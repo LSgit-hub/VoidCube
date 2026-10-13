@@ -86,6 +86,18 @@ def _invalidate_pending_goal_continuation(host: Any) -> None:
         callback()
 
 
+def _stop_goal_execution(host: Any) -> None:
+    """Request the current agent turn to stop after a terminal goal update."""
+    callback = getattr(host, "_stop_goal_execution", None)
+    if callable(callback):
+        try:
+            callback()
+        except Exception:
+            host_logger = getattr(host, "_logger", None)
+            if host_logger is not None and hasattr(host_logger, "debug"):
+                host_logger.debug("Could not stop agent after session goal update", exc_info=True)
+
+
 def get_goal(host: Any) -> dict[str, Any] | None:
     session_id = str(getattr(host, "session_id", "") or "").strip()
     if not session_id:
@@ -174,6 +186,7 @@ def _update_goal_locked(host: Any, status: str, reason: str | None = None) -> bo
             _sync_status_backend(host, ACTIVE, reason)
         if updated and status != ACTIVE:
             _invalidate_pending_goal_continuation(host)
+            _stop_goal_execution(host)
         if updated:
             _emit_goal_event(
                 host,
@@ -204,6 +217,7 @@ def _update_goal_locked(host: Any, status: str, reason: str | None = None) -> bo
         _sync_status_backend(host, ACTIVE, reason)
     elif status != ACTIVE:
         _invalidate_pending_goal_continuation(host)
+        _stop_goal_execution(host)
     _emit_goal_event(
         host,
         _status_event_kind(status),
@@ -309,6 +323,7 @@ def _audit_blocked_goal_locked(
         if result is not None:
             if result.get("status") == BLOCKED:
                 _invalidate_pending_goal_continuation(host)
+                _stop_goal_execution(host)
             _emit_goal_event(
                 host,
                 (
@@ -351,6 +366,7 @@ def _audit_blocked_goal_locked(
     )
     if goal["status"] == BLOCKED:
         _invalidate_pending_goal_continuation(host)
+        _stop_goal_execution(host)
     return {"status": goal["status"], "reason": normalized, "blocked_streak": streak}
 
 

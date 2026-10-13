@@ -1,0 +1,199 @@
+warning: in the working copy of 'src/voidcube/application/session_goal.py', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'src/voidcube/interfaces/cli/application.py', CRLF will be replaced by LF the next time Git touches it
+warning: in the working copy of 'src/voidcube/runtime/agent/runner.py', CRLF will be replaced by LF the next time Git touches it
+diff --git a/src/voidcube/application/session_goal.py b/src/voidcube/application/session_goal.py
+index f52b128..677fc3c 100644
+--- a/src/voidcube/application/session_goal.py
++++ b/src/voidcube/application/session_goal.py
+@@ -86,6 +86,18 @@ def _invalidate_pending_goal_continuation(host: Any) -> None:
+         callback()
+ 
+ 
++def _stop_goal_execution(host: Any) -> None:
++    """Request the current agent turn to stop after a terminal goal update."""
++    callback = getattr(host, "_stop_goal_execution", None)
++    if callable(callback):
++        try:
++            callback()
++        except Exception:
++            logger = getattr(host, "_logger", None)
++            if logger is not None and hasattr(logger, "debug"):
++                logger.debug("Could not stop agent after session goal update", exc_info=True)
++
++
+ def get_goal(host: Any) -> dict[str, Any] | None:
+     session_id = str(getattr(host, "session_id", "") or "").strip()
+     if not session_id:
+@@ -174,6 +186,7 @@ def _update_goal_locked(host: Any, status: str, reason: str | None = None) -> bo
+             _sync_status_backend(host, ACTIVE, reason)
+         if updated and status != ACTIVE:
+             _invalidate_pending_goal_continuation(host)
++            _stop_goal_execution(host)
+         if updated:
+             _emit_goal_event(
+                 host,
+@@ -204,6 +217,7 @@ def _update_goal_locked(host: Any, status: str, reason: str | None = None) -> bo
+         _sync_status_backend(host, ACTIVE, reason)
+     elif status != ACTIVE:
+         _invalidate_pending_goal_continuation(host)
++        _stop_goal_execution(host)
+     _emit_goal_event(
+         host,
+         _status_event_kind(status),
+@@ -309,6 +323,7 @@ def _audit_blocked_goal_locked(
+         if result is not None:
+             if result.get("status") == BLOCKED:
+                 _invalidate_pending_goal_continuation(host)
++                _stop_goal_execution(host)
+             _emit_goal_event(
+                 host,
+                 (
+@@ -351,6 +366,7 @@ def _audit_blocked_goal_locked(
+     )
+     if goal["status"] == BLOCKED:
+         _invalidate_pending_goal_continuation(host)
++        _stop_goal_execution(host)
+     return {"status": goal["status"], "reason": normalized, "blocked_streak": streak}
+ 
+ 
+diff --git a/src/voidcube/interfaces/cli/application.py b/src/voidcube/interfaces/cli/application.py
+index 8901dfa..2345365 100644
+--- a/src/voidcube/interfaces/cli/application.py
++++ b/src/voidcube/interfaces/cli/application.py
+@@ -2098,9 +2098,22 @@ class VoidcubeCLI:
+ 
+         lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
+         with lifecycle_lock if lifecycle_lock is not None else nullcontext():
++            self._stop_goal_execution()
+             self._discard_pending_goal_continuations()
+             self.agent = None
+ 
++    def _stop_goal_execution(self) -> None:
++        """Interrupt a turn that is still carrying a changed session goal."""
++        agent = getattr(self, "agent", None)
++        if agent is None:
++            return
++        interrupt = getattr(agent, "interrupt", None)
++        if callable(interrupt):
++            try:
++                interrupt("session goal state changed")
++            except Exception:
++                logger.debug("Failed to interrupt agent after session goal change", exc_info=True)
++
+     def _discard_pending_goal_continuations(self) -> None:
+         """Remove stale automatic goal prompts while preserving user input."""
+         predicate = lambda item: isinstance(item, str) and (
+diff --git a/src/voidcube/interfaces/cli/middle_status_runtime.py b/src/voidcube/interfaces/cli/middle_status_runtime.py
+index 4f4ede0..d75f5d6 100644
+--- a/src/voidcube/interfaces/cli/middle_status_runtime.py
++++ b/src/voidcube/interfaces/cli/middle_status_runtime.py
+@@ -131,21 +131,22 @@ class CliMiddleStatusRuntime:
+             try:
+                 goal = dict(ports.goal_snapshot() or {})
+                 status = str(goal.get("status") or "").strip().casefold()
+-                objective = " ".join(str(goal.get("objective") or "").split())
+-                if status and objective:
+-                    if len(objective) > 24:
+-                        objective = objective[:21].rstrip() + "..."
++                # Completed goals remain queryable until `/goal clear`, but
++                # they are no longer active status-bar work.
++                if status in {"active", "paused", "blocked"}:
+                     status_labels = {
+-                        "active": ("*" if ascii_mode else "鈼?, "#60A5FA"),
+-                        "paused": ("||" if ascii_mode else "鈪?, "#FBBF24"),
+-                        "blocked": ("!", "#FF6B6B"),
+-                        "completed": ("v" if ascii_mode else "鉁?, "#7CC9A0"),
++                        "active": (("*", "杩愯涓?) if ascii_mode else ("鈼?, "杩愯涓?), "#60A5FA"),
++                        "paused": (("||", "宸叉殏鍋?) if ascii_mode else ("鈪?, "宸叉殏鍋?), "#FBBF24"),
++                        "blocked": (("!", "宸查樆濉?), "#FF6B6B"),
+                     }
+-                    icon, color = status_labels.get(status, ("?", "#9CA3AF"))
++                    (icon, label), color = status_labels.get(
++                        status,
++                        (("?", status), "#9CA3AF"),
++                    )
+                     if fragments:
+                         fragments.append((f"{self._BACKGROUND} #4B5563", " 路 "))
+                     fragments.append((f"{self._BACKGROUND} {color} bold", icon))
+-                    fragments.append((f"{self._BACKGROUND} {color}", f" {objective}"))
++                    fragments.append((f"{self._BACKGROUND} {color}", f" {label}"))
+             except Exception:
+                 pass
+ 
+diff --git a/src/voidcube/runtime/agent/runner.py b/src/voidcube/runtime/agent/runner.py
+index bbbb844..04eab74 100644
+--- a/src/voidcube/runtime/agent/runner.py
++++ b/src/voidcube/runtime/agent/runner.py
+@@ -3766,6 +3766,9 @@ class AIAgent:
+             host._goal_event_sink = lambda event: self._event_port.emit(event)
+             host._session_goal_port = getattr(self, "_session_goal_port", None)
+             host._goal_lifecycle_lock = getattr(self, "_goal_lifecycle_lock", None)
++            host._stop_goal_execution = lambda: self.interrupt(
++                "session goal state changed"
++            )
+             if host._session_goal_port is None:
+                 host._session_goal_port = DefaultSessionGoalPort()
+             host._goal_manager_port = getattr(
+diff --git a/tests/test_cli_middle_status_runtime.py b/tests/test_cli_middle_status_runtime.py
+index 9216a32..278f782 100644
+--- a/tests/test_cli_middle_status_runtime.py
++++ b/tests/test_cli_middle_status_runtime.py
+@@ -179,7 +179,7 @@ def test_middle_status_projects_supervisor_voice_as_microphone_icon():
+     assert "馃挙" not in rendered
+ 
+ 
+-def test_middle_status_projects_active_goal_summary():
++def test_middle_status_projects_goal_status_without_objective_summary():
+     rendered = "".join(
+         text
+         for _, text in CliMiddleStatusRuntime(
+@@ -196,4 +196,5 @@ def test_middle_status_projects_active_goal_summary():
+         ).build()
+     )
+ 
+-    assert "! Wait for the dependen..." in rendered
++    assert "! 宸查樆濉? in rendered
++    assert "Wait for the dependency" not in rendered
+diff --git a/tests/test_session_goal_tool.py b/tests/test_session_goal_tool.py
+index 40b62b2..8775b87 100644
+--- a/tests/test_session_goal_tool.py
++++ b/tests/test_session_goal_tool.py
+@@ -142,10 +142,12 @@ def test_agent_goal_objective_steering_is_turn_local_and_drained_once():
+ 
+ def test_goal_state_mutation_invalidates_queued_continuation():
+     invalidations = []
++    stops = []
+     host = SimpleNamespace(
+         session_id="session-a",
+         _session_goals={},
+         _discard_pending_goal_continuations=lambda: invalidations.append("discard"),
++        _stop_goal_execution=lambda: stops.append("stop"),
+     )
+     create_goal(host, "Finish the task")
+     invalidations.clear()
+@@ -156,6 +158,24 @@ def test_goal_state_mutation_invalidates_queued_continuation():
+ 
+     assert paused["success"] is True
+     assert invalidations == ["discard"]
++    assert stops == ["stop"]
++
++
++def test_goal_completion_requests_current_turn_stop():
++    stops = []
++    host = SimpleNamespace(
++        session_id="session-a",
++        _session_goals={},
++        _stop_goal_execution=lambda: stops.append("stop"),
++    )
++    create_goal(host, "Finish the task")
++
++    completed = json.loads(
++        dispatch_session_goal("update", host=host, status="completed")
++    )
++
++    assert completed["success"] is True
++    assert stops == ["stop"]
+ 
+ 
+ def test_goal_lifecycle_emits_structured_events_when_host_subscribes():
+_uncommitted_diff.txt

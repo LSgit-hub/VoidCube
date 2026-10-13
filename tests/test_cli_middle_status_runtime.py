@@ -179,7 +179,7 @@ def test_middle_status_projects_supervisor_voice_as_microphone_icon():
     assert "💤" not in rendered
 
 
-def test_middle_status_projects_active_goal_summary():
+def test_middle_status_projects_goal_status_without_objective_summary():
     rendered = "".join(
         text
         for _, text in CliMiddleStatusRuntime(
@@ -196,4 +196,5 @@ def test_middle_status_projects_active_goal_summary():
         ).build()
     )
 
-    assert "! Wait for the dependen..." in rendered
+    assert "! Blocked" in rendered
+    assert "Wait for the dependency" not in rendered
