@@ -96,6 +96,7 @@ from ...application.memory_context import build_memory_context_block
 from ...infrastructure.memory.memory_bridge import create_memory_bridge
 from ...application.ports import CallbackEventPort, CallbackPersistencePort, RuntimePorts
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, finalization_status
+from ...domain.contracts.memory import MemoryRecallResult
 from ...domain.events import CheckpointPersistFailed
 from ...infrastructure.llm.retry_policy import (
     RetryDirective,
@@ -707,6 +708,7 @@ class AIAgent:
 
         # Mem construction and provider lifecycle belong to the infrastructure adapter.
         memory_port = None
+        self._memory_initialization_failed = False
         if not skip_memory:
             try:
                 memory_port = create_memory_bridge(
@@ -715,6 +717,7 @@ class AIAgent:
                 )
                 logger.info("Canonical Mem provider activated")
             except Exception as exc:
+                self._memory_initialization_failed = True
                 logger.warning("Canonical Mem provider init failed: %s", exc)
         self.runtime_ports = RuntimePorts(
             memory=memory_port,
@@ -4471,24 +4474,23 @@ class AIAgent:
         # prefetch() on each tool call (10 tool calls = 10x latency + cost).
         # Use original_user_message (clean input) — user_message may contain
         # injected skill content that bloats / breaks provider queries.
-        _ext_prefetch_cache = ""
+        _ext_prefetch_cache: MemoryRecallResult | None = None
         if self.runtime_ports.memory:
             try:
                 _query = original_user_message if isinstance(original_user_message, str) else ""
                 _ext_prefetch_cache = self.runtime_ports.memory.prefetch(
                     _query,
                     session_id=self.session_id,
-                ) or ""
-                # Diagnostic log: track prefetch size and token cost for
-                # evaluating whether a min_score filter would help.
-                if _ext_prefetch_cache and not self.quiet_mode:
-                    _chars = len(_ext_prefetch_cache)
-                    _tokens = _chars // 4
-                    _fenced = build_memory_context_block(_ext_prefetch_cache)
-                    _fenced_chars = len(_fenced) if _fenced else 0
+                )
+                if not self.quiet_mode:
                     logger.info(
-                        "Memory prefetch: %d chars / ~%d tokens (fenced block: %d chars)",
-                        _chars, _tokens, _fenced_chars,
+                        "Memory prefetch: status=%s results=%d candidates=%d truncated=%s latency_ms=%s trace_id=%s",
+                        _ext_prefetch_cache.status,
+                        _ext_prefetch_cache.result_count,
+                        _ext_prefetch_cache.candidate_count,
+                        _ext_prefetch_cache.truncated,
+                        _ext_prefetch_cache.latency_ms,
+                        _ext_prefetch_cache.trace_id,
                     )
             except Exception as exc:
                 # Recall is an auxiliary side effect: keep the turn running,
@@ -4498,6 +4500,9 @@ class AIAgent:
                     exc,
                     exc_info=True,
                 )
+                _ext_prefetch_cache = MemoryRecallResult.unavailable()
+        elif self._memory_initialization_failed:
+            _ext_prefetch_cache = MemoryRecallResult.unavailable()
 
         while turn_state.can_continue(
             max_iterations=self.max_iterations,
@@ -4563,7 +4568,7 @@ class AIAgent:
                 self._iters_since_skill += 1
             
             user_contexts = []
-            if _ext_prefetch_cache:
+            if _ext_prefetch_cache is not None:
                 fenced_memory = build_memory_context_block(_ext_prefetch_cache)
                 if fenced_memory:
                     user_contexts.append(fenced_memory)

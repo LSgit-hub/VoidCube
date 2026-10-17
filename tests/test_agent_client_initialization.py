@@ -236,3 +236,23 @@ def test_agent_initialization_accepts_sessionless_employee_runtime(monkeypatch):
 
     assert agent._session_db is None
     assert agent.session_id == "employee-session"
+    assert agent._memory_initialization_failed is False
+
+    def fail_memory_initialization(**_kwargs):
+        raise OSError("memory service setup failed")
+
+    monkeypatch.setattr(runner, "create_memory_bridge", fail_memory_initialization)
+    unavailable_agent = AIAgent(
+        model="model",
+        api_key="key",
+        base_url="https://api.example/v1",
+        provider="custom",
+        session_id="employee-session",
+        session_db=None,
+        skip_context_files=True,
+        persist_session=False,
+        quiet_mode=True,
+    )
+
+    assert unavailable_agent.runtime_ports.memory is None
+    assert unavailable_agent._memory_initialization_failed is True

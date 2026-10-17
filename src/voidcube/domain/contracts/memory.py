@@ -28,11 +28,35 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from dataclasses import dataclass
+from typing import Any, Dict, List, Literal
 
 from ..agent.effect_outcomes import EffectOutcome
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryRecallResult:
+    """Bounded recall evidence and service outcome for one Agent turn."""
+
+    status: Literal["hit", "weak_match", "miss", "unavailable"]
+    context: str = ""
+    trace_id: str | None = None
+    candidate_count: int = 0
+    result_count: int = 0
+    truncated: bool = False
+    intent: str | None = None
+    latency_ms: float | None = None
+
+    @classmethod
+    def unavailable(
+        cls,
+        *,
+        trace_id: str | None = None,
+        latency_ms: float | None = None,
+    ) -> "MemoryRecallResult":
+        return cls(status="unavailable", trace_id=trace_id, latency_ms=latency_ms)
 
 
 class MemoryProvider(ABC):
@@ -89,11 +113,12 @@ class MemoryProvider(ABC):
         """
         return ""
 
-    def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Recall relevant context for the upcoming turn.
+    def prefetch(self, query: str, *, session_id: str = "") -> MemoryRecallResult:
+        """Recall relevant context and report whether usable evidence was found.
 
-        Called once before the first API call of each turn. Return formatted
-        text to inject as context, or empty string if nothing relevant.
+        Called once before the first API call of each turn. ``context`` is
+        metadata-free reference text; status and trace fields remain available
+        to runtime policy and diagnostics.
 
         session_id is provided for providers serving concurrent sessions
         (gateway group chats, cached agents). Providers that don't need

@@ -237,7 +237,7 @@ VoidCube 的唯一记忆适配器遵循 [MemoryProvider](../src/voidcube/domain/
 ```text
 initialize(session_id)
   -> bind_session(session_id)
-  -> prefetch(query)
+  -> prefetch(query) -> MemoryRecallResult(status, context, trace, counts, budget)
   -> sync_turn(user, assistant)
   -> on_session_end(messages)
   -> shutdown()
@@ -245,10 +245,12 @@ initialize(session_id)
 
 语义要求：
 
-- `prefetch()` 只读、可失败、不得阻塞主对话超过配置超时；
+- `prefetch()` 只读、可失败、不得阻塞主对话超过配置超时；返回结构化
+  `MemoryRecallResult`，以 `hit`、`weak_match`、`miss`、`unavailable` 区分状态，
+  并携带 metadata-free context 与内部诊断字段；
 - `sync_turn()` 只提交已完成轮次，最好通过 outbox 异步完成；
 - `on_session_end()` 可以请求会话封口或摘要，但不能伪造星子身份经历；
-- Provider 失败时，Agent 仍然可以继续当前对话，但必须知道“没有召回证据”；
+- Provider 失败时，Agent 仍然可以继续当前对话，但必须区分“本轮没有检索到证据”与“记忆服务不可用”；
 - 不得注册第二个长期记忆 Provider。
 
 ## 7. 升级和淘汰规则

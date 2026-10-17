@@ -10,7 +10,7 @@ from typing import Any
 
 from ...application.memory_context import infer_sync_tags
 from ...domain.agent.effect_outcomes import EffectOutcome, failed_effect, require_effect_outcome
-from ...domain.contracts.memory import MemoryProvider
+from ...domain.contracts.memory import MemoryProvider, MemoryRecallResult
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,15 @@ class MemoryBridge:
             logger.warning("Memory system prompt unavailable", exc_info=True)
             return ""
 
-    def prefetch(self, query: str, *, session_id: str = "") -> str:
+    def prefetch(self, query: str, *, session_id: str = "") -> MemoryRecallResult:
         try:
-            return self._provider.prefetch(query, session_id=session_id)
+            result = self._provider.prefetch(query, session_id=session_id)
+            if not isinstance(result, MemoryRecallResult):
+                raise TypeError("Memory provider prefetch must return MemoryRecallResult")
+            return result
         except Exception:
             logger.warning("Memory recall unavailable", exc_info=True)
-            return ""
+            return MemoryRecallResult.unavailable()
 
     def _effect(
         self, operation: str, callback: Callable[..., EffectOutcome],

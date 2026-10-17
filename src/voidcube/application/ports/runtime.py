@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from ...domain.agent.effect_outcomes import EffectOutcome
 from ...domain.agent.effect_outcomes import failed_effect, require_effect_outcome
+from ...domain.contracts.memory import MemoryRecallResult
 
 
 class MemoryPort(Protocol):
@@ -14,7 +15,7 @@ class MemoryPort(Protocol):
 
     def build_system_prompt(self) -> str: ...
 
-    def prefetch(self, query: str, *, session_id: str = "") -> str: ...
+    def prefetch(self, query: str, *, session_id: str = "") -> MemoryRecallResult: ...
 
     def sync_turn(
         self, user_content: Any, assistant_content: str, *, session_id: str = "",

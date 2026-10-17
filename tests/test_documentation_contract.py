@@ -13,6 +13,7 @@ DOCS = ROOT / "docs"
 pytestmark = [pytest.mark.smoke, pytest.mark.unit]
 
 ACTIVE_DOCS = {
+    "agent-long-term-memory-audit.md",
     "mem-integration-contract.md",
     "mem-temporary-memory-contract.md",
     "memory-resource-contract.md",
@@ -21,6 +22,7 @@ ACTIVE_DOCS = {
     "release.md",
     "testing.md",
     "troubleshooting.md",
+    "问题检查报告.md",
 }
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
