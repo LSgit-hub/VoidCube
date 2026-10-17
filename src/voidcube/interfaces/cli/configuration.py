@@ -12,6 +12,79 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+def _secret_input_with_echo(prompt: str) -> str:
+    """Read a secret, echoing an asterisk per character typed.
+
+    Falls back to ``getpass`` when the platform lacks the needed primitives
+    (e.g. non-tty stdin on CI).  The asterisk feedback lets users confirm
+    their input is registering without exposing the full key on screen.
+    """
+    if os.name == "nt":
+        import msvcrt
+
+        sys.stdout.write(f"{prompt}: ")
+        sys.stdout.flush()
+        chars: list[str] = []
+        while True:
+            ch = msvcrt.getch()
+            if ch in (b"\r", b"\n"):
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return "".join(chars)
+            if ch == b"\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            if ch in (b"\x08", b"\x7f"):  # Backspace / Delete
+                if chars:
+                    chars.pop()
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if ch == b"\x00" or ch == b"\xe0":  # Arrow / function key prefix
+                msvcrt.getch()  # consume the second byte
+                continue
+            try:
+                char = ch.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            chars.append(char)
+            sys.stdout.write("*")
+            sys.stdout.flush()
+    else:
+        import termios
+        import tty
+
+        sys.stdout.write(f"{prompt}: ")
+        sys.stdout.flush()
+        fd = sys.stdin.fileno()
+        try:
+            old_settings = termios.tcgetattr(fd)
+        except termios.error:
+            # Not a tty (piped stdin, CI) — fall back to getpass.
+            return getpass.getpass(f"{prompt}: ")
+        try:
+            tty.setraw(fd)
+            chars: list[str] = []
+            while True:
+                ch = sys.stdin.read(1)
+                if ch in ("\r", "\n"):
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return "".join(chars)
+                if ch == "\x03":  # Ctrl+C
+                    raise KeyboardInterrupt
+                if ch in ("\x7f", "\x08"):  # Backspace / Delete
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
+                    continue
+                chars.append(ch)
+                sys.stdout.write("*")
+                sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     """Narrow an untyped configuration node before field access."""
     return dict(value) if isinstance(value, dict) else {}
@@ -1345,7 +1418,7 @@ def edit_provider_entry(ports: ProviderPromptPorts, provider_key: str) -> bool:
         ports.header(f"修改 Provider {provider_key}")
         ports.emit(f"   [1] 名称      : {label}")
         ports.emit(f"   [2] Base URL  : {base_url or '未设置'}")
-        ports.emit(f"   [3] API Key   : {key_state}（{api_key_env or '无'}，留空保留）")
+        ports.emit(f"   [3] API Key   : {key_state}（{api_key_env or '无'}，留空保留，输入显示*）")
         ports.emit(f"   [4] 默认模型  : {model_state}")
         ports.emit("   [5] 刷新模型目录")
         ports.emit("   [0] 完成")
@@ -1537,11 +1610,11 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
             return default
 
     def secret_inp(prompt, default=""):
-        """Read a secret without echoing it; retain the default on blank input."""
+        """Read a secret with asterisk echo; retain the default on blank input."""
         try:
-            value = getpass.getpass(f"{prompt}: ")
+            value = _secret_input_with_echo(f"{prompt}: ")
             return value if value else default
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             return default
 
     def apply_runtime_updates(selected_model: str, provider_key: str) -> None:
@@ -1829,7 +1902,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 current_key = str(get_env_value(key_env) or "").strip()
             except Exception:
                 current_key = ""
-            p(f"\n图像和视频统一使用 {key_env}（输入时不回显，留空保留已有 Key）")
+            p(f"\n图像和视频统一使用 {key_env}（输入时显示 *，留空保留已有 Key）")
             api_key = secret_inp("请输入 Agnes-AI API Key", current_key)
             if not api_key:
                 pe("API Key 不能为空；如需清除请使用 `voidcube config unset AGNES_API_KEY`")
@@ -1875,7 +1948,7 @@ def run_api_config_wizard(runtime: ApiConfigRuntime | None = None):
                 current_key = str(get_env_value(key_env) or "").strip()
             except Exception:
                 current_key = ""
-            p(f"\n图像和视频统一使用 {key_env}（输入时不回显，留空保留已有 Key）")
+            p(f"\n图像和视频统一使用 {key_env}（输入时显示 *，留空保留已有 Key）")
             api_key = secret_inp("请输入 Agnes-AI API Key", current_key)
             if not api_key:
                 pe("API Key 不能为空；如需清除请使用 `voidcube config unset AGNES_API_KEY`")
